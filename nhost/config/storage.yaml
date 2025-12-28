@@ -1,0 +1,21 @@
+# Storage configuration for Nhost
+buckets:
+  - id: profile-photos
+    name: Profile Photos
+    description: User profile and verification photos
+    public: false
+    max_upload_file_size: 5242880 # 5MB
+    allowed_mime_types:
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/heic
+    transformations:
+      enabled: true
+      allowed:
+        - type: resize
+          params: ["width", "height"]
+        - type: blur
+          params: ["sigma"]
+        - type: quality
+          params: ["quality"]
