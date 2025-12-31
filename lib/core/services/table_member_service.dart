@@ -1,4 +1,6 @@
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/stream_service.dart';
+import 'package:stream_feeds/stream_feeds.dart';
 
 class TableMemberService {
   // Join a table (instant join)
@@ -27,7 +29,7 @@ class TableMemberService {
       // Get table info to check status and capacity
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests')
+          .select('status, max_guests, title, location_name')
           .eq('id', tableId)
           .single();
 
@@ -62,6 +64,25 @@ class TableMemberService {
         'approved_at': DateTime.now().toIso8601String(),
         'joined_at': DateTime.now().toIso8601String(),
       });
+
+      // STREAM ACTIVITY FEED INTEGRATION
+      try {
+        final streamService = StreamService();
+        await streamService.userFeed.addActivity(
+          request: FeedAddActivityRequest(
+            type: 'join',
+            text: 'Joined a table at ${table['title'] ?? 'Unknown Location'}',
+            custom: {
+              'table_id': tableId,
+              'title': table['title'] ?? 'Table',
+              'location_name': table['location_name'] ?? 'Unknown Location',
+            },
+          ),
+        );
+        print('✅ STREAM: Activity posted for table join');
+      } catch (e) {
+        print('⚠️ STREAM: Failed to post join activity: $e');
+      }
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {

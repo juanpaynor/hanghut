@@ -4,18 +4,17 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'dart:math'; // Added for Random
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:http/http.dart' as http;
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/matching_service.dart';
-import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
-import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import '../widgets/liquid_morph_route.dart';
+import '../widgets/table_compact_modal.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -32,10 +31,14 @@ class MapScreenState extends State<MapScreen> {
   final _matchingService = MatchingService();
   List<Map<String, dynamic>> _tables = [];
   Map<String, dynamic>? _currentUserData;
-  final Map<String, int> _annotationToTableIndex = {};
-  final Map<String, List<int>> _locationToTableIndices = {};
   Timer? _debounceTimer;
   CameraState? _lastFetchCameraState;
+
+  // Loading State (Ghosts)
+
+  Timer? _ghostAnimationTimer;
+  double _ghostOpacity = 0.3;
+  bool _ghostOpacityRising = true;
 
   @override
   void initState() {
@@ -49,6 +52,7 @@ class MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _ghostAnimationTimer?.cancel();
     super.dispose();
   }
 
@@ -163,6 +167,10 @@ class MapScreenState extends State<MapScreen> {
   _onMapCreated(MapboxMap mapboxMap) async {
     print('🗺️ Map created callback triggered');
     _mapboxMap = mapboxMap;
+    _addedImages
+        .clear(); // Clear local cache to force re-add images to new style
+
+    // Register Tap Listener handled via GestureDetector in build
 
     // Enable location puck
     await _enableLocationPuck();
@@ -215,33 +223,37 @@ class MapScreenState extends State<MapScreen> {
       }
 
       // 2. Add GeoJSON Source for 3D markers
-      await style?.addSource(
-        GeoJsonSource(
-          id: 'tables-3d-source',
-          data: jsonEncode({'type': 'FeatureCollection', 'features': []}),
-        ),
-      );
+      if (await style?.styleSourceExists('tables-3d-source') == false) {
+        await style?.addSource(
+          GeoJsonSource(
+            id: 'tables-3d-source',
+            data: jsonEncode({'type': 'FeatureCollection', 'features': []}),
+          ),
+        );
+      }
 
       // 3. Add Model Layer
-      await style?.addLayer(
-        ModelLayer(
-          id: 'tables-3d-layer',
-          sourceId: 'tables-3d-source',
-          minZoom: 0.0,
-          maxZoom: 22.0,
-          modelId: 'coffee-shop-model',
-          // Massive scale increase
-          modelScale: [1500.0, 1500.0, 1500.0],
-          // Lift it up significantly + slight tilt
-          modelRotation: [0.0, 0.0, 0.0],
-          // Lift significantly higher to account for massive scale pushing geometry down
-          // Reduced height since we are reducing the scale
-          modelTranslation: [0.0, 0.0, 50.0],
-          // Using model-scale as main visibility driver first.
-          modelOpacity: 1.0,
-          modelEmissiveStrength: 1.0,
-        ),
-      );
+      if (await style?.styleLayerExists('tables-3d-layer') == false) {
+        await style?.addLayer(
+          ModelLayer(
+            id: 'tables-3d-layer',
+            sourceId: 'tables-3d-source',
+            minZoom: 0.0,
+            maxZoom: 22.0,
+            modelId: 'coffee-shop-model',
+            // Massive scale increase
+            modelScale: [1500.0, 1500.0, 1500.0],
+            // Lift it up significantly + slight tilt
+            modelRotation: [0.0, 0.0, 0.0],
+            // Lift significantly higher to account for massive scale pushing geometry down
+            // Reduced height since we are reducing the scale
+            modelTranslation: [0.0, 0.0, 50.0],
+            // Using model-scale as main visibility driver first.
+            modelOpacity: 1.0,
+            modelEmissiveStrength: 1.0,
+          ),
+        );
+      }
 
       // 4. Update 'model-scale' with an expression to make it responsive
       try {
@@ -265,8 +277,12 @@ class MapScreenState extends State<MapScreen> {
       }
 
       print('✅ 3D Model Layer initialized');
+
+      // Manual listener removed in favor of MapWidget.onTapListener
     } catch (e) {
       print('❌ Error setting up 3D models: $e');
+      print('   Stack: ${StackTrace.current}');
+      rethrow;
     }
   }
 
@@ -320,63 +336,141 @@ class MapScreenState extends State<MapScreen> {
     return _currentPosition;
   }
 
-  void _drawPlaceholderFace(Canvas canvas, int size) {
-    // Draw placeholder face (Gray circle)
-    final Paint facePaint = Paint()
-      ..color = Colors.grey.shade300
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 15, facePaint);
-
-    // Draw simple face features
-    final Paint featurePaint = Paint()
-      ..color = Colors.grey.shade600
-      ..style = PaintingStyle.fill;
-
-    // Eyes
-    canvas.drawCircle(Offset(size / 2 - 15, size / 2 - 10), 4, featurePaint);
-    canvas.drawCircle(Offset(size / 2 + 15, size / 2 - 10), 4, featurePaint);
-
-    // Smile
-    final Path smilePath = Path()
-      ..moveTo(size / 2 - 20, size / 2 + 10)
-      ..quadraticBezierTo(
-        size / 2,
-        size / 2 + 20,
-        size / 2 + 20,
-        size / 2 + 10,
-      );
-
-    canvas.drawPath(
-      smilePath,
-      Paint()
-        ..color = Colors.grey.shade600
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: MapWidget(
-        key: const ValueKey('mapWidget'),
-        styleUri: 'mapbox://styles/swiftdash/cmjmzix6300aq01spblcqe7yx',
-        cameraOptions: CameraOptions(
-          center: _currentPosition != null
-              ? Point(
-                  coordinates: Position(
-                    _currentPosition!.longitude,
-                    _currentPosition!.latitude,
-                  ),
-                )
-              : Point(coordinates: Position(-74.0060, 40.7128)),
-          zoom: 15.0, // Zoom in closer for 3D effect
-          pitch: 60.0, // Tilt camera for 3D view
+      body: GestureDetector(
+        onTapUp: _onMapTap,
+        child: MapWidget(
+          key: const ValueKey('mapWidget'),
+          styleUri: 'mapbox://styles/swiftdash/cmjmzix6300aq01spblcqe7yx',
+          cameraOptions: CameraOptions(
+            center: _currentPosition != null
+                ? Point(
+                    coordinates: Position(
+                      _currentPosition!.longitude,
+                      _currentPosition!.latitude,
+                    ),
+                  )
+                : Point(coordinates: Position(-74.0060, 40.7128)),
+            zoom: 15.0, // Zoom in closer for 3D effect
+            pitch: 60.0, // Tilt camera for 3D view
+          ),
+          onCameraChangeListener: _onCameraChangeListener,
+          onMapCreated: _onMapCreated,
+          onTapListener: _onMapTapWrapper, // Native tap listener
         ),
-        onCameraChangeListener: _onCameraChangeListener,
-        onMapCreated: _onMapCreated,
+      ),
+    );
+  }
+
+  // Handle map taps
+  Future<void> _onMapTap(TapUpDetails details) async {
+    print('👆 Map tapped at ${details.localPosition}');
+    if (_mapboxMap == null) return;
+
+    try {
+      // Use local position from GestureDetector
+      final screenCoordinate = ScreenCoordinate(
+        x: details.localPosition.dx,
+        y: details.localPosition.dy,
+      );
+
+      // Query rendered features for both clusters and points
+      final features = await _mapboxMap?.queryRenderedFeatures(
+        RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+        RenderedQueryOptions(
+          layerIds: ['unclustered-points', 'clusters', 'tables-3d-layer'],
+        ),
+      );
+
+      print('🔎 Query features found: ${features?.length ?? 0}');
+
+      if (features != null && features.isNotEmpty) {
+        final feature = features.first;
+        final properties =
+            feature?.queriedFeature.feature['properties'] as Map?;
+        final isCluster = properties?['cluster'] == true;
+
+        if (isCluster) {
+          // Handle Cluster Tap -> Zoom In
+          final geometry = feature?.queriedFeature.feature['geometry'] as Map?;
+          final coordinates = geometry?['coordinates'] as List?;
+          final cameraState = await _mapboxMap?.getCameraState();
+          if (cameraState != null) {
+            _mapboxMap?.flyTo(
+              CameraOptions(
+                center: Point(
+                  coordinates: Position(
+                    (coordinates?[0] as num).toDouble(),
+                    (coordinates?[1] as num).toDouble(),
+                  ),
+                ),
+                zoom: cameraState.zoom + 2.0, // Zoom in by 2 levels
+                pitch: 60.0,
+              ),
+              MapAnimationOptions(duration: 500, startDelay: 0),
+            );
+          }
+        } else {
+          // Handle Marker Tap (Existing Logic)
+          final properties =
+              feature?.queriedFeature.feature['properties'] as Map?;
+          final index = properties?['index'];
+          // ... rest of existing marker logic falls through naturally if I structure it right
+          // actually, better to separate the blocks to be clean
+          if (index != null && index is int && index < _tables.length) {
+            final table = _tables[index];
+            final matchData = _matchingService.calculateMatch(
+              currentUser: _currentUserData!,
+              table: table,
+            );
+            if (mounted) {
+              _openTableModal(context, table, matchData, screenCoordinate);
+            }
+          }
+        }
+        return; // Stop processing if we hit something
+      }
+
+      if (features != null && features.isNotEmpty) {
+        // We tapped a marker!
+        final feature = features.first;
+        final properties =
+            feature?.queriedFeature.feature['properties'] as Map?;
+        final index = properties?['index'];
+
+        if (index != null && index is int && index < _tables.length) {
+          final table = _tables[index]; // Use index to get full table data
+          final matchData = _matchingService.calculateMatch(
+            currentUser: _currentUserData!,
+            table: table,
+          );
+
+          if (mounted) {
+            _openTableModal(context, table, matchData, screenCoordinate);
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error handling map tap: $e');
+    }
+  }
+
+  void _openTableModal(
+    BuildContext context,
+    Map<String, dynamic> table,
+    Map<String, dynamic> matchData,
+    ScreenCoordinate tapPosition,
+  ) {
+    print('🚀 Launching TableCompactModal via LiquidMorphRoute');
+    // Calculate center offset from tap position
+    final center = Offset(tapPosition.x, tapPosition.y);
+
+    Navigator.of(context).push(
+      LiquidMorphRoute(
+        center: center,
+        page: TableCompactModal(table: table, matchData: matchData),
       ),
     );
   }
@@ -429,7 +523,6 @@ class MapScreenState extends State<MapScreen> {
       double? minLat, maxLat, minLng, maxLng;
 
       // Get the visible region of the map
-      if (cameraState == null) return;
 
       final cameraOptions = CameraOptions(
         center: cameraState.center,
@@ -453,8 +546,10 @@ class MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // 3. Fetch Tables
-      final tables = await _tableService.getMapReadyTables(
+      // 3. Fetch Tables (with Ghosts!)
+      _generateGhosts(minLat, maxLat, minLng, maxLng);
+
+      var fetchedTables = await _tableService.getMapReadyTables(
         userLat: _currentPosition?.latitude,
         userLng: _currentPosition?.longitude,
         // radiusKm: 30.0, // Removed fixed radius in favor of bounds
@@ -462,124 +557,268 @@ class MapScreenState extends State<MapScreen> {
         maxLat: maxLat,
         minLng: minLng,
         maxLng: maxLng,
+        limit: 100, // Smart server-side limit
       );
 
-      print('📍 Found ${tables.length} tables in viewport');
+      print('📍 Found ${fetchedTables.length} tables in viewport');
 
-      // Debug: Log scheduled times
-      for (var table in tables) {
-        print('  Table: ${table['venue_name']}');
-        print('    Scheduled: ${table['scheduled_at']}');
-        print('    Status: ${table['status']}');
+      // 4. Relevance Filtering: Sort by Match Score and Cap
+      if (_currentUserData != null) {
+        // Calculate score for each table
+        final scoredTables = fetchedTables.map((table) {
+          final matchData = _matchingService.calculateMatch(
+            currentUser: _currentUserData!,
+            table: table,
+          );
+          return {'table': table, 'score': matchData['score'] as double};
+        }).toList();
+
+        // Sort descending by score
+        scoredTables.sort(
+          (a, b) => (b['score'] as double).compareTo(a['score'] as double),
+        );
+
+        // Take top 50 max (to prevent saturation)
+        // If "Explore All" mode logic existed, we might skip this, but for now defaults to smart cap.
+        final int maxMarkers = 50;
+        if (scoredTables.length > maxMarkers) {
+          print(
+            '⚠️ Capping markers to top $maxMarkers most relevant (from ${scoredTables.length})',
+          );
+          fetchedTables = scoredTables
+              .take(maxMarkers)
+              .map((e) => e['table'] as Map<String, dynamic>)
+              .toList();
+        } else {
+          // Even if not capped, we use the sorted list so best matches render LAST (on top)
+          // or we might want them first. Usually Z-order isn't strict here but good to have sorted data.
+          fetchedTables = scoredTables
+              .map((e) => e['table'] as Map<String, dynamic>)
+              .toList();
+        }
       }
 
       setState(() {
-        _tables = tables;
+        _tables = fetchedTables;
+      });
+      _clearGhosts();
+
+      // 5. Clustering & Native Layers Implementation
+      final style = _mapboxMap?.style;
+      if (style == null) return;
+
+      // A. Remove Annotation Manager (Switching to Native Layers)
+      if (_tableMarkerManager != null) {
+        _tableMarkerManager?.deleteAll();
+        _tableMarkerManager = null;
+      }
+
+      // A. Prepare Images & GeoJSON Features
+      final features = <Map<String, dynamic>>[];
+
+      for (var i = 0; i < fetchedTables.length; i++) {
+        final table = fetchedTables[i];
+        final matchData = _matchingService.calculateMatch(
+          currentUser: _currentUserData!,
+          table: table,
+        );
+
+        final imageId = 'table_img_${table['id']}';
+
+        // Generate and Add Image to Style (if not exists)
+        // Note: For performance, we should track which images are already added.
+        // But for <100, checking/adding is acceptable.
+        if (!_addedImages.contains(imageId)) {
+          final Uint8List markerImage;
+          final markerImageUrl = table['marker_image_url'];
+          final markerEmoji = table['marker_emoji'];
+
+          if (markerImageUrl != null && markerImageUrl.toString().isNotEmpty) {
+            markerImage = await _createCustomMarkerImage(
+              imageUrl: markerImageUrl,
+              glowColor: matchData['color'],
+              glowIntensity: matchData['glowIntensity'],
+              count: 1, // Individual marker, count handled by cluster
+            );
+          } else if (markerEmoji != null && markerEmoji.toString().isNotEmpty) {
+            markerImage = await _createEmojiMarkerImage(
+              emoji: markerEmoji,
+              glowColor: matchData['color'],
+              glowIntensity: matchData['glowIntensity'],
+            );
+          } else {
+            markerImage = await _createTableMarkerImage(
+              photoUrl: table['host_photo_url'],
+              activityType: table['activityType'], // Pass activity type
+              glowColor: matchData['color'],
+              glowIntensity: matchData['glowIntensity'],
+              count: 1,
+            );
+          }
+
+          // Add to style
+          await style.addStyleImage(
+            imageId,
+            2.0, // Scale factor
+            MbxImage(width: 120, height: 120, data: markerImage),
+            false,
+            [],
+            [],
+            null,
+          );
+          _addedImages.add(imageId);
+        }
+
+        features.add({
+          'type': 'Feature',
+          'id': table['id'],
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [table['location_lng'], table['location_lat']],
+          },
+          'properties': {
+            'icon_id': imageId,
+            'description': table['venue_name'],
+            'index': i, // Store index to lookup table data later
+          },
+        });
+        print(
+          '✅ Added feature ${i + 1}/${fetchedTables.length}: icon_id=$imageId',
+        );
+      }
+
+      // B. Update/Create Source
+      const sourceId = 'tables-cluster-source';
+      final sourceExists = await style.styleSourceExists(sourceId);
+
+      final geoJsonData = jsonEncode({
+        'type': 'FeatureCollection',
+        'features': features,
       });
 
-      // Remove old markers
-      _tableMarkerManager?.deleteAll();
+      print('📊 Generated ${features.length} GeoJSON features for clustering');
 
-      // Create new marker manager
-      _tableMarkerManager = await _mapboxMap?.annotations
-          .createPointAnnotationManager();
-
-      // Clear annotation mapping
-      _annotationToTableIndex.clear();
-      _locationToTableIndices.clear();
-
-      // Group tables by location (rounded to 5 decimal places ~1 meter precision)
-      final Map<String, List<int>> locationGroups = {};
-      for (int i = 0; i < tables.length; i++) {
-        final lat = (tables[i]['location_lat'] as double).toStringAsFixed(5);
-        final lng = (tables[i]['location_lng'] as double).toStringAsFixed(5);
-        final locationKey = '$lat,$lng';
-
-        locationGroups.putIfAbsent(locationKey, () => []);
-        locationGroups[locationKey]!.add(i);
-      }
-
-      print('📍 Grouped into ${locationGroups.length} unique locations');
-
-      final options = <PointAnnotationOptions>[];
-      int markerIndex = 0;
-
-      for (var entry in locationGroups.entries) {
-        final tableIndices = entry.value;
-        final firstTable = tables[tableIndices[0]];
-
-        // Store mapping for this location
-        _locationToTableIndices[markerIndex.toString()] = tableIndices;
-
-        // Calculate best match for this location
-        var bestMatchData = _matchingService.calculateMatch(
-          currentUser: _currentUserData!,
-          table: firstTable,
-        );
-
-        // If multiple tables, find the best match
-        if (tableIndices.length > 1) {
-          for (var idx in tableIndices) {
-            final matchData = _matchingService.calculateMatch(
-              currentUser: _currentUserData!,
-              table: tables[idx],
-            );
-            if (matchData['score'] > bestMatchData['score']) {
-              bestMatchData = matchData;
-            }
-          }
-        }
-
-        // Create marker with count badge if multiple tables
-        final Uint8List markerImage;
-        final markerImageUrl = firstTable['marker_image_url'];
-
-        if (markerImageUrl != null && markerImageUrl.toString().isNotEmpty) {
-          markerImage = await _createCustomMarkerImage(
-            imageUrl: markerImageUrl,
-            glowColor: bestMatchData['color'],
-            glowIntensity: bestMatchData['glowIntensity'],
-            count: tableIndices.length,
-          );
-        } else {
-          markerImage = await _createTableMarkerImage(
-            photoUrl: firstTable['host_photo_url'],
-            glowColor: bestMatchData['color'],
-            glowIntensity: bestMatchData['glowIntensity'],
-            count: tableIndices.length,
-          );
-        }
-
-        options.add(
-          PointAnnotationOptions(
-            geometry: Point(
-              coordinates: Position(
-                firstTable['location_lng'],
-                firstTable['location_lat'],
-              ),
-            ),
-            image: markerImage,
-            iconSize: 1.5,
+      if (!sourceExists) {
+        print('🆕 Creating NEW cluster source: $sourceId');
+        await style.addSource(
+          GeoJsonSource(
+            id: sourceId,
+            data: geoJsonData,
+            cluster: true,
+            clusterRadius: 50, // Radius in pixels to cluster points
+            clusterMaxZoom: 15, // Stop clustering at this zoom (show faces)
           ),
         );
+        print('✅ Cluster source created');
 
-        markerIndex++;
+        // C. Add Layers (Only once)
+        print('🎨 Adding cluster layers...');
+        await _addClusterLayers(style, sourceId);
+        print('✅ Cluster layers added');
+      } else {
+        print('🔄 Updating EXISTING cluster source data');
+        await style.setStyleSourceProperty(sourceId, 'data', geoJsonData);
+        print('✅ Source data updated');
       }
 
-      /*
-      // Disable 2D markers for now to focus on 3D
-      if (options.isNotEmpty) {
-        final annotations = await _tableMarkerManager?.createMulti(options);
-        // ... (rest of logic commented out)
-        print('✅ Added ${options.length} table markers to map');
+      // C. Check if layers exist (independent of source - may be missing after hot reload)
+      final layerExists = await style.styleLayerExists('unclustered-points');
+      if (!layerExists) {
+        print('🎨 Adding cluster layers (layers were missing)...');
+        await _addClusterLayers(style, sourceId);
+        print('✅ Cluster layers added');
+      } else {
+        print('✅ Cluster layers already exist');
       }
-      */
+
+      print('✅ Updated Cluster Source with ${features.length} features');
 
       // Update 3D Layer Data
-      _update3DLayerData(tables);
+      _update3DLayerData(fetchedTables);
     } catch (e) {
-      print('❌ Error adding table markers: $e');
+      print('❌ Error updating map clusters: $e');
     }
+  }
+
+  // Track added images to avoid re-adding to style
+  final Set<String> _addedImages = {};
+
+  Future<void> _addClusterLayers(StyleManager style, String sourceId) async {
+    try {
+      print(
+        '🎨 _addClusterLayers called with style type: ${style.runtimeType}',
+      );
+
+      // 1. Cluster Circles (Bubbles)
+      print(' Adding clusters layer...');
+      await style.addLayer(
+        CircleLayer(
+          id: 'clusters',
+          sourceId: sourceId,
+          minZoom: 0,
+          maxZoom: 22,
+          circleColor: Colors.deepPurpleAccent.value,
+          circleRadius: 20.0,
+          circleOpacity: 0.9,
+          circleStrokeColor: Colors.white.value,
+          circleStrokeWidth: 2.0,
+          circleEmissiveStrength:
+              1.0, // Added based on user request "light emmisive 1"
+          filter: ['has', 'point_count'], // List<Object>
+        ),
+      );
+      print('✅ Clusters layer added');
+
+      // 1.5 Ghost Layer (Initialize empty)
+      // We initialize it here so the layer stack order is correct (below clusters/points if possible, or mixed)
+      await _updateGhostLayer(
+        jsonEncode({'type': 'FeatureCollection', 'features': []}),
+      );
+
+      // 2. Cluster Counts (Text)
+      print('➕ Adding cluster-count layer...');
+      await style.addLayer(
+        SymbolLayer(
+          id: 'cluster-count',
+          sourceId: sourceId,
+          minZoom: 0,
+          maxZoom: 22,
+          textFieldExpression: ['get', 'point_count_abbreviated'],
+          textSize: 14.0,
+          textColor: Colors.white.value,
+          filter: ['has', 'point_count'], // List<Object>
+        ),
+      );
+      print('✅ Cluster-count layer added');
+
+      // 3. Unclustered Points (Faces) with "Pop" Animation
+      print('➕ Adding unclustered-points layer...');
+      await style.addLayer(
+        SymbolLayer(
+          id: 'unclustered-points',
+          sourceId: sourceId,
+          minZoom: 0,
+          maxZoom: 22,
+          filter: [
+            '!',
+            ['has', 'point_count'],
+          ], // List<Object>
+          // Use the dynamic image ID we stored in properties
+          iconImageExpression: ['get', 'icon_id'],
+          iconSize: 1.0, // Base size
+          iconAllowOverlap: true,
+          iconAnchor: IconAnchor.BOTTOM,
+          iconOffset: [0.0, -70.0], // Float above 3D model
+        ),
+      );
+      print('✅ Unclustered-points layer added');
+    } catch (e) {
+      print('❌ Error in _addClusterLayers: $e');
+      print('   Stack: ${StackTrace.current}');
+      rethrow;
+    }
+
+    // Add tap interaction is handled via Global map click if desired
   }
 
   Future<void> _update3DLayerData(List<Map<String, dynamic>> tables) async {
@@ -600,7 +839,9 @@ class MapScreenState extends State<MapScreen> {
         }
       }
 
-      final features = tables.map((table) {
+      final features = tables.asMap().entries.map((entry) {
+        final index = entry.key;
+        final table = entry.value;
         return {
           'type': 'Feature',
           'id': table['id'],
@@ -610,8 +851,8 @@ class MapScreenState extends State<MapScreen> {
           },
           'properties': {
             'title': table['title'],
-            // 'activity_type': table['activityType'],
-            'modelId': 'coffee-model',
+            'index': index, // Added index for tap identification
+            'modelId': 'coffee-shop-model',
             'rotation': [0.0, 0.0, 0.0],
           },
         };
@@ -626,159 +867,6 @@ class MapScreenState extends State<MapScreen> {
       );
     } catch (e) {
       print('⚠️ Error updating 3D layer source: $e');
-    }
-  }
-
-  void _showLocationTables(int markerIndex) async {
-    final tableIndices = _locationToTableIndices[markerIndex.toString()];
-    if (tableIndices == null || tableIndices.isEmpty) return;
-
-    // If only one table at this location, show it directly
-    if (tableIndices.length == 1) {
-      _showTableDetails(tableIndices[0]);
-      return;
-    }
-
-    // Multiple tables - show selection Dialog
-    final selectedIndex = await showDialog<int>(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E1E1E),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${tableIndices.length} Tables at ${_tables[tableIndices[0]]['venue_name']}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 400),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          children: tableIndices.map((idx) {
-                            final table = _tables[idx];
-                            final matchData = _matchingService.calculateMatch(
-                              currentUser: _currentUserData!,
-                              table: table,
-                            );
-                            final scheduledAt = DateTime.parse(
-                              table['scheduled_time'],
-                            );
-
-                            return Card(
-                              color: const Color(0xFF2A2A2A),
-                              margin: const EdgeInsets.only(bottom: 12),
-                              child: ListTile(
-                                onTap: () => Navigator.pop(context, idx),
-                                leading: Container(
-                                  width: 50,
-                                  height: 50,
-                                  decoration: BoxDecoration(
-                                    color: Color(
-                                      int.parse(
-                                        matchData['color'].replaceFirst(
-                                          '#',
-                                          '0xFF',
-                                        ),
-                                      ),
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      '${(matchData['score'] * 100).toInt()}%',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                title: Text(
-                                  table['title'] ?? table['venue_name'],
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  '${DateFormat('MMM d @ h:mm a').format(scheduledAt)} • ${table['max_capacity']} seats',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                trailing: const Icon(
-                                  Icons.chevron_right,
-                                  color: Colors.white54,
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Close button
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text(
-                    'Close',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (selectedIndex != null && mounted) {
-      _showTableDetails(selectedIndex);
-    }
-  }
-
-  void _showTableDetails(int tableIndex) async {
-    if (tableIndex >= _tables.length) return;
-
-    final table = _tables[tableIndex];
-    final matchData = _matchingService.calculateMatch(
-      currentUser: _currentUserData!,
-      table: table,
-    );
-
-    final shouldRefresh = await showDialog<bool>(
-      context: context,
-      builder: (context) =>
-          TableCompactModal(table: table, matchData: matchData),
-    );
-
-    // Refresh markers if action was taken
-    if (shouldRefresh == true && mounted) {
-      _fetchTablesInViewport();
     }
   }
 
@@ -905,13 +993,14 @@ class MapScreenState extends State<MapScreen> {
 
   Future<Uint8List> _createTableMarkerImage({
     String? photoUrl,
+    String? activityType, // Added activityType parameter
     required String glowColor,
     required double glowIntensity,
     int count = 1,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
-    final int size = 100;
+    final int size = 120;
 
     // Parse hex color
     final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
@@ -962,10 +1051,10 @@ class MapScreenState extends State<MapScreen> {
         canvas.restore();
       } catch (e) {
         print('❌ Error loading host photo for marker: $e');
-        _drawPlaceholderFace(canvas, size);
+        _drawPlaceholder(canvas, size, activityType);
       }
     } else {
-      _drawPlaceholderFace(canvas, size);
+      _drawPlaceholder(canvas, size, activityType);
     }
 
     // Draw count badge if multiple tables
@@ -1005,22 +1094,318 @@ class MapScreenState extends State<MapScreen> {
 
     return byteData!.buffer.asUint8List();
   }
-}
 
-class _MarkerTapListener extends OnPointAnnotationClickListener {
-  final Map<String, int> annotationToTableIndex;
-  final Function(int) onTap;
+  Future<Uint8List> _createEmojiMarkerImage({
+    required String emoji,
+    required String glowColor,
+    required double glowIntensity,
+  }) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    final int size = 120;
 
-  _MarkerTapListener({
-    required this.annotationToTableIndex,
-    required this.onTap,
-  });
+    // Parse hex color
+    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
 
-  @override
-  void onPointAnnotationClick(PointAnnotation annotation) {
-    final tableIndex = annotationToTableIndex[annotation.id];
-    if (tableIndex != null) {
-      onTap(tableIndex);
+    // Draw outer glow ring
+    if (glowIntensity > 0) {
+      final Paint ringPaint = Paint()
+        ..color = color.withOpacity(glowIntensity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 10;
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(4, 4, size - 8, size - 8),
+          const Radius.circular(16),
+        ),
+        ringPaint,
+      );
     }
+
+    // Draw white background
+    final Paint bgPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(10, 10, size - 20, size - 20),
+        const Radius.circular(12),
+      ),
+      bgPaint,
+    );
+
+    // Draw Emoji
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: emoji,
+        style: TextStyle(fontSize: size * 0.5),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: ui.TextDirection.ltr,
+    );
+    textPainter.layout();
+
+    textPainter.paint(
+      canvas,
+      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+    );
+
+    // Convert to image
+    final ui.Image image = await pictureRecorder.endRecording().toImage(
+      size,
+      size,
+    );
+    final ByteData? byteData = await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+    return byteData!.buffer.asUint8List();
+  }
+
+  void _drawPlaceholder(Canvas canvas, int size, String? activityType) {
+    // White background
+    final Paint bgPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 8, bgPaint);
+
+    // Determines emoji based on activity
+    final String emoji = _getEmojiForActivity(activityType);
+
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: emoji,
+        style: TextStyle(fontSize: size * 0.5),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: ui.TextDirection.ltr,
+    );
+    textPainter.layout();
+
+    textPainter.paint(
+      canvas,
+      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+    );
+  }
+
+  String _getEmojiForActivity(String? activityType) {
+    if (activityType == null) return '🙂';
+    final lower = activityType.toLowerCase();
+    if (lower.contains('coffee') || lower.contains('cafe')) return '☕';
+    if (lower.contains('work') ||
+        lower.contains('coding') ||
+        lower.contains('laptop'))
+      return '💻';
+    if (lower.contains('food') ||
+        lower.contains('lunch') ||
+        lower.contains('dinner'))
+      return '🍔';
+    if (lower.contains('drink') ||
+        lower.contains('bar') ||
+        lower.contains('beer'))
+      return '🍺';
+    if (lower.contains('study') ||
+        lower.contains('read') ||
+        lower.contains('book'))
+      return '📚';
+    if (lower.contains('game') || lower.contains('board')) return '🎲';
+    return '🙂'; // Default fallback
+  }
+
+  void _onMapTapWrapper(MapContentGestureContext context) {
+    print(
+      '👆 Native Map Click received at: x=${context.touchPosition.x}, y=${context.touchPosition.y}',
+    );
+    _handleMapInteraction(context.touchPosition);
+  }
+
+  Future<void> _handleMapInteraction(ScreenCoordinate screenCoordinate) async {
+    print(
+      '🦾 Handling interaction at ${screenCoordinate.x}, ${screenCoordinate.y}',
+    );
+    if (_mapboxMap == null) return;
+
+    try {
+      // Query rendered features using the coordinate directly
+      final features = await _mapboxMap?.queryRenderedFeatures(
+        RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+        RenderedQueryOptions(
+          layerIds: ['unclustered-points', 'clusters', 'tables-3d-layer'],
+        ),
+      );
+
+      print('🔎 Query features found: ${features?.length ?? 0}');
+
+      if (features != null && features.isNotEmpty) {
+        final feature = features.first;
+        final properties =
+            feature?.queriedFeature.feature['properties'] as Map?;
+        final isCluster = properties?['cluster'] == true;
+
+        if (isCluster) {
+          final geometry = feature?.queriedFeature.feature['geometry'] as Map?;
+          final coordinates = geometry?['coordinates'] as List?;
+          final cameraState = await _mapboxMap?.getCameraState();
+          if (cameraState != null) {
+            _mapboxMap?.flyTo(
+              CameraOptions(
+                center: Point(
+                  coordinates: Position(
+                    (coordinates?[0] as num).toDouble(),
+                    (coordinates?[1] as num).toDouble(),
+                  ),
+                ),
+                zoom: cameraState.zoom + 2.0,
+                pitch: 60.0,
+              ),
+              MapAnimationOptions(duration: 500, startDelay: 0),
+            );
+          }
+        } else {
+          final index = properties?['index'];
+          print('🔖 Marker tapped with index: $index');
+
+          if (index != null && index is int && index < _tables.length) {
+            final table = _tables[index];
+            print('🍽️ Opening table: ${table['title']}');
+
+            final matchData = _matchingService.calculateMatch(
+              currentUser: _currentUserData!,
+              table: table,
+            );
+            if (mounted) {
+              _openTableModal(context, table, matchData, screenCoordinate);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error handling map tap: $e');
+    }
+  }
+
+  // --- HOLOGRAPHIC GHOST LOGIC ---
+
+  void _generateGhosts(
+    double minLat,
+    double maxLat,
+    double minLng,
+    double maxLng,
+  ) {
+    print('👻 _generateGhosts called'); // DEBUG
+    if (_mapboxMap == null) return;
+
+    final random = Random();
+    final List<Map<String, dynamic>> ghostFeatures = [];
+
+    // Generate 3-5 ghosts
+    final count = 3 + random.nextInt(3);
+    print('👻 Generating $count ghost features'); // DEBUG
+
+    for (int i = 0; i < count; i++) {
+      final lat = minLat + random.nextDouble() * (maxLat - minLat);
+      final lng = minLng + random.nextDouble() * (maxLng - minLng);
+
+      ghostFeatures.add({
+        'type': 'Feature',
+        'id': 'ghost_$i',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [lng, lat],
+        },
+        'properties': {'ghost': true},
+      });
+    }
+
+    final geoJsonData = jsonEncode({
+      'type': 'FeatureCollection',
+      'features': ghostFeatures,
+    });
+
+    // Update source
+    _updateGhostLayer(geoJsonData);
+    _startGhostAnimation();
+  }
+
+  Future<void> _updateGhostLayer(String geoJsonData) async {
+    print(
+      '👻 _updateGhostLayer called with data length: ${geoJsonData.length}',
+    ); // DEBUG
+    try {
+      final style = _mapboxMap?.style;
+      if (style == null) {
+        print('👻 Style is null!');
+        return;
+      }
+
+      final sourceExists = await style.styleSourceExists('ghost-source');
+      if (sourceExists) {
+        print('👻 Source exists, updating data');
+        await style.setStyleSourceProperty('ghost-source', 'data', geoJsonData);
+      } else {
+        print('👻 Source missing, creating source & layer');
+        // Create source/layer on the fly if needed
+        await style.addSource(
+          GeoJsonSource(id: 'ghost-source', data: geoJsonData),
+        );
+        await style.addLayer(
+          CircleLayer(
+            id: 'ghost-layer',
+            sourceId: 'ghost-source',
+            circleColor: Colors
+                .white
+                .value, // Changed to solid white for visibility test
+            circleRadius: 20.0, // Increased size check
+            circleBlur: 0.5,
+            circleOpacity: 0.8, // Increased opacity check
+          ),
+        );
+        print('👻 Ghost layer added');
+      }
+    } catch (e) {
+      print('👻 Error updating ghosts: $e');
+    }
+  }
+
+  void _startGhostAnimation() {
+    print('👻 _startGhostAnimation started'); // DEBUG
+    _ghostAnimationTimer?.cancel();
+    _ghostAnimationTimer = Timer.periodic(const Duration(milliseconds: 100), (
+      timer,
+    ) {
+      if (!mounted || _mapboxMap?.style == null) {
+        timer.cancel();
+        return;
+      }
+
+      // Removed setState to avoid frequent rebuilds, logic is purely visual layer update
+      if (_ghostOpacityRising) {
+        _ghostOpacity += 0.05;
+        if (_ghostOpacity >= 0.8) _ghostOpacityRising = false; // Higher max
+      } else {
+        _ghostOpacity -= 0.05;
+        if (_ghostOpacity <= 0.3) _ghostOpacityRising = true;
+      }
+
+      try {
+        _mapboxMap?.style.setStyleLayerProperty(
+          'ghost-layer',
+          'circle-opacity',
+          _ghostOpacity,
+        );
+        // print('👻 Opacity: $_ghostOpacity'); // PROBABLY TOO NOISY
+      } catch (e) {
+        // fast fails ignored
+      }
+    });
+  }
+
+  void _clearGhosts() {
+    _ghostAnimationTimer?.cancel();
+    // Empty feature collection
+    final emptyData = jsonEncode({'type': 'FeatureCollection', 'features': []});
+    _updateGhostLayer(emptyData);
   }
 }

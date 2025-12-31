@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/stream_service.dart';
+import 'package:stream_feeds/stream_feeds.dart';
 
 class TableService {
   // Fetch active tables from map_ready_tables view
@@ -13,22 +15,32 @@ class TableService {
     double? maxLat,
     double? minLng,
     double? maxLng,
+    int? limit, // New: Server-side limit
   }) async {
     try {
-      var query = SupabaseConfig.client
-          .from('map_ready_tables')
-          .select();
+      var query = SupabaseConfig.client.from('map_ready_tables').select();
 
       // Apply server-side bounding box filter if active
-      if (minLat != null && maxLat != null && minLng != null && maxLng != null) {
+      if (minLat != null &&
+          maxLat != null &&
+          minLng != null &&
+          maxLng != null) {
         query = query
             .gte('location_lat', minLat)
             .lte('location_lat', maxLat)
             .gte('location_lng', minLng)
             .lte('location_lng', maxLng);
       }
-      
-      final response = await query.order('scheduled_time', ascending: true);
+
+      // Order by scheduled time to get soonest events first, but limiting is key.
+      var builder = query.order('scheduled_time', ascending: true);
+
+      // Apply limit if provided
+      if (limit != null) {
+        builder = builder.limit(limit);
+      }
+
+      final response = await builder;
 
       // final response = await SupabaseConfig.client
       //     .from('map_ready_tables')
@@ -175,6 +187,8 @@ class TableService {
         'cuisine_type': activityType,
         'price_per_person': budgetMax,
         'status': 'open',
+        'chat_storage_type':
+            'telegram', // New tables use Telegram local-first mode
         if (markerEmoji != null) 'marker_emoji': markerEmoji,
         if (imageUrl != null) 'image_url': imageUrl,
       };
@@ -192,7 +206,6 @@ class TableService {
       print('✅ TABLE SERVICE: Insert successful!');
       print('  - Table ID: $tableId');
 
-      // Upload marker image if provided
       // Upload marker image if provided
       if (markerImage != null) {
         print('📸 TABLE SERVICE: Processing marker image upload...');
@@ -213,6 +226,36 @@ class TableService {
       } else {
         print('ℹ️ TABLE SERVICE: No marker image provided');
       }
+
+      // STREAM ACTIVITY FEED INTEGRATION
+      try {
+        final streamService = StreamService();
+        await streamService.userFeed.addActivity(
+          request: FeedAddActivityRequest(
+            type: 'create',
+            text: 'Created a new table at ${title ?? venueName}',
+            custom: {
+              'table_id': tableId,
+              'title': title ?? venueName,
+              'location_name': venueName,
+              'location_address': venueAddress,
+              'latitude': latitude,
+              'longitude': longitude,
+              'scheduled_time': scheduledTime.toIso8601String(),
+              'activity_type': activityType,
+              'max_capacity': maxCapacity,
+              'budget_min': budgetMin,
+              'budget_max': budgetMax,
+            },
+          ),
+        );
+
+        print('✅ STREAM: Activity posted for table creation');
+      } catch (e) {
+        print('⚠️ STREAM: Failed to post activity: $e');
+        // Do not fail the table creation if stream fails
+      }
+
       return tableId;
     } catch (e) {
       print('❌ TABLE SERVICE: Error creating table');

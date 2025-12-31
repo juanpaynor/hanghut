@@ -10,14 +10,23 @@ import 'package:bitemates/providers/auth_provider.dart';
 import 'package:provider/provider.dart';
 
 class MainNavigationScreen extends StatefulWidget {
-  const MainNavigationScreen({super.key});
+  final int initialIndex;
+
+  const MainNavigationScreen({super.key, this.initialIndex = 0});
 
   @override
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _selectedIndex = 0;
+  late int _selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = widget.initialIndex;
+  }
+
   final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
 
   List<Widget> get _screens {
@@ -201,38 +210,40 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
 
           // Floating menu button - top right
-          Positioned(
-            top: 60,
-            right: 16,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 12,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(28),
-                  onTap: () => _showSettingsMenu(context),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    child: const Icon(
-                      Icons.menu,
-                      color: Color(0xFF000000),
-                      size: 24,
+          // Hide on Profile screen (assuming index 3) as it has its own actions
+          if (_selectedIndex != 3)
+            Positioned(
+              top: 60,
+              right: 16,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 12,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(28),
+                    onTap: () => _showSettingsMenu(context),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      child: const Icon(
+                        Icons.menu,
+                        color: Color(0xFF000000),
+                        size: 24,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
       bottomNavigationBar: Container(

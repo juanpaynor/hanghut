@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/services/gamification_service.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/core/services/stream_service.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -20,6 +26,9 @@ class UserProfileScreen extends StatefulWidget {
 class _UserProfileScreenState extends State<UserProfileScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final PageController _carouselController = PageController(); // Restored
+  int _currentCarouselIndex = 0; // Restored
+
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
   List<Map<String, dynamic>> _userPhotos = [];
@@ -28,7 +37,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
   List<Map<String, dynamic>> _pastTables = [];
   List<Map<String, dynamic>> _hostedTables = [];
   List<Map<String, dynamic>> _badges = [];
-  final _gamificationService = GamificationService();
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -40,6 +49,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
   @override
   void dispose() {
     _tabController.dispose();
+    _carouselController.dispose(); // Restored
     super.dispose();
   }
 
@@ -47,99 +57,105 @@ class _UserProfileScreenState extends State<UserProfileScreen>
     setState(() => _isLoading = true);
 
     try {
-      // Load user data
-      final user = await SupabaseConfig.client
+      final supabase = SupabaseConfig.client;
+
+      // 1. Fetch User Data (Basic info)
+      final userResponse = await supabase
           .from('users')
-          .select('*')
+          .select(
+            'id, display_name, bio, avatar_url, trust_score, occupation, social_instagram, tags',
+          )
           .eq('id', widget.userId)
           .single();
 
-      // Load user photos
-      final photos = await SupabaseConfig.client
+      // 2. Fetch User Photos (Gallery) - Sorted by sort_order
+      final photosResponse = await supabase
           .from('user_photos')
-          .select('*')
+          .select()
           .eq('user_id', widget.userId)
-          .order('is_primary', ascending: false);
+          .order('sort_order', ascending: true);
 
-      // Load stats
-      final hostedCount = await SupabaseConfig.client
+      // 3. Fetch User Stats (Hosted, Joined) - Simplified/Mocked for now or aggregate
+      // Ideally this would be a specialized query or edge function
+      final tablesHosted = await supabase
           .from('tables')
-          .select('id')
+          .count(CountOption.exact)
           .eq('host_id', widget.userId);
 
-      final joinedCount = await SupabaseConfig.client
+      final tablesJoined = await supabase
           .from('table_participants')
-          .select('id')
-          .eq('user_id', widget.userId)
-          .eq('status', 'confirmed');
+          .count(CountOption.exact)
+          .eq('user_id', widget.userId);
 
-      // Load upcoming tables
-      final upcoming = await SupabaseConfig.client
-          .from('table_participants')
-          .select('''
-            status,
-            joined_at,
-            tables!inner(
-              id,
-              title,
-              location_name,
-              datetime,
-              max_guests
-            )
-          ''')
-          .eq('user_id', widget.userId)
-          .gte('tables.datetime', DateTime.now().toIso8601String())
-          .limit(5);
+      // 4. Fetch Actual Tables
 
-      // Load past tables
-      final past = await SupabaseConfig.client
-          .from('table_participants')
-          .select('''
-            status,
-            joined_at,
-            tables!inner(
-              id,
-              title,
-              location_name,
-              datetime,
-              max_guests
-            )
-          ''')
-          .eq('user_id', widget.userId)
-          .lt('tables.datetime', DateTime.now().toIso8601String())
-          .limit(5);
-
-      // Load hosted tables
-      final hosted = await SupabaseConfig.client
+      // Hosted Tables
+      final hostedTablesData = await supabase
           .from('tables')
-          .select('*')
+          .select('*, participants:table_participants(count)')
           .eq('host_id', widget.userId)
-          .eq('host_id', widget.userId)
-          .limit(5);
+          .order('datetime', ascending: false);
 
-      // Load Badges
-      final badges = await _gamificationService.getUserBadges(widget.userId);
+      // Joined Tables (Upcoming & Past)
+      final joinedTablesData = await supabase
+          .from('table_participants')
+          .select('tables(*)')
+          .eq('user_id', widget.userId);
+
+      // Process Joined Tables
+      final List<Map<String, dynamic>> upcoming = [];
+      final List<Map<String, dynamic>> past = [];
+
+      for (var entry in joinedTablesData) {
+        final table = entry['tables'];
+        if (table != null) {
+          final dt = DateTime.parse(table['datetime']);
+          if (dt.isAfter(DateTime.now())) {
+            upcoming.add(entry);
+          } else {
+            past.add(entry);
+          }
+        }
+      }
+
+      // 5. Get Badges (Gamification)
+      final badges = await GamificationService().getUserBadges(widget.userId);
 
       if (mounted) {
         setState(() {
-          _userData = user;
-          _userPhotos = List<Map<String, dynamic>>.from(photos);
+          _userData = userResponse;
+          _userPhotos = List<Map<String, dynamic>>.from(photosResponse);
           _stats = {
-            'hosted': (hostedCount as List).length,
-            'joined': (joinedCount as List).length,
-            'friends': 0, // TODO: Implement friends count
-            'rating': user['trust_score'] ?? 0,
+            'hosted': tablesHosted,
+            'joined': tablesJoined,
+            'friends': 0, // Mock for now
+            'rating': 5.0, // Mock for now
           };
-          _upcomingTables = List<Map<String, dynamic>>.from(upcoming);
-          _pastTables = List<Map<String, dynamic>>.from(past);
-          _hostedTables = List<Map<String, dynamic>>.from(hosted);
+          _hostedTables = List<Map<String, dynamic>>.from(hostedTablesData);
+          _upcomingTables = upcoming;
+          _pastTables = past;
           _badges = badges;
           _isLoading = false;
         });
       }
     } catch (e) {
-      print('❌ Error loading profile: $e');
-      if (mounted) setState(() => _isLoading = false);
+      print('Error loading profile: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Failed to load profile. Please try again.';
+        });
+      }
+    }
+  }
+
+  Future<void> _launchInstagram() async {
+    final handle = _userData?['social_instagram'];
+    if (handle != null && handle.isNotEmpty) {
+      final uri = Uri.parse('https://instagram.com/$handle');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      }
     }
   }
 
@@ -149,7 +165,44 @@ class _UserProfileScreenState extends State<UserProfileScreen>
       return Scaffold(
         backgroundColor: Colors.white,
         body: Center(
-          child: CircularProgressIndicator(color: const Color(0xFF00FFD1)),
+          child: CircularProgressIndicator(color: AppTheme.accentColor),
+        ),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back, color: Colors.black),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.red),
+              SizedBox(height: 16),
+              Text(
+                _errorMessage!,
+                style: TextStyle(color: Colors.black54, fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _loadUserProfile,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accentColor,
+                  foregroundColor: Colors.black,
+                ),
+                child: Text('Retry'),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -157,32 +210,61 @@ class _UserProfileScreenState extends State<UserProfileScreen>
     if (_userData == null) {
       return Scaffold(
         backgroundColor: Colors.white,
-        body: Center(
-          child: Text('User not found', style: TextStyle(color: Colors.white)),
-        ),
+        body: Center(child: Text('User not found')),
       );
     }
 
-    final primaryPhoto = _userPhotos.firstWhere(
-      (p) => p['is_primary'] == true,
-      orElse: () => {},
-    );
+    final showCarousel = _userPhotos.isNotEmpty;
+    final primaryPhoto = showCarousel
+        ? _userPhotos.first
+        : {'photo_url': _userData?['avatar_url']};
 
     return Scaffold(
       backgroundColor: Colors.white,
       body: CustomScrollView(
         slivers: [
-          // Hero Header with Profile Photo
+          // Header / App Bar
           SliverAppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () {
+                if (widget.isOwnProfile) {
+                  // If on own profile tab, go to Map Screen
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          const MainNavigationScreen(initialIndex: 1),
+                    ),
+                    (route) => false,
+                  );
+                } else {
+                  Navigator.of(context).pop();
+                }
+              },
+            ),
             expandedHeight: 300,
             pinned: true,
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.primaryColor,
+            elevation: 0,
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Background Image with Gradient
-                  if (primaryPhoto['photo_url'] != null)
+                  // Carousel or Placeholder
+                  if (showCarousel)
+                    PageView.builder(
+                      controller: _carouselController,
+                      itemCount: _userPhotos.length,
+                      onPageChanged: (index) =>
+                          setState(() => _currentCarouselIndex = index),
+                      itemBuilder: (context, index) {
+                        return Image.network(
+                          _userPhotos[index]['photo_url'],
+                          fit: BoxFit.cover,
+                        );
+                      },
+                    )
+                  else if (primaryPhoto['photo_url'] != null)
                     Image.network(primaryPhoto['photo_url'], fit: BoxFit.cover)
                   else
                     Container(
@@ -190,10 +272,11 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: [Color(0xFF00FFD1), Colors.white],
+                          colors: [AppTheme.accentColor, Colors.white],
                         ),
                       ),
                     ),
+
                   // Gradient Overlay
                   Container(
                     decoration: BoxDecoration(
@@ -207,7 +290,32 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                       ),
                     ),
                   ),
-                  // User Info
+
+                  // Indicator Dots
+                  if (showCarousel && _userPhotos.length > 1)
+                    Positioned(
+                      top: 100,
+                      right: 20,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${_currentCarouselIndex + 1}/${_userPhotos.length}',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  // User Info Layer
                   Positioned(
                     bottom: 20,
                     left: 20,
@@ -215,30 +323,34 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Name & Verified
                         Row(
                           children: [
                             Text(
                               _userData!['display_name'] ?? 'Unknown',
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 32,
+                                fontSize: 36,
                                 fontWeight: FontWeight.bold,
+                                height: 1.0,
                               ),
                             ),
                             SizedBox(width: 8),
-                            Icon(
-                              Icons.verified,
-                              color: Color(0xFF00FFD1),
-                              size: 24,
-                            ),
+                            if ((_userData!['trust_score'] ?? 0) > 80)
+                              Icon(
+                                Icons.verified,
+                                color: AppTheme.accentColor,
+                                size: 28,
+                              ),
                           ],
                         ),
+                        /* Trust Score Removed
                         SizedBox(height: 8),
                         Row(
                           children: [
                             Icon(
                               Icons.star,
-                              color: Color(0xFF00FFD1),
+                              color: AppTheme.accentColor,
                               size: 18,
                             ),
                             SizedBox(width: 4),
@@ -251,83 +363,42 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                             ),
                           ],
                         ),
+                        */
                       ],
                     ),
                   ),
                 ],
               ),
             ),
-            leading: widget.isOwnProfile
-                ? SizedBox(
-                    width: 120,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          icon: Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.3),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(Icons.arrow_back, color: Colors.white),
-                          ),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                        IconButton(
-                          icon: Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.3),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(Icons.edit, color: Colors.white),
-                          ),
-                          onPressed: () {
-                            print('🔵 EDIT BUTTON PRESSED!');
-                            // TODO: Navigate to edit profile screen
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                backgroundColor: Color(0xFF2A2A3E),
-                                title: Text(
-                                  'Edit Profile',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                                content: Text(
-                                  'Profile editing feature coming soon!',
-                                  style: TextStyle(color: Colors.white70),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: Text(
-                                      'OK',
-                                      style: TextStyle(
-                                        color: Color(0xFF00FFD1),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  )
-                : IconButton(
-                    icon: Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.3),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(Icons.arrow_back, color: Colors.white),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-            leadingWidth: widget.isOwnProfile ? 120 : 56,
             actions: [
+              if (widget.isOwnProfile)
+                IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.3),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.edit, color: Colors.white),
+                  ),
+                  onPressed: () async {
+                    // Navigate to Edit Profile
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => EditProfileScreen(
+                          userProfile: _userData!,
+                          userPhotos: _userPhotos,
+                        ),
+                      ),
+                    );
+
+                    // Refresh if saved
+                    if (result == true) {
+                      _loadUserProfile();
+                    }
+                  },
+                ),
               if (!widget.isOwnProfile)
                 IconButton(
                   icon: Container(
@@ -351,7 +422,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               margin: EdgeInsets.all(20),
               padding: EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Color(0xFF2A2A3E),
+                color: AppTheme.primaryColor,
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
@@ -385,21 +456,60 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'About',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'About',
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      // Instagram Button (Restored)
+                      if (_userData!['social_instagram'] != null &&
+                          _userData!['social_instagram'].toString().isNotEmpty)
+                        GestureDetector(
+                          onTap: _launchInstagram,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceColor,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.camera_alt,
+                                  size: 16,
+                                  color: AppTheme.textPrimary,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  '@${_userData!['social_instagram']}',
+                                  style: TextStyle(
+                                    color: AppTheme.textPrimary,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   SizedBox(height: 12),
                   Text(
                     _userData!['bio'] ?? 'No bio yet',
                     style: TextStyle(
                       color: _userData!['bio'] != null
-                          ? Colors.white70
-                          : Colors.white38,
+                          ? AppTheme.textSecondary
+                          : Colors.grey,
                       fontSize: 16,
                       height: 1.5,
                       fontStyle: _userData!['bio'] != null
@@ -407,6 +517,38 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                           : FontStyle.italic,
                     ),
                   ),
+
+                  // Tags Display
+                  if (_userData!['tags'] != null &&
+                      (_userData!['tags'] as List).isNotEmpty) ...[
+                    SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: (_userData!['tags'] as List).map<Widget>((tag) {
+                        return Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.surfaceColor,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Text(
+                            tag.toString(),
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+
                   SizedBox(height: 20),
                 ],
               ),
@@ -424,7 +566,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                     child: Text(
                       'Photos',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: AppTheme.textPrimary,
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
@@ -469,7 +611,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                     child: Text(
                       'Passport',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: AppTheme.textPrimary,
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
@@ -488,11 +630,18 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                           width: 80,
                           margin: EdgeInsets.only(right: 12),
                           decoration: BoxDecoration(
-                            color: Color(0xFF2A2A3E),
+                            color: Colors.white,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: badge['color'].withOpacity(0.3),
                             ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -506,7 +655,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                               Text(
                                 badge['name'],
                                 style: TextStyle(
-                                  color: Colors.white,
+                                  color: AppTheme.textPrimary,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w500,
                                 ),
@@ -540,7 +689,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                         icon: Icon(Icons.message),
                         label: Text('Message'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Color(0xFF00FFD1),
+                          backgroundColor: AppTheme.accentColor,
                           foregroundColor: Colors.black,
                           padding: EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
@@ -551,12 +700,39 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                     ),
                     SizedBox(width: 12),
                     ElevatedButton(
-                      onPressed: () {
-                        // TODO: Add friend
+                      onPressed: () async {
+                        try {
+                          final streamService = StreamService();
+                          // For now, always follow (since isFollowing returns false)
+                          // In the future, this will toggle based on follow status
+                          await streamService.followUser(widget.userId);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Following ${_userData!['display_name']}',
+                                ),
+                                backgroundColor: AppTheme.accentColor,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          print('Error following user: $e');
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Failed to follow user'),
+                                backgroundColor: Colors.red,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        }
                       },
                       child: Icon(Icons.person_add),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF2A2A3E),
+                        backgroundColor: AppTheme.primaryColor,
                         foregroundColor: Colors.white,
                         padding: EdgeInsets.all(16),
                         shape: RoundedRectangleBorder(
@@ -577,9 +753,14 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               padding: EdgeInsets.symmetric(horizontal: 20),
               child: TabBar(
                 controller: _tabController,
-                labelColor: Color(0xFF00FFD1),
-                unselectedLabelColor: Colors.white54,
-                indicatorColor: Color(0xFF00FFD1),
+                labelColor: AppTheme.primaryColor,
+                unselectedLabelColor: Colors.grey,
+                indicatorColor: AppTheme.accentColor,
+                indicatorWeight: 3,
+                labelStyle: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
                 tabs: [
                   Tab(text: 'Upcoming'),
                   Tab(text: 'Past'),
@@ -623,7 +804,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
   Widget _buildStatItem(String label, String value, IconData icon) {
     return Column(
       children: [
-        Icon(icon, color: Color(0xFF00FFD1), size: 24),
+        Icon(icon, color: AppTheme.accentColor, size: 24),
         SizedBox(height: 8),
         Text(
           value,
@@ -634,25 +815,35 @@ class _UserProfileScreenState extends State<UserProfileScreen>
           ),
         ),
         SizedBox(height: 4),
-        Text(label, style: TextStyle(color: Colors.white54, fontSize: 12)),
+        Text(label, style: TextStyle(color: Colors.white70, fontSize: 12)),
       ],
     );
   }
 
   Widget _buildTablesList(List<Map<String, dynamic>> tables, bool isHosted) {
     if (tables.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.restaurant_menu, size: 64, color: Colors.white24),
-            SizedBox(height: 16),
-            Text(
-              'No tables yet',
-              style: TextStyle(color: Colors.white54, fontSize: 16),
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(vertical: 40),
+        children: [
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.restaurant_menu,
+                  size: 64,
+                  color: Colors.grey.withOpacity(0.3),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No tables yet',
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       );
     }
 
@@ -668,8 +859,16 @@ class _UserProfileScreenState extends State<UserProfileScreen>
           margin: EdgeInsets.only(bottom: 16),
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Color(0xFF2A2A3E),
+            color: Colors.white,
             borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 10,
+                offset: Offset(0, 4),
+              ),
+            ],
+            border: Border.all(color: Colors.grey.shade100),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -677,7 +876,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               Text(
                 table['title'],
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppTheme.primaryColor,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
@@ -685,12 +884,19 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.location_on, color: Color(0xFF00FFD1), size: 16),
+                  Icon(
+                    Icons.location_on,
+                    color: AppTheme.accentColor,
+                    size: 16,
+                  ),
                   SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       _getDisplayLocation(table['location_name']),
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 14,
+                      ),
                     ),
                   ),
                 ],
@@ -700,13 +906,16 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                 children: [
                   Icon(
                     Icons.calendar_today,
-                    color: Color(0xFF00FFD1),
+                    color: AppTheme.accentColor,
                     size: 16,
                   ),
                   SizedBox(width: 4),
                   Text(
                     DateFormat('MMM d, yyyy · h:mm a').format(datetime),
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 14,
+                    ),
                   ),
                 ],
               ),

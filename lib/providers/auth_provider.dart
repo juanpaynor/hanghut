@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/auth_service.dart';
+import 'package:bitemates/core/services/stream_service.dart';
 
 class AuthProvider with ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -53,6 +54,8 @@ class AuthProvider with ChangeNotifier {
       );
       _setLoading(false);
       if (response.user != null) {
+        // Initialize Stream Feed
+        await StreamService().init(response.user!.id);
         notifyListeners();
         return true;
       } else {
@@ -82,6 +85,13 @@ class AuthProvider with ChangeNotifier {
   }
 
   // Helper methods
+  Future<void> initStream() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      await StreamService().init(user.id);
+    }
+  }
+
   void _setLoading(bool value) {
     _isLoading = value;
     notifyListeners();
