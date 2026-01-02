@@ -1,5 +1,5 @@
 name: bitemates
-description: "BiteMates - Social Meetup App"
+description: "Hanghut - Social Meetup App"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -44,7 +44,7 @@ dependencies:
   google_places_flutter: ^2.0.9
   intl: ^0.19.0
   http: ^1.1.0
-  geolocator: ^13.0.2
+  geolocator: ^14.0.2
   ably_flutter: ^1.2.42
   flutter_dotenv: ^6.0.0
   cached_network_image: ^3.4.1
@@ -53,7 +53,9 @@ dependencies:
   uuid: ^4.5.1
   path_provider: ^2.1.5
   crypto: ^3.0.7
-  stream_feeds: ^0.5.0
+
+  timeago: ^3.7.1
+  h3_flutter: ^0.7.1
 
 dev_dependencies:
   flutter_test:

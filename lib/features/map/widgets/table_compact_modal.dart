@@ -5,16 +5,13 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/widgets/avatar_stack.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
   final Map<String, dynamic>? matchData;
 
-  const TableCompactModal({
-    super.key,
-    required this.table,
-    this.matchData,
-  });
+  const TableCompactModal({super.key, required this.table, this.matchData});
 
   @override
   State<TableCompactModal> createState() => _TableCompactModalState();
@@ -25,11 +22,55 @@ class _TableCompactModalState extends State<TableCompactModal> {
   bool _isLoading = false;
   Map<String, dynamic>? _membershipStatus;
   bool _isHost = false;
+  List<String> _memberPhotoUrls = [];
+  int _totalMembers = 0;
 
   @override
   void initState() {
     super.initState();
     _checkMembershipStatus();
+    _fetchMembers();
+  }
+
+  Future<void> _fetchMembers() async {
+    try {
+      final members = await _memberService.getTableMembers(widget.table['id']);
+      final photos = <String>[];
+
+      for (var member in members) {
+        final user = member['users'];
+        if (user == null) continue;
+
+        String? photoUrl = user['avatar_url'];
+
+        // Try to find primary photo from user_photos if available
+        if (user['user_photos'] != null) {
+          final userPhotos = List<Map<String, dynamic>>.from(
+            user['user_photos'],
+          );
+          final primary = userPhotos.firstWhere(
+            (p) => p['is_primary'] == true,
+            orElse: () => userPhotos.isNotEmpty ? userPhotos.first : {},
+          );
+          if (primary.isNotEmpty && primary['photo_url'] != null) {
+            photoUrl = primary['photo_url'];
+          }
+        }
+
+        if (photoUrl != null) {
+          photos.add(photoUrl);
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _memberPhotoUrls = photos;
+          _totalMembers = members.length;
+        });
+      }
+    } catch (e) {
+      print('❌ Error fetching members for bubbles: $e');
+    }
   }
 
   Future<void> _checkMembershipStatus() async {
@@ -52,25 +93,39 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
   @override
   Widget build(BuildContext context) {
-    final scheduledAt = DateTime.parse(widget.table['scheduled_time']);
+    // FIX: Use 'datetime' column and handle nulls
+    final scheduledAt = DateTime.parse(
+      widget.table['datetime'] ??
+          widget.table['scheduled_time'] ??
+          DateTime.now().toIso8601String(),
+    );
     final currentCapacity = widget.table['current_capacity'] ?? 0;
-    final maxCapacity = widget.table['max_guests'] ?? widget.table['max_capacity'] ?? 0;
-    
+    final maxCapacity =
+        widget.table['max_guests'] ?? widget.table['max_capacity'] ?? 0;
+
     // Data Fallbacks
-    final displayTitle = widget.table['title'] ?? 
-                        widget.table['venue_name'] ?? 
-                        widget.table['location_name'] ?? 
-                        'Unknown Activity';
+    final displayTitle =
+        widget.table['title'] ??
+        widget.table['venue_name'] ??
+        widget.table['location_name'] ??
+        'Unknown Activity';
 
-    final displayVenue = widget.table['location_name'] ?? 
-                        widget.table['venue_name'];
+    final displayVenue =
+        widget.table['location_name'] ?? widget.table['venue_name'];
 
-    final matchScore = widget.matchData != null 
-        ? (widget.matchData!['score'] * 100).toInt() 
+    final matchScore = widget.matchData != null
+        ? (widget.matchData!['score'] * 100).toInt()
         : 0;
-        
-    final matchColor = widget.matchData != null 
-        ? Color(int.parse((widget.matchData?['color'] ?? '#666666').replaceFirst('#', '0xFF')))
+
+    final matchColor = widget.matchData != null
+        ? Color(
+            int.parse(
+              (widget.matchData?['color'] ?? '#666666').replaceFirst(
+                '#',
+                '0xFF',
+              ),
+            ),
+          )
         : Colors.grey;
 
     return Dialog(
@@ -100,7 +155,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
                 fit: StackFit.expand,
                 children: [
                   ClipRRect(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(24),
+                    ),
                     child: widget.table['image_url'] != null
                         ? Image.network(
                             widget.table['image_url'],
@@ -126,13 +183,15 @@ class _TableCompactModalState extends State<TableCompactModal> {
                             ),
                           ),
                   ),
-                  
+
                   // Gradient Overlay for text readability (lighter for light theme or keep dark for contrast on image?)
                   // Keeping slight dark overlay only at top for close button visibility if image is light
                   Positioned.fill(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(24),
+                        ),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -159,7 +218,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
                         customBorder: const CircleBorder(),
                         child: const Padding(
                           padding: EdgeInsets.all(8.0),
-                          child: Icon(Icons.close, color: Colors.black87, size: 20),
+                          child: Icon(
+                            Icons.close,
+                            color: Colors.black87,
+                            size: 20,
+                          ),
                         ),
                       ),
                     ),
@@ -171,7 +234,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
                       top: 12,
                       left: 12,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
@@ -182,7 +248,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.auto_awesome, color: matchColor, size: 14),
+                            Icon(
+                              Icons.auto_awesome,
+                              color: matchColor,
+                              size: 14,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               '$matchScore% Match',
@@ -219,12 +289,16 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  
+
                   if (displayVenue != null && displayVenue != displayTitle) ...[
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        const Icon(Icons.location_on, size: 14, color: Colors.grey),
+                        const Icon(
+                          Icons.location_on,
+                          size: 14,
+                          color: Colors.grey,
+                        ),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
@@ -241,9 +315,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
                       ],
                     ),
                   ],
-                  
+
                   const SizedBox(height: 12),
-                  
+
                   // Date Row
                   Row(
                     children: [
@@ -253,11 +327,17 @@ class _TableCompactModalState extends State<TableCompactModal> {
                           color: Colors.grey[100], // Light grey bg
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Icon(Icons.calendar_today, size: 16, color: Colors.grey[800]),
+                        child: Icon(
+                          Icons.calendar_today,
+                          size: 16,
+                          color: Colors.grey[800],
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        DateFormat('EEEE, MMM d  •  h:mm a').format(scheduledAt),
+                        DateFormat(
+                          'EEEE, MMM d  •  h:mm a',
+                        ).format(scheduledAt),
                         style: TextStyle(
                           color: Colors.grey[800],
                           fontSize: 15,
@@ -266,9 +346,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
                       ),
                     ],
                   ),
-                  
+
                   const SizedBox(height: 20),
-                  
+
                   // Host Row
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -285,13 +365,16 @@ class _TableCompactModalState extends State<TableCompactModal> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => UserProfileScreen(userId: widget.table['host_id']),
+                                builder: (context) => UserProfileScreen(
+                                  userId: widget.table['host_id'],
+                                ),
                               ),
                             );
                           },
                           child: CircleAvatar(
                             radius: 20,
-                            backgroundImage: widget.table['host_photo_url'] != null
+                            backgroundImage:
+                                widget.table['host_photo_url'] != null
                                 ? NetworkImage(widget.table['host_photo_url'])
                                 : null,
                             backgroundColor: Colors.grey[300],
@@ -315,13 +398,29 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                 ),
                               ),
                               const SizedBox(height: 2),
-                              Text(
-                                'Host  •  $currentCapacity/$maxCapacity guests',
-                                style: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  if (_memberPhotoUrls.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: AvatarStack(
+                                        avatarUrls: _memberPhotoUrls,
+                                        totalCount: _totalMembers,
+                                        size: 24,
+                                        borderColor: Colors.white,
+                                        borderWidth: 1.5,
+                                      ),
+                                    ),
+                                  Text(
+                                    '$currentCapacity/$maxCapacity guests',
+                                    style: TextStyle(
+                                      color: Colors.grey[600],
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -362,24 +461,20 @@ class _TableCompactModalState extends State<TableCompactModal> {
       foregroundColor: Colors.white,
       elevation: 0,
       padding: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       textStyle: const TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.bold,
         letterSpacing: 0.5,
       ),
     );
-    
+
     final secondaryButtonStyle = ElevatedButton.styleFrom(
       backgroundColor: Colors.grey[200], // Light grey secondary
       foregroundColor: Colors.black87,
       elevation: 0,
       padding: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
 
     if (_isHost) {
@@ -442,7 +537,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.orange[50], // Very light orange
             foregroundColor: Colors.orange[800],
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
             elevation: 0,
           ),
           child: const Text('Request Pending'),
@@ -462,12 +559,13 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
   void _openChat() {
     Navigator.pop(context); // Close modal first
-    
+
     // Data Fallbacks (same as build method)
-    final venueName = widget.table['venue_name'] ?? 
-                     widget.table['title'] ?? 
-                     widget.table['location_name'] ?? 
-                     'Unknown Venue';
+    final venueName =
+        widget.table['venue_name'] ??
+        widget.table['title'] ??
+        widget.table['location_name'] ??
+        'Unknown Venue';
 
     showModalBottomSheet(
       context: context,
@@ -485,32 +583,41 @@ class _TableCompactModalState extends State<TableCompactModal> {
   Future<void> _joinTable() async {
     setState(() => _isLoading = true);
     final result = await _memberService.joinTable(widget.table['id']);
-    
+
     if (mounted) {
       setState(() => _isLoading = false);
       if (result['success']) {
         Navigator.pop(context, true); // Return true to refresh
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['message'])),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result['message'])));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['message']), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(result['message']),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
   }
 
   Future<void> _deleteTable() async {
-     // Show confirmation dialog before deleting
+    // Show confirmation dialog before deleting
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Table?'),
         content: const Text('This action cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
@@ -518,8 +625,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
     if (confirm != true) return;
 
     setState(() => _isLoading = true);
-    await SupabaseConfig.client.from('tables').delete().eq('id', widget.table['id']);
-    
+    await SupabaseConfig.client
+        .from('tables')
+        .delete()
+        .eq('id', widget.table['id']);
+
     if (mounted) {
       Navigator.pop(context, true);
     }
@@ -532,8 +642,14 @@ class _TableCompactModalState extends State<TableCompactModal> {
         title: const Text('Leave Table?'),
         content: const Text('Are you sure?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Leave', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
@@ -542,7 +658,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
     setState(() => _isLoading = true);
     await _memberService.leaveTable(widget.table['id']);
-    
+
     if (mounted) {
       Navigator.pop(context, true);
     }
@@ -551,7 +667,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
   Future<void> _cancelRequest() async {
     setState(() => _isLoading = true);
     await _memberService.leaveTable(widget.table['id']);
-    
+
     if (mounted) {
       Navigator.pop(context, true);
     }

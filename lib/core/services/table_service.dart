@@ -1,8 +1,6 @@
 import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/core/services/stream_service.dart';
-import 'package:stream_feeds/stream_feeds.dart';
 
 class TableService {
   // Fetch active tables from map_ready_tables view
@@ -225,35 +223,6 @@ class TableService {
         }
       } else {
         print('ℹ️ TABLE SERVICE: No marker image provided');
-      }
-
-      // STREAM ACTIVITY FEED INTEGRATION
-      try {
-        final streamService = StreamService();
-        await streamService.userFeed.addActivity(
-          request: FeedAddActivityRequest(
-            type: 'create',
-            text: 'Created a new table at ${title ?? venueName}',
-            custom: {
-              'table_id': tableId,
-              'title': title ?? venueName,
-              'location_name': venueName,
-              'location_address': venueAddress,
-              'latitude': latitude,
-              'longitude': longitude,
-              'scheduled_time': scheduledTime.toIso8601String(),
-              'activity_type': activityType,
-              'max_capacity': maxCapacity,
-              'budget_min': budgetMin,
-              'budget_max': budgetMax,
-            },
-          ),
-        );
-
-        print('✅ STREAM: Activity posted for table creation');
-      } catch (e) {
-        print('⚠️ STREAM: Failed to post activity: $e');
-        // Do not fail the table creation if stream fails
       }
 
       return tableId;

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/features/chat/screens/chat_screen.dart';
+
 import 'package:bitemates/features/trips/widgets/add_trip_modal.dart';
+import 'package:bitemates/features/trips/screens/trip_details_screen.dart';
 import 'package:intl/intl.dart';
 
 class MyTablesScreen extends StatefulWidget {
@@ -11,26 +12,27 @@ class MyTablesScreen extends StatefulWidget {
   State<MyTablesScreen> createState() => _MyTablesScreenState();
 }
 
-class _MyTablesScreenState extends State<MyTablesScreen>
-    with SingleTickerProviderStateMixin {
-  List<Map<String, dynamic>> _myTables = [];
+class _MyTablesScreenState extends State<MyTablesScreen> {
+  // List<Map<String, dynamic>> _myTables = []; // Removed tables
   List<Map<String, dynamic>> _myTrips = [];
   bool _isLoading = true;
-  String? _currentUserId;
+  // String? _currentUserId; // Unused if mostly trips
   String _filter = 'upcoming'; // 'upcoming', 'past', 'all'
-  late TabController _tabController;
+  // late TabController _tabController; // Removed
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _loadMyTables();
+    // _tabController = TabController(length: 2, vsync: this); // Removed
+    // _tabController.addListener(_handleTabSelection); // Removed
+    // _loadMyTables(); // Removed
     _loadMyTrips();
   }
 
+  // void _handleTabSelection() { ... } // Removed
+
   @override
   void dispose() {
-    _tabController.dispose();
     super.dispose();
   }
 
@@ -48,10 +50,12 @@ class _MyTablesScreenState extends State<MyTablesScreen>
       if (mounted) {
         setState(() {
           _myTrips = List<Map<String, dynamic>>.from(response);
+          _isLoading = false;
         });
       }
     } catch (e) {
       print('❌ MY TRIPS: Error loading trips - $e');
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -64,120 +68,6 @@ class _MyTablesScreenState extends State<MyTablesScreen>
         onTripCreated: () {
           _loadMyTrips();
         },
-      ),
-    );
-  }
-
-  Future<void> _loadMyTables() async {
-    setState(() => _isLoading = true);
-
-    final user = SupabaseConfig.client.auth.currentUser;
-    if (user == null) {
-      setState(() => _isLoading = false);
-      return;
-    }
-
-    _currentUserId = user.id;
-
-    try {
-      final response = await SupabaseConfig.client
-          .from('table_participants')
-          .select('''
-            status,
-            joined_at,
-            tables!inner(
-              id,
-              title,
-              location_name,
-              datetime,
-              latitude,
-              longitude,
-              max_guests,
-              host_id
-            )
-          ''')
-          .eq('user_id', _currentUserId!);
-
-      if (mounted) {
-        setState(() {
-          _myTables = List<Map<String, dynamic>>.from(response).map((item) {
-            final table = item['tables'];
-            return {
-              'id': table['id'],
-              'title': table['title'],
-              'restaurantName': table['location_name'],
-              'scheduledTime': table['datetime'],
-              'locationLat': table['latitude'],
-              'locationLng': table['longitude'],
-              'maxParticipants': table['max_guests'],
-              'hostId': table['host_id'],
-              'ablyChannelId': table['ably_channel_id'],
-              'status': item['status'],
-              'joinedAt': item['joined_at'],
-              'isHost': table['host_id'] == _currentUserId,
-            };
-          }).toList();
-          _isLoading = false;
-        });
-
-        // Load participant counts for each table
-        _loadParticipantCounts();
-      }
-    } catch (e) {
-      print('❌ MY TABLES: Error loading tables - $e');
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _loadParticipantCounts() async {
-    for (var table in _myTables) {
-      try {
-        final count = await SupabaseConfig.client
-            .from('table_participants')
-            .select('user_id')
-            .eq('table_id', table['id'])
-            .eq('status', 'confirmed')
-            .count();
-
-        if (mounted) {
-          setState(() {
-            table['participantCount'] = count.count;
-          });
-        }
-      } catch (e) {
-        print('❌ Error loading participant count for ${table['id']}: $e');
-      }
-    }
-  }
-
-  List<Map<String, dynamic>> get _filteredTables {
-    final now = DateTime.now();
-
-    switch (_filter) {
-      case 'upcoming':
-        return _myTables.where((table) {
-          final scheduledTime = DateTime.parse(table['scheduledTime']);
-          return scheduledTime.isAfter(now);
-        }).toList();
-      case 'past':
-        return _myTables.where((table) {
-          final scheduledTime = DateTime.parse(table['scheduledTime']);
-          return scheduledTime.isBefore(now);
-        }).toList();
-      default:
-        return _myTables;
-    }
-  }
-
-  void _openChat(Map<String, dynamic> table) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ChatScreen(
-          tableId: table['id'],
-          tableTitle: table['title'],
-          channelId: table['ablyChannelId'],
-        ),
       ),
     );
   }
@@ -205,12 +95,11 @@ class _MyTablesScreenState extends State<MyTablesScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _tabController.index == 1 ? _showAddTripModal : null,
-        backgroundColor: const Color(0xFF00FFD1),
-        foregroundColor: Colors.black,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Trip'),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'trips_fab',
+        onPressed: _showAddTripModal,
+        backgroundColor: Theme.of(context).primaryColor,
+        child: const Icon(Icons.add, color: Colors.white),
       ),
       body: SafeArea(
         child: Column(
@@ -221,36 +110,20 @@ class _MyTablesScreenState extends State<MyTablesScreen>
               child: Row(
                 children: [
                   const Text(
-                    'My Activity',
+                    'My Trips',
                     style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black,
+                      color: Color(0xFF333333),
                     ),
                   ),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.refresh, color: Colors.black),
-                    onPressed: () {
-                      _loadMyTables();
-                      _loadMyTrips();
-                    },
+                    icon: const Icon(Icons.refresh, color: Color(0xFF333333)),
+                    onPressed: _loadMyTrips,
                   ),
                 ],
               ),
-            ),
-
-            // Tabs
-            TabBar(
-              controller: _tabController,
-              labelColor: Colors.black,
-              unselectedLabelColor: Colors.black45,
-              indicatorColor: const Color(0xFF00FFD1),
-              indicatorWeight: 3,
-              tabs: const [
-                Tab(text: 'Tables'),
-                Tab(text: 'Trips'),
-              ],
             ),
 
             // Filter tabs
@@ -269,122 +142,55 @@ class _MyTablesScreenState extends State<MyTablesScreen>
 
             const SizedBox(height: 16),
 
-            // Tab content
+            // Trip content
             Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  // Tables tab
-                  _isLoading
-                      ? const Center(
-                          child: CircularProgressIndicator(
-                            color: Color(0xFF00FFD1),
+              child: _isLoading
+                  ? Center(
+                      child: CircularProgressIndicator(
+                        color: Theme.of(context).primaryColor,
+                      ),
+                    )
+                  : _filteredTrips.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.flight_takeoff,
+                            size: 64,
+                            color: Colors.black12,
                           ),
-                        )
-                      : _filteredTables.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                _filter == 'upcoming'
-                                    ? Icons.event_available
-                                    : Icons.history,
-                                size: 64,
-                                color: Colors.black12,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _filter == 'upcoming'
-                                    ? 'No upcoming tables'
-                                    : 'No past tables',
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.black38,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              const Text(
-                                'Join a table from the map!',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.black26,
-                                ),
-                              ),
-                            ],
+                          const SizedBox(height: 16),
+                          const Text(
+                            'No trips yet',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: Colors.black38,
+                            ),
                           ),
-                        )
-                      : RefreshIndicator(
-                          onRefresh: _loadMyTables,
-                          color: const Color(0xFF00FFD1),
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            itemCount: _filteredTables.length,
-                            itemBuilder: (context, index) {
-                              final table = _filteredTables[index];
-                              return _buildTableCard(table);
-                            },
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Plan your next adventure!',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.black26,
+                            ),
                           ),
-                        ),
-
-                  // Trips tab
-                  _filteredTrips.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(
-                                Icons.flight_takeoff,
-                                size: 64,
-                                color: Colors.black12,
-                              ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                'No trips yet',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.black38,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              const Text(
-                                'Plan your next adventure!',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.black26,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              ElevatedButton.icon(
-                                onPressed: _showAddTripModal,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Add Trip'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF00FFD1),
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 24,
-                                    vertical: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : RefreshIndicator(
-                          onRefresh: _loadMyTrips,
-                          color: const Color(0xFF00FFD1),
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            itemCount: _filteredTrips.length,
-                            itemBuilder: (context, index) {
-                              final trip = _filteredTrips[index];
-                              return _buildTripCard(trip);
-                            },
-                          ),
-                        ),
-                ],
-              ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadMyTrips,
+                      color: Theme.of(context).primaryColor,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: _filteredTrips.length,
+                        itemBuilder: (context, index) {
+                          final trip = _filteredTrips[index];
+                          return _buildTripCard(trip);
+                        },
+                      ),
+                    ),
             ),
           ],
         ),
@@ -394,187 +200,21 @@ class _MyTablesScreenState extends State<MyTablesScreen>
 
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filter == value;
+    final primaryColor = Theme.of(context).primaryColor;
+
     return GestureDetector(
       onTap: () => setState(() => _filter = value),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF00FFD1)
-              : Colors.black.withOpacity(0.05),
+          color: isSelected ? primaryColor : Colors.black.withOpacity(0.05),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.black : Colors.black54,
+            color: isSelected ? Colors.white : Colors.black54,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTableCard(Map<String, dynamic> table) {
-    final scheduledTime = DateTime.parse(table['scheduledTime']);
-    final isPast = scheduledTime.isBefore(DateTime.now());
-    final participantCount = table['participantCount'] ?? 0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _openChat(table),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  table['title'],
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (table['isHost']) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF00FFD1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Text(
-                                    'HOST',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            table['restaurantName'],
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.black.withOpacity(0.6),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      isPast ? Icons.check_circle : Icons.access_time,
-                      color: isPast
-                          ? Colors.green.withOpacity(0.6)
-                          : const Color(0xFF00FFD1),
-                      size: 24,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_today,
-                      size: 14,
-                      color: Colors.black.withOpacity(0.4),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      DateFormat('MMM d, yyyy · h:mm a').format(scheduledTime),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.black.withOpacity(0.6),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.people,
-                      size: 14,
-                      color: Colors.black.withOpacity(0.4),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '$participantCount / ${table['maxParticipants']} joined',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.black.withOpacity(0.6),
-                      ),
-                    ),
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00FFD1).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.chat_bubble,
-                            size: 14,
-                            color: Colors.black87,
-                          ),
-                          SizedBox(width: 4),
-                          Text(
-                            'Open Chat',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
           ),
         ),
       ),
@@ -589,6 +229,7 @@ class _MyTablesScreenState extends State<MyTablesScreen>
     final isActive = startDate.isBefore(now) && endDate.isAfter(now);
     final daysUntil = startDate.difference(now).inDays;
     final duration = endDate.difference(startDate).inDays + 1;
+    final primaryColor = Theme.of(context).primaryColor;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -609,7 +250,12 @@ class _MyTablesScreenState extends State<MyTablesScreen>
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: () {
-            // TODO: Navigate to trip detail screen
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => TripDetailsScreen(trip: trip),
+              ),
+            );
           },
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -621,12 +267,12 @@ class _MyTablesScreenState extends State<MyTablesScreen>
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF00FFD1).withOpacity(0.2),
+                        color: primaryColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.flight_takeoff,
-                        color: Color(0xFF00FFD1),
+                        color: primaryColor,
                         size: 24,
                       ),
                     ),
@@ -640,7 +286,7 @@ class _MyTablesScreenState extends State<MyTablesScreen>
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Colors.black,
+                              color: Color(0xFF333333),
                             ),
                           ),
                           Text(
@@ -685,7 +331,7 @@ class _MyTablesScreenState extends State<MyTablesScreen>
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00FFD1),
+                          color: primaryColor,
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
@@ -697,7 +343,7 @@ class _MyTablesScreenState extends State<MyTablesScreen>
                           style: const TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
-                            color: Colors.black,
+                            color: Colors.white,
                           ),
                         ),
                       ),
@@ -761,21 +407,21 @@ class _MyTablesScreenState extends State<MyTablesScreen>
                           vertical: 8,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00FFD1).withOpacity(0.2),
+                          color: primaryColor.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Row(
+                        child: Row(
                           mainAxisSize: MainAxisSize.min,
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.people, size: 14, color: Colors.black87),
-                            SizedBox(width: 4),
+                            Icon(Icons.people, size: 14, color: primaryColor),
+                            const SizedBox(width: 4),
                             Text(
                               'View Matches',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.black87,
+                                color: primaryColor,
                               ),
                             ),
                           ],

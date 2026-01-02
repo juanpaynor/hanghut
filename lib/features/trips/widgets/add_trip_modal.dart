@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:google_places_flutter/google_places_flutter.dart';
+import 'package:google_places_flutter/model/prediction.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AddTripModal extends StatefulWidget {
   final VoidCallback onTripCreated;
@@ -13,9 +16,13 @@ class AddTripModal extends StatefulWidget {
 
 class _AddTripModalState extends State<AddTripModal> {
   final _formKey = GlobalKey<FormState>();
-  final _cityController = TextEditingController();
-  final _countryController = TextEditingController();
+  final _cityController =
+      TextEditingController(); // Used as Main Destination Input
+  final _countryController =
+      TextEditingController(); // Hidden, populated via parse
   final _descriptionController = TextEditingController();
+
+  String get _googleApiKey => dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
 
   DateTime? _startDate;
   DateTime? _endDate;
@@ -79,11 +86,12 @@ class _AddTripModalState extends State<AddTripModal> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF00FF00),
-              onPrimary: Colors.black,
-              surface: Color(0xFF000000),
-              onSurface: Colors.white,
+            colorScheme: const ColorScheme.light(
+              primary: Colors.black, // Primary for selection circle
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+              secondary: Color(0xFFFFC107), // Yellow accent
             ),
           ),
           child: child!,
@@ -128,8 +136,10 @@ class _AddTripModalState extends State<AddTripModal> {
 
       await SupabaseConfig.client.from('user_trips').insert({
         'user_id': user.id,
-        'destination_city': _cityController.text.trim(),
-        'destination_country': _countryController.text.trim(),
+        'destination_city': _cityController.text.trim().split(',').first,
+        'destination_country': _countryController.text.isNotEmpty
+            ? _countryController.text.trim()
+            : _cityController.text.trim().split(',').last,
         'start_date': _startDate!.toIso8601String().split('T')[0],
         'end_date': _endDate!.toIso8601String().split('T')[0],
         'travel_style': _travelStyle,
@@ -162,10 +172,17 @@ class _AddTripModalState extends State<AddTripModal> {
 
   @override
   Widget build(BuildContext context) {
+    // AppTheme Colors
+    final primaryColor = Theme.of(context).primaryColor;
+    final accentColor = Theme.of(
+      context,
+    ).colorScheme.primary; // Use primary as accent for now
+    final surfaceColor = Theme.of(context).colorScheme.surface;
+
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
       decoration: const BoxDecoration(
-        color: Color(0xFF000000),
+        color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: Column(
@@ -176,7 +193,7 @@ class _AddTripModalState extends State<AddTripModal> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: Colors.grey[300],
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -192,12 +209,12 @@ class _AddTripModalState extends State<AddTripModal> {
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                    color: Colors.black,
                   ),
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, color: Colors.white70),
+                  icon: const Icon(Icons.close, color: Colors.black54),
                 ),
               ],
             ),
@@ -212,64 +229,80 @@ class _AddTripModalState extends State<AddTripModal> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Destination
+                    // Destination (Google Places)
                     const Text(
                       'Where are you going?',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
-                    TextFormField(
-                      controller: _cityController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'City',
-                        hintStyle: const TextStyle(color: Colors.white38),
-                        filled: true,
-                        fillColor: const Color(0xFF1C1C1C),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
-                        prefixIcon: const Icon(
-                          Icons.location_city,
-                          color: Colors.white70,
-                        ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: surfaceColor,
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a city';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _countryController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Country',
-                        hintStyle: const TextStyle(color: Colors.white38),
-                        filled: true,
-                        fillColor: const Color(0xFF1C1C1C),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                      child: GooglePlaceAutoCompleteTextField(
+                        textEditingController: _cityController,
+                        googleAPIKey: _googleApiKey,
+                        inputDecoration: InputDecoration(
+                          hintText: 'Search for a city...',
+                          hintStyle: const TextStyle(color: Colors.black38),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.location_on,
+                            color: Colors.black54,
+                          ),
+                          filled: true,
+                          fillColor: Colors.transparent, // Handled by Container
                         ),
-                        prefixIcon: const Icon(
-                          Icons.flag,
-                          color: Colors.white70,
-                        ),
+                        debounceTime: 800, // Debounce 800ms
+                        isLatLngRequired: false,
+                        getPlaceDetailWithLatLng: (Prediction prediction) {
+                          // Not needed for simple city/country
+                        },
+                        itemClick: (Prediction prediction) {
+                          _cityController.text = prediction.description ?? '';
+                          _cityController
+                              .selection = TextSelection.fromPosition(
+                            TextPosition(offset: _cityController.text.length),
+                          );
+
+                          // Simple Parsing: "City, Country"
+                          final parts = (prediction.description ?? '').split(
+                            ',',
+                          );
+                          if (parts.length > 1) {
+                            _countryController.text = parts.last.trim();
+                          } else {
+                            _countryController.text = parts.first.trim();
+                          }
+                          setState(() {}); // Refresh UI if needed
+                        },
+                        // Customizing the list item
+                        itemBuilder: (context, index, Prediction prediction) {
+                          return Container(
+                            padding: const EdgeInsets.all(10),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_city,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(width: 7),
+                                Expanded(
+                                  child: Text(prediction.description ?? ''),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a country';
-                        }
-                        return null;
-                      },
                     ),
 
                     const SizedBox(height: 24),
@@ -280,7 +313,7 @@ class _AddTripModalState extends State<AddTripModal> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -289,14 +322,14 @@ class _AddTripModalState extends State<AddTripModal> {
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1C1C1C),
+                          color: surfaceColor,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
                           children: [
                             const Icon(
                               Icons.calendar_today,
-                              color: Colors.white70,
+                              color: Colors.black54,
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -306,8 +339,9 @@ class _AddTripModalState extends State<AddTripModal> {
                                     : '${DateFormat('MMM d').format(_startDate!)} - ${DateFormat('MMM d, yyyy').format(_endDate!)}',
                                 style: TextStyle(
                                   color: _startDate == null
-                                      ? Colors.white38
-                                      : Colors.white,
+                                      ? Colors.black38
+                                      : Colors.black,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ),
@@ -318,7 +352,7 @@ class _AddTripModalState extends State<AddTripModal> {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF00FF00),
+                                  color: accentColor,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
@@ -343,7 +377,7 @@ class _AddTripModalState extends State<AddTripModal> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -358,12 +392,12 @@ class _AddTripModalState extends State<AddTripModal> {
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? const Color(0xFF00FF00).withOpacity(0.2)
-                                : const Color(0xFF1C1C1C),
+                                ? accentColor.withOpacity(0.2)
+                                : surfaceColor,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isSelected
-                                  ? const Color(0xFF00FF00)
+                                  ? accentColor
                                   : Colors.transparent,
                               width: 2,
                             ),
@@ -373,9 +407,7 @@ class _AddTripModalState extends State<AddTripModal> {
                               Text(
                                 style['label'] as String,
                                 style: TextStyle(
-                                  color: isSelected
-                                      ? const Color(0xFF00FF00)
-                                      : Colors.white,
+                                  color: Colors.black,
                                   fontWeight: isSelected
                                       ? FontWeight.bold
                                       : FontWeight.normal,
@@ -386,7 +418,7 @@ class _AddTripModalState extends State<AddTripModal> {
                               Text(
                                 style['description'] as String,
                                 style: const TextStyle(
-                                  color: Colors.white54,
+                                  color: Colors.black54,
                                   fontSize: 12,
                                 ),
                               ),
@@ -404,7 +436,7 @@ class _AddTripModalState extends State<AddTripModal> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -427,13 +459,17 @@ class _AddTripModalState extends State<AddTripModal> {
                               }
                             });
                           },
-                          backgroundColor: const Color(0xFF1C1C1C),
-                          selectedColor: const Color(0xFF00FF00),
+                          backgroundColor: surfaceColor,
+                          selectedColor: accentColor,
                           labelStyle: TextStyle(
-                            color: isSelected ? Colors.black : Colors.white,
+                            color: Colors.black,
                             fontWeight: isSelected
                                 ? FontWeight.bold
                                 : FontWeight.normal,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide.none,
                           ),
                         );
                       }).toList(),
@@ -447,7 +483,7 @@ class _AddTripModalState extends State<AddTripModal> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -470,13 +506,17 @@ class _AddTripModalState extends State<AddTripModal> {
                               }
                             });
                           },
-                          backgroundColor: const Color(0xFF1C1C1C),
-                          selectedColor: const Color(0xFF00FF00),
+                          backgroundColor: surfaceColor,
+                          selectedColor: accentColor,
                           labelStyle: TextStyle(
-                            color: isSelected ? Colors.black : Colors.white,
+                            color: Colors.black,
                             fontWeight: isSelected
                                 ? FontWeight.bold
                                 : FontWeight.normal,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide.none,
                           ),
                         );
                       }).toList(),
@@ -490,20 +530,20 @@ class _AddTripModalState extends State<AddTripModal> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _descriptionController,
                       maxLines: 3,
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: Colors.black),
                       decoration: InputDecoration(
                         hintText:
                             'What are you planning to do? Any specific goals?',
-                        hintStyle: const TextStyle(color: Colors.white38),
+                        hintStyle: const TextStyle(color: Colors.black38),
                         filled: true,
-                        fillColor: const Color(0xFF1C1C1C),
+                        fillColor: surfaceColor,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide.none,
@@ -519,8 +559,8 @@ class _AddTripModalState extends State<AddTripModal> {
                       child: ElevatedButton(
                         onPressed: _isLoading ? null : _createTrip,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00FF00),
-                          foregroundColor: Colors.black,
+                          backgroundColor: primaryColor,
+                          foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -533,7 +573,7 @@ class _AddTripModalState extends State<AddTripModal> {
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                   valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.black,
+                                    Colors.white,
                                   ),
                                 ),
                               )

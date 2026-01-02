@@ -6,6 +6,7 @@ import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,50 +28,9 @@ class MyApp extends StatelessWidget {
     return MultiProvider(
       providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],
       child: MaterialApp(
-        title: 'Bitemates',
+        title: 'HangHut',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          brightness: Brightness.light,
-          scaffoldBackgroundColor: Colors.white,
-          primaryColor: Colors.black,
-          colorScheme: const ColorScheme.light(
-            primary: Colors.black,
-            secondary: Colors.black87,
-            surface: Colors.white,
-            error: Colors.black,
-          ),
-          appBarTheme: const AppBarTheme(
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black,
-            elevation: 0,
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            filled: true,
-            fillColor: Colors.grey.shade100,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Colors.black, width: 2),
-            ),
-          ),
-        ),
+        theme: AppTheme.lightTheme,
         home: const AuthGate(),
       ),
     );
@@ -131,11 +91,14 @@ class _AuthGateState extends State<AuthGate> {
     try {
       final response = await SupabaseConfig.client
           .from('users')
-          .select('id')
+          .select('id, display_name, user_photos(photo_url, is_primary)')
           .eq('id', userId)
           .maybeSingle();
 
-      return response != null;
+      if (response != null) {
+        return true;
+      }
+      return false;
     } catch (e) {
       print('❌ Error checking profile: $e');
       return false;

@@ -78,6 +78,87 @@ class AblyService {
     }
   }
 
+  // -----------------------------------------------------------------------------
+  // Social Feed Real-Time Methods
+  // -----------------------------------------------------------------------------
+
+  /// Subscribe to city-specific social feed channel
+  Stream<ably.Message>? subscribeToCityFeed(String city) {
+    if (_realtime == null) return null;
+    final channelName = 'feed:${city.toLowerCase()}';
+    final channel = _realtime!.channels.get(channelName);
+    print('✅ ABLY: Subscribed to $channelName');
+    return channel.subscribe();
+  }
+
+  /// Publish post created event
+  Future<void> publishPostCreated({
+    required String city,
+    required Map<String, dynamic> postData,
+  }) async {
+    if (_realtime == null) await init();
+
+    try {
+      final channelName = 'feed:${city.toLowerCase()}';
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(name: 'post_created', data: postData);
+      print('✅ ABLY: Published post_created to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing post_created - $e');
+    }
+  }
+
+  /// Publish post deleted event
+  Future<void> publishPostDeleted({
+    required String city,
+    required String postId,
+  }) async {
+    if (_realtime == null) await init();
+
+    try {
+      final channelName = 'feed:${city.toLowerCase()}';
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(name: 'post_deleted', data: {'post_id': postId});
+      print('✅ ABLY: Published post_deleted to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing post_deleted - $e');
+    }
+  }
+
+  /// Publish comment added event
+  Future<void> publishCommentAdded({
+    required String city,
+    required String postId,
+    required Map<String, dynamic> commentData,
+  }) async {
+    if (_realtime == null) await init();
+
+    try {
+      final channelName = 'feed:${city.toLowerCase()}';
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'comment_added',
+        data: {'post_id': postId, 'comment': commentData},
+      );
+      print('✅ ABLY: Published comment_added to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing comment_added - $e');
+    }
+  }
+
+  /// Unsubscribe from city feed
+  Future<void> unsubscribeFromCityFeed(String city) async {
+    if (_realtime == null) return;
+    try {
+      final channelName = 'feed:${city.toLowerCase()}';
+      final channel = _realtime!.channels.get(channelName);
+      await channel.detach();
+      print('✅ ABLY: Unsubscribed from $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error unsubscribing - $e');
+    }
+  }
+
   void dispose() {
     _realtime?.close();
     _realtime = null;

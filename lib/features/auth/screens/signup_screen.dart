@@ -116,7 +116,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
                     // Welcome Text
                     const Text(
-                      'Join BiteMates',
+                      'Join Hanghut',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 32,

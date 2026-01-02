@@ -15,12 +15,14 @@ class ChatScreen extends StatefulWidget {
   final String tableId;
   final String tableTitle;
   final String channelId;
+  final String chatType; // 'table' or 'trip'
 
   const ChatScreen({
     super.key,
     required this.tableId,
     required this.tableTitle,
     required this.channelId,
+    this.chatType = 'table',
   });
 
   @override
@@ -66,6 +68,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _checkIfHost() async {
+    if (widget.chatType == 'trip') {
+      // Trip chats now also use Telegram mode (Local First) 🚀
+      setState(() {
+        _isHost = false;
+        _useTelegramMode = true;
+      });
+      return;
+    }
+
     try {
       final table = await SupabaseConfig.client
           .from('tables')
@@ -94,9 +105,11 @@ class _ChatScreenState extends State<ChatScreen> {
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
-          table: 'message_reactions',
+          table: widget.chatType == 'trip'
+              ? 'trip_messages'
+              : 'message_reactions', // Trip reactions not yet supported
           callback: (payload) {
-            _loadReactions();
+            if (widget.chatType != 'trip') _loadReactions();
           },
         )
         .subscribe();
@@ -151,15 +164,25 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadParticipants() async {
     try {
-      final response = await SupabaseConfig.client
-          .from('table_members')
-          .select('user_id')
-          .eq('table_id', widget.tableId)
-          .inFilter('status', [
-            'approved',
-            'joined',
-            'attended',
-          ]); // Only show active members
+      final query = widget.chatType == 'trip'
+          ? SupabaseConfig.client
+                .from('trip_chat_participants')
+                .select('user_id')
+                .eq(
+                  'chat_id',
+                  widget.tableId,
+                ) // tableId holds chat_id for trips
+          : SupabaseConfig.client
+                .from('table_members')
+                .select('user_id')
+                .eq('table_id', widget.tableId)
+                .inFilter('status', [
+                  'approved',
+                  'joined',
+                  'attended',
+                ]); // Only show active members
+
+      final response = await query;
 
       final userIds = List<Map<String, dynamic>>.from(
         response,
@@ -247,7 +270,10 @@ class _ChatScreenState extends State<ChatScreen> {
         await _enrichAndDisplayMessages(localMessages);
       } else {
         print('📥 First time - syncing from cloud...');
-        await _chatDatabase.initialSyncFromCloud(widget.tableId);
+        await _chatDatabase.initialSyncFromCloud(
+          widget.tableId,
+          chatType: widget.chatType,
+        );
         final syncedMessages = await _chatDatabase.getMessages(widget.tableId);
         await _enrichAndDisplayMessages(syncedMessages);
       }
@@ -270,11 +296,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Legacy mode: Load from Supabase
   Future<void> _loadMessageHistory_Legacy() async {
     try {
+      final tableName = widget.chatType == 'trip'
+          ? 'trip_messages'
+          : 'messages';
+      final idColumn = widget.chatType == 'trip' ? 'chat_id' : 'table_id';
+
+      // Note: trip_messages has 'message_type', messages has 'content_type'.
+      // We handle this mismatch in the map below.
+
       final messages = await SupabaseConfig.client
-          .from('messages')
+          .from(tableName)
           .select('*')
-          .eq('table_id', widget.tableId)
-          .order('timestamp', ascending: true)
+          .eq(idColumn, widget.tableId)
+          .order(
+            widget.chatType == 'trip' ? 'sent_at' : 'timestamp',
+            ascending: true,
+          )
           .limit(50);
 
       final messageList = List<Map<String, dynamic>>.from(messages);
@@ -328,15 +365,20 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {
           _messages = messageList.map((msg) {
             final senderId = msg['sender_id'];
-            final replyToId = msg['reply_to_id'];
+            final replyToId =
+                msg['reply_to_id']; // Likely null for trips initially
+            final timestamp =
+                msg['sent_at'] ?? msg['timestamp']; // Handle col name diff
+
             return {
               'id': msg['id'],
               'content': msg['content'],
-              'contentType': msg['content_type'] ?? 'text',
+              'contentType':
+                  msg['message_type'] ?? msg['content_type'] ?? 'text',
               'senderId': senderId,
               'senderName': userMap[senderId] ?? 'Unknown',
               'senderPhotoUrl': photoMap[senderId],
-              'timestamp': msg['timestamp'],
+              'timestamp': timestamp,
               'isMe': senderId == _currentUserId,
               'deletedAt': msg['deleted_at'],
               'deletedForEveryone': msg['deleted_for_everyone'] ?? false,
@@ -487,6 +529,7 @@ class _ChatScreenState extends State<ChatScreen> {
         'message_type': contentType,
         if (gifUrl != null) 'gif_url': gifUrl,
         if (replyToId != null) 'reply_to_id': replyToId,
+        'chat_type': widget.chatType,
         'synced': 0,
       };
 
@@ -547,13 +590,23 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       // 1. Save to Supabase
-      await SupabaseConfig.client.from('messages').insert({
-        'table_id': widget.tableId,
-        'sender_id': _currentUserId,
-        'content': content,
-        'content_type': contentType,
-        if (replyToId != null) 'reply_to_id': replyToId,
-      });
+      if (widget.chatType == 'trip') {
+        await SupabaseConfig.client.from('trip_messages').insert({
+          'chat_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': content,
+          'message_type': contentType,
+          // 'reply_to_id': replyToId, // Schema update needed if we want replies in trips
+        });
+      } else {
+        await SupabaseConfig.client.from('messages').insert({
+          'table_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': content,
+          'content_type': contentType,
+          if (replyToId != null) 'reply_to_id': replyToId,
+        });
+      }
 
       // 2. Publish to Ably
       await _ablyService.publishMessage(
@@ -701,594 +754,607 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     // Set a fixed height for the sheet (e.g., 90% of screen)
     // or let it adapt if we prefer. Given it's a chat, taking most of the screen is good.
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.9,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        children: [
-          // Drag Handle & Header
-          const SizedBox(height: 12),
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          children: [
+            // Drag Handle & Header
+            const SizedBox(height: 12),
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.tableTitle,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      GestureDetector(
-                        onTap: () => _showParticipantsSheet(),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${_participants.length} Active',
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const Icon(
-                              Icons.chevron_right,
-                              size: 16,
-                              color: Colors.grey,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Close Button
-                IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close,
-                      size: 18,
-                      color: Colors.black54,
-                    ),
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: Colors.black12),
-
-          // Messages Area
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: Colors.black),
-                  )
-                : _messages.isEmpty
-                ? Center(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          Icons.chat_bubble_outline,
-                          color: Colors.grey[300],
-                          size: 64,
-                        ),
-                        const SizedBox(height: 16),
                         Text(
-                          'No messages yet',
-                          style: TextStyle(
-                            color: Colors.grey[400],
+                          widget.tableTitle,
+                          style: const TextStyle(
+                            color: Colors.black87,
                             fontSize: 18,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w800,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Start the conversation!',
-                          style: TextStyle(color: Colors.grey[400]),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(20),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = _messages[index];
-                      final isMe = msg['isMe'] as bool;
-                      final showHeader =
-                          index == 0 ||
-                          _messages[index - 1]['senderId'] != msg['senderId'];
-
-                      return Padding(
-                        padding: EdgeInsets.only(
-                          top: showHeader ? 16 : 4,
-                          bottom: 4,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: isMe
-                              ? MainAxisAlignment.end
-                              : MainAxisAlignment.start,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (!isMe && showHeader)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  right: 8,
-                                  bottom: 4,
-                                ),
-                                child: GestureDetector(
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => UserProfileScreen(
-                                          userId: msg['senderId'],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: CircleAvatar(
-                                    radius: 16,
-                                    backgroundColor: Colors.grey[300],
-                                    backgroundImage:
-                                        msg['senderPhotoUrl'] != null
-                                        ? NetworkImage(msg['senderPhotoUrl'])
-                                        : null,
-                                    child: msg['senderPhotoUrl'] == null
-                                        ? Icon(
-                                            Icons.person,
-                                            size: 16,
-                                            color: Colors.grey[600],
-                                          )
-                                        : null,
-                                  ),
-                                ),
-                              )
-                            else if (!isMe)
-                              const SizedBox(width: 40),
-
-                            Flexible(
-                              child: Column(
-                                crossAxisAlignment: isMe
-                                    ? CrossAxisAlignment.end
-                                    : CrossAxisAlignment.start,
-                                children: [
-                                  if (showHeader && !isMe)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        left: 12,
-                                        bottom: 4,
-                                      ),
-                                      child: Text(
-                                        msg['senderName'] ?? 'Unknown',
-                                        style: TextStyle(
-                                          color: Colors.grey[600],
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-
-                                  // Message Bubble & Actions Wrapper
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      // Left Actions (for Other)
-                                      if (!isMe) ...[
-                                        // Hidden actions that appear on swipe?
-                                        // For simplicity, keeping actions logic but maybe simplified UI
-                                        // Or just tap bubble to act
-                                      ],
-
-                                      Flexible(
-                                        child: GestureDetector(
-                                          onLongPress: () =>
-                                              _showMessageActions(msg),
-                                          child: Container(
-                                            padding: msg['contentType'] == 'gif'
-                                                ? EdgeInsets.zero
-                                                : const EdgeInsets.symmetric(
-                                                    horizontal: 16,
-                                                    vertical: 12,
-                                                  ),
-                                            decoration: BoxDecoration(
-                                              color: msg['contentType'] == 'gif'
-                                                  ? Colors.transparent
-                                                  : (isMe
-                                                        ? Colors
-                                                              .black // My Bubble
-                                                        : Colors
-                                                              .grey[100]), // Other Bubble
-                                              borderRadius: BorderRadius.only(
-                                                topLeft: const Radius.circular(
-                                                  20,
-                                                ),
-                                                topRight: const Radius.circular(
-                                                  20,
-                                                ),
-                                                bottomLeft: Radius.circular(
-                                                  isMe ? 20 : 4,
-                                                ),
-                                                bottomRight: Radius.circular(
-                                                  isMe ? 4 : 20,
-                                                ),
-                                              ),
-                                              // Add shadow to mine for pop
-                                              boxShadow:
-                                                  isMe &&
-                                                      msg['contentType'] !=
-                                                          'gif'
-                                                  ? [
-                                                      BoxShadow(
-                                                        color: Colors.black
-                                                            .withValues(
-                                                              alpha: 0.1,
-                                                            ),
-                                                        blurRadius: 4,
-                                                        offset: Offset(0, 2),
-                                                      ),
-                                                    ]
-                                                  : null,
-                                            ),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                // Reply Preview Inside Bubble
-                                                if (msg['replyTo'] != null)
-                                                  Container(
-                                                    margin:
-                                                        const EdgeInsets.only(
-                                                          bottom: 6,
-                                                        ),
-                                                    padding:
-                                                        const EdgeInsets.all(8),
-                                                    decoration: BoxDecoration(
-                                                      color: isMe
-                                                          ? Colors.white
-                                                                .withValues(
-                                                                  alpha: 0.2,
-                                                                )
-                                                          : Colors.black
-                                                                .withValues(
-                                                                  alpha: 0.05,
-                                                                ),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            8,
-                                                          ),
-                                                      border: Border(
-                                                        left: BorderSide(
-                                                          color: isMe
-                                                              ? Colors.white
-                                                              : Colors.black54,
-                                                          width: 2,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    child: Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Text(
-                                                          msg['replyTo']['senderName'] ??
-                                                              'Unknown',
-                                                          style: TextStyle(
-                                                            color: isMe
-                                                                ? Colors.white
-                                                                : Colors
-                                                                      .black87,
-                                                            fontSize: 11,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                          ),
-                                                        ),
-                                                        Text(
-                                                          msg['replyTo']['content'] ??
-                                                              '',
-                                                          style: TextStyle(
-                                                            color: isMe
-                                                                ? Colors.white70
-                                                                : Colors
-                                                                      .black54,
-                                                            fontSize: 12,
-                                                          ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-
-                                                // Content
-                                                if (msg['contentType'] == 'gif')
-                                                  ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          16,
-                                                        ),
-                                                    child: CachedNetworkImage(
-                                                      imageUrl: msg['content'],
-                                                      width: 200,
-                                                      fit: BoxFit.cover,
-                                                      placeholder:
-                                                          (
-                                                            context,
-                                                            url,
-                                                          ) => Container(
-                                                            width: 200,
-                                                            height: 200,
-                                                            color: Colors
-                                                                .grey[200],
-                                                            child: const Center(
-                                                              child:
-                                                                  CircularProgressIndicator(
-                                                                    strokeWidth:
-                                                                        2,
-                                                                  ),
-                                                            ),
-                                                          ),
-                                                      errorWidget:
-                                                          (
-                                                            context,
-                                                            url,
-                                                            error,
-                                                          ) => const Icon(
-                                                            Icons.error,
-                                                          ),
-                                                    ),
-                                                  )
-                                                else
-                                                  Text(
-                                                    msg['deletedAt'] != null &&
-                                                            (msg['deletedForEveryone'] ||
-                                                                !isMe)
-                                                        ? '[Message deleted]'
-                                                        : msg['content'],
-                                                    style: TextStyle(
-                                                      color: isMe
-                                                          ? Colors.white
-                                                          : Colors.black87,
-                                                      fontSize: 16,
-                                                      fontStyle:
-                                                          (msg['deletedAt'] !=
-                                                              null)
-                                                          ? FontStyle.italic
-                                                          : FontStyle.normal,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-
-                                  // Reactions & Timestamp
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      top: 4,
-                                      left: 4,
-                                      right: 4,
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (_messageReactions[msg['id']]
-                                                ?.isNotEmpty ==
-                                            true)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              right: 8,
-                                            ),
-                                            child: Wrap(
-                                              spacing: 4,
-                                              children: _buildReactionChips(
-                                                msg['id'],
-                                              ),
-                                            ),
-                                          ),
-                                        Text(
-                                          DateFormat('h:mm a').format(
-                                            DateTime.parse(
-                                              msg['timestamp'],
-                                            ).toLocal(),
-                                          ),
-                                          style: TextStyle(
-                                            color: Colors.grey[400],
-                                            fontSize: 10,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-
-          // Input Area
-          Container(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-              left: 16,
-              right: 16,
-              top: 12,
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -5),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                if (_replyingTo != null)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[50],
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey[200]!),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 3,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 2),
+                        GestureDetector(
+                          onTap: () => _showParticipantsSheet(),
+                          child: Row(
                             children: [
-                              Text(
-                                'Replying to ${_replyingTo!['senderName']}',
-                                style: const TextStyle(
-                                  color: Colors.black87,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.green,
+                                  shape: BoxShape.circle,
                                 ),
                               ),
+                              const SizedBox(width: 6),
                               Text(
-                                _replyingTo!['content'],
-                                style: const TextStyle(
-                                  color: Colors.black54,
+                                '${_participants.length} Active',
+                                style: TextStyle(
+                                  color: Colors.grey[600],
                                   fontSize: 13,
+                                  fontWeight: FontWeight.w500,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const Icon(
+                                Icons.chevron_right,
+                                size: 16,
+                                color: Colors.grey,
                               ),
                             ],
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.close,
-                            size: 20,
-                            color: Colors.black54,
-                          ),
-                          onPressed: _cancelReply,
-                        ),
                       ],
                     ),
                   ),
-
-                Row(
-                  children: [
-                    // GIF Button
-                    IconButton(
-                      icon: const Icon(
-                        Icons.gif_box_outlined,
+                  // Close Button
+                  IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.close,
+                        size: 18,
                         color: Colors.black54,
                       ),
-                      onPressed: _showGifPicker,
                     ),
-                    const SizedBox(width: 8),
-                    // Text Input
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: TextField(
-                          controller: _messageController,
-                          style: const TextStyle(color: Colors.black87),
-                          decoration: const InputDecoration(
-                            hintText: 'Type a message...',
-                            hintStyle: TextStyle(color: Colors.black38),
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Colors.black12),
+
+            // Messages Area
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: Colors.black),
+                    )
+                  : _messages.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline,
+                            color: Colors.grey[300],
+                            size: 64,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No messages yet',
+                            style: TextStyle(
+                              color: Colors.grey[400],
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                          textCapitalization: TextCapitalization.sentences,
-                          onSubmitted: (_) => _sendMessage(),
-                        ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Start the conversation!',
+                            style: TextStyle(color: Colors.grey[400]),
+                          ),
+                        ],
                       ),
+                    )
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(20),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = _messages[index];
+                        final isMe = msg['isMe'] as bool;
+                        final showHeader =
+                            index == 0 ||
+                            _messages[index - 1]['senderId'] != msg['senderId'];
+
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            top: showHeader ? 16 : 4,
+                            bottom: 4,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: isMe
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (!isMe && showHeader)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    right: 8,
+                                    bottom: 4,
+                                  ),
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) =>
+                                              UserProfileScreen(
+                                                userId: msg['senderId'],
+                                              ),
+                                        ),
+                                      );
+                                    },
+                                    child: CircleAvatar(
+                                      radius: 16,
+                                      backgroundColor: Colors.grey[300],
+                                      backgroundImage:
+                                          msg['senderPhotoUrl'] != null
+                                          ? NetworkImage(msg['senderPhotoUrl'])
+                                          : null,
+                                      child: msg['senderPhotoUrl'] == null
+                                          ? Icon(
+                                              Icons.person,
+                                              size: 16,
+                                              color: Colors.grey[600],
+                                            )
+                                          : null,
+                                    ),
+                                  ),
+                                )
+                              else if (!isMe)
+                                const SizedBox(width: 40),
+
+                              Flexible(
+                                child: Column(
+                                  crossAxisAlignment: isMe
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    if (showHeader && !isMe)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          left: 12,
+                                          bottom: 4,
+                                        ),
+                                        child: Text(
+                                          msg['senderName'] ?? 'Unknown',
+                                          style: TextStyle(
+                                            color: Colors.grey[600],
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+
+                                    // Message Bubble & Actions Wrapper
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        // Left Actions (for Other)
+                                        if (!isMe) ...[
+                                          // Hidden actions that appear on swipe?
+                                          // For simplicity, keeping actions logic but maybe simplified UI
+                                          // Or just tap bubble to act
+                                        ],
+
+                                        Flexible(
+                                          child: GestureDetector(
+                                            onLongPress: () =>
+                                                _showMessageActions(msg),
+                                            child: Container(
+                                              padding:
+                                                  msg['contentType'] == 'gif'
+                                                  ? EdgeInsets.zero
+                                                  : const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 12,
+                                                    ),
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    msg['contentType'] == 'gif'
+                                                    ? Colors.transparent
+                                                    : (isMe
+                                                          ? Colors
+                                                                .black // My Bubble
+                                                          : Colors
+                                                                .grey[100]), // Other Bubble
+                                                borderRadius: BorderRadius.only(
+                                                  topLeft:
+                                                      const Radius.circular(20),
+                                                  topRight:
+                                                      const Radius.circular(20),
+                                                  bottomLeft: Radius.circular(
+                                                    isMe ? 20 : 4,
+                                                  ),
+                                                  bottomRight: Radius.circular(
+                                                    isMe ? 4 : 20,
+                                                  ),
+                                                ),
+                                                // Add shadow to mine for pop
+                                                boxShadow:
+                                                    isMe &&
+                                                        msg['contentType'] !=
+                                                            'gif'
+                                                    ? [
+                                                        BoxShadow(
+                                                          color: Colors.black
+                                                              .withValues(
+                                                                alpha: 0.1,
+                                                              ),
+                                                          blurRadius: 4,
+                                                          offset: Offset(0, 2),
+                                                        ),
+                                                      ]
+                                                    : null,
+                                              ),
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  // Reply Preview Inside Bubble
+                                                  if (msg['replyTo'] != null)
+                                                    Container(
+                                                      margin:
+                                                          const EdgeInsets.only(
+                                                            bottom: 6,
+                                                          ),
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                            8,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: isMe
+                                                            ? Colors.white
+                                                                  .withValues(
+                                                                    alpha: 0.2,
+                                                                  )
+                                                            : Colors.black
+                                                                  .withValues(
+                                                                    alpha: 0.05,
+                                                                  ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              8,
+                                                            ),
+                                                        border: Border(
+                                                          left: BorderSide(
+                                                            color: isMe
+                                                                ? Colors.white
+                                                                : Colors
+                                                                      .black54,
+                                                            width: 2,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          Text(
+                                                            msg['replyTo']['senderName'] ??
+                                                                'Unknown',
+                                                            style: TextStyle(
+                                                              color: isMe
+                                                                  ? Colors.white
+                                                                  : Colors
+                                                                        .black87,
+                                                              fontSize: 11,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                            ),
+                                                          ),
+                                                          Text(
+                                                            msg['replyTo']['content'] ??
+                                                                '',
+                                                            style: TextStyle(
+                                                              color: isMe
+                                                                  ? Colors
+                                                                        .white70
+                                                                  : Colors
+                                                                        .black54,
+                                                              fontSize: 12,
+                                                            ),
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+
+                                                  // Content
+                                                  if (msg['contentType'] ==
+                                                      'gif')
+                                                    ClipRRect(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            16,
+                                                          ),
+                                                      child: CachedNetworkImage(
+                                                        imageUrl:
+                                                            msg['content'],
+                                                        width: 200,
+                                                        fit: BoxFit.cover,
+                                                        placeholder:
+                                                            (
+                                                              context,
+                                                              url,
+                                                            ) => Container(
+                                                              width: 200,
+                                                              height: 200,
+                                                              color: Colors
+                                                                  .grey[200],
+                                                              child: const Center(
+                                                                child:
+                                                                    CircularProgressIndicator(
+                                                                      strokeWidth:
+                                                                          2,
+                                                                    ),
+                                                              ),
+                                                            ),
+                                                        errorWidget:
+                                                            (
+                                                              context,
+                                                              url,
+                                                              error,
+                                                            ) => const Icon(
+                                                              Icons.error,
+                                                            ),
+                                                      ),
+                                                    )
+                                                  else
+                                                    Text(
+                                                      msg['deletedAt'] !=
+                                                                  null &&
+                                                              (msg['deletedForEveryone'] ||
+                                                                  !isMe)
+                                                          ? '[Message deleted]'
+                                                          : msg['content'],
+                                                      style: TextStyle(
+                                                        color: isMe
+                                                            ? Colors.white
+                                                            : Colors.black87,
+                                                        fontSize: 16,
+                                                        fontStyle:
+                                                            (msg['deletedAt'] !=
+                                                                null)
+                                                            ? FontStyle.italic
+                                                            : FontStyle.normal,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+
+                                    // Reactions & Timestamp
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                        top: 4,
+                                        left: 4,
+                                        right: 4,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (_messageReactions[msg['id']]
+                                                  ?.isNotEmpty ==
+                                              true)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                right: 8,
+                                              ),
+                                              child: Wrap(
+                                                spacing: 4,
+                                                children: _buildReactionChips(
+                                                  msg['id'],
+                                                ),
+                                              ),
+                                            ),
+                                          Text(
+                                            DateFormat('h:mm a').format(
+                                              DateTime.parse(
+                                                msg['timestamp'],
+                                              ).toLocal(),
+                                            ),
+                                            style: TextStyle(
+                                              color: Colors.grey[400],
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                    const SizedBox(width: 12),
-                    // Send Button
-                    GestureDetector(
-                      onTap: () => _sendMessage(),
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: const BoxDecoration(
-                          color: Colors.black,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.send,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ),
-          ),
-        ],
+
+            // Input Area
+            Container(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                left: 16,
+                right: 16,
+                top: 12,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  if (_replyingTo != null)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 3,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: Colors.black,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Replying to ${_replyingTo!['senderName']}',
+                                  style: const TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                Text(
+                                  _replyingTo!['content'],
+                                  style: const TextStyle(
+                                    color: Colors.black54,
+                                    fontSize: 13,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(
+                              Icons.close,
+                              size: 20,
+                              color: Colors.black54,
+                            ),
+                            onPressed: _cancelReply,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  Row(
+                    children: [
+                      // GIF Button
+                      IconButton(
+                        icon: const Icon(
+                          Icons.gif_box_outlined,
+                          color: Colors.black54,
+                        ),
+                        onPressed: _showGifPicker,
+                      ),
+                      const SizedBox(width: 8),
+                      // Text Input
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: TextField(
+                            controller: _messageController,
+                            style: const TextStyle(color: Colors.black87),
+                            decoration: const InputDecoration(
+                              hintText: 'Type a message...',
+                              hintStyle: TextStyle(color: Colors.black38),
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 12,
+                              ),
+                            ),
+                            textCapitalization: TextCapitalization.sentences,
+                            onSubmitted: (_) => _sendMessage(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Send Button
+                      GestureDetector(
+                        onTap: () => _sendMessage(),
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: const BoxDecoration(
+                            color: Colors.black,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.send,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

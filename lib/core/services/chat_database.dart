@@ -18,7 +18,12 @@ class ChatDatabase {
     final databasesPath = await getDatabasesPath();
     final path = join(databasesPath, 'bitemates_chat.db');
 
-    _database = await openDatabase(path, version: 1, onCreate: _onCreate);
+    _database = await openDatabase(
+      path,
+      version: 2,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+    );
 
     print('✅ ChatDatabase initialized');
   }
@@ -34,7 +39,10 @@ class ChatDatabase {
         timestamp INTEGER NOT NULL,
         reply_to_id TEXT,
         message_type TEXT DEFAULT 'text',
+        reply_to_id TEXT,
+        message_type TEXT DEFAULT 'text',
         gif_url TEXT,
+        chat_type TEXT DEFAULT 'table',
         synced INTEGER DEFAULT 0
       )
     ''');
@@ -45,6 +53,15 @@ class ChatDatabase {
     ''');
 
     print('✅ ChatDatabase schema created');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        "ALTER TABLE messages ADD COLUMN chat_type TEXT DEFAULT 'table'",
+      );
+      print('🆙 Upgraded ChatDatabase to v2 (added chat_type)');
+    }
   }
 
   Future<List<Map<String, dynamic>>> getMessages(String tableId) async {
@@ -103,21 +120,31 @@ class ChatDatabase {
 
   Future<void> syncToCloud(Map<String, dynamic> message) async {
     try {
+      final isTrip = message['chat_type'] == 'trip';
+      final tableName = isTrip ? 'trip_messages' : 'messages';
+      final idColumn = isTrip ? 'chat_id' : 'table_id';
+
       final msgForCloud = {
         'id': message['id'],
-        'table_id': message['table_id'],
+        idColumn: message['table_id'], // Local DB always calls it table_id
         'sender_id': message['sender_id'],
         'content': message['content'],
-        'timestamp': DateTime.fromMillisecondsSinceEpoch(
-          message['timestamp'],
-        ).toIso8601String(),
-        'content_type': message['message_type'] ?? 'text',
+        if (!isTrip)
+          'timestamp': DateTime.fromMillisecondsSinceEpoch(
+            message['timestamp'],
+          ).toIso8601String(),
+        if (isTrip)
+          'message_type':
+              message['message_type'] ?? 'text', // Trip uses message_type
+        if (!isTrip)
+          'content_type':
+              message['message_type'] ?? 'text', // Legacy uses content_type
         if (message['reply_to_id'] != null)
           'reply_to_id': message['reply_to_id'],
         if (message['gif_url'] != null) 'gif_url': message['gif_url'],
       };
 
-      await SupabaseConfig.client.from('messages').insert(msgForCloud);
+      await SupabaseConfig.client.from(tableName).insert(msgForCloud);
 
       await _database!.update(
         'messages',
@@ -132,27 +159,36 @@ class ChatDatabase {
     }
   }
 
-  Future<void> initialSyncFromCloud(String tableId) async {
+  Future<void> initialSyncFromCloud(
+    String tableId, {
+    String chatType = 'table',
+  }) async {
     try {
+      final isTrip = chatType == 'trip';
+      final tableName = isTrip ? 'trip_messages' : 'messages';
+      final idColumn = isTrip ? 'chat_id' : 'table_id';
+      final timeColumn = isTrip ? 'sent_at' : 'timestamp';
+
       final cloudMessages = await SupabaseConfig.client
-          .from('messages')
+          .from(tableName)
           .select()
-          .eq('table_id', tableId)
-          .order('timestamp', ascending: true);
+          .eq(idColumn, tableId)
+          .order(timeColumn, ascending: true);
 
       if (cloudMessages.isEmpty) return;
 
       final localMessages = cloudMessages.map((msg) {
         return {
           'id': msg['id'],
-          'table_id': msg['table_id'],
+          'table_id': tableId, // Standardize on table_id locally
           'sender_id': msg['sender_id'],
-          'sender_name': msg['sender_name'],
+          'sender_name': msg['sender_name'], // Might be null depending on query
           'content': msg['content'],
-          'timestamp': DateTime.parse(msg['timestamp']).millisecondsSinceEpoch,
+          'timestamp': DateTime.parse(msg[timeColumn]).millisecondsSinceEpoch,
           'reply_to_id': msg['reply_to_id'],
-          'message_type': msg['content_type'] ?? 'text',
+          'message_type': msg['message_type'] ?? msg['content_type'] ?? 'text',
           'gif_url': msg['gif_url'],
+          'chat_type': chatType,
           'synced': 1,
         };
       }).toList();

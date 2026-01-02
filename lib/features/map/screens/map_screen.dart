@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'dart:math'; // Added for Random
+
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:http/http.dart' as http;
@@ -15,6 +15,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../widgets/liquid_morph_route.dart';
 import '../widgets/table_compact_modal.dart';
+import 'package:bitemates/features/map/widgets/active_users_bottom_sheet.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -23,7 +24,8 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => MapScreenState();
 }
 
-class MapScreenState extends State<MapScreen> {
+class MapScreenState extends State<MapScreen>
+    with AutomaticKeepAliveClientMixin {
   MapboxMap? _mapboxMap;
   geo.Position? _currentPosition;
   PointAnnotationManager? _tableMarkerManager;
@@ -34,26 +36,61 @@ class MapScreenState extends State<MapScreen> {
   Timer? _debounceTimer;
   CameraState? _lastFetchCameraState;
 
-  // Loading State (Ghosts)
+  Timer? _heartbeatTimer;
+  int _activeUserCount = 0;
+  bool _isFetching = false; // Added loading state
 
-  Timer? _ghostAnimationTimer;
-  double _ghostOpacity = 0.3;
-  bool _ghostOpacityRising = true;
+  @override
+  bool get wantKeepAlive => true;
+
+  // ... (initState, dispose, etc)
 
   @override
   void initState() {
     super.initState();
     _getUserLocation();
     _loadCurrentUserData();
-    // Realtime subscription removed in favor of polling
-    // _subscribeToTableChanges();
+    _startHeartbeat();
   }
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
-    _ghostAnimationTimer?.cancel();
+    _popAnimationTimer?.cancel();
+    _heartbeatTimer?.cancel();
     super.dispose();
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    // Optimized to 5 minutes based on "Active in last 10m" window
+    // This reduces DB load by 80% while keeping data accurate enough
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 5), (timer) {
+      _updateHeartbeat();
+    });
+    _updateHeartbeat(); // Initial run
+  }
+
+  Future<void> _updateHeartbeat() async {
+    if (!mounted) return;
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user != null) {
+        // Update my presence (Fire and forget)
+        await SupabaseConfig.client
+            .from('users') // Updated from 'profiles' to 'users'
+            .update({'last_active_at': DateTime.now().toIso8601String()})
+            .eq('id', user.id);
+      }
+
+      // Fetch count
+      final count = await SupabaseConfig.client.rpc('get_active_user_count');
+      if (mounted) {
+        setState(() => _activeUserCount = count as int);
+      }
+    } catch (e) {
+      print('Error updating heartbeat: $e');
+    }
   }
 
   void _onCameraChangeListener(CameraChangedEventData event) {
@@ -238,7 +275,7 @@ class MapScreenState extends State<MapScreen> {
           ModelLayer(
             id: 'tables-3d-layer',
             sourceId: 'tables-3d-source',
-            minZoom: 0.0,
+            minZoom: 5.5, // Hide at country level
             maxZoom: 22.0,
             modelId: 'coffee-shop-model',
             // Massive scale increase
@@ -338,28 +375,97 @@ class MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required by AutomaticKeepAliveClientMixin
     return Scaffold(
-      body: GestureDetector(
-        onTapUp: _onMapTap,
-        child: MapWidget(
-          key: const ValueKey('mapWidget'),
-          styleUri: 'mapbox://styles/swiftdash/cmjmzix6300aq01spblcqe7yx',
-          cameraOptions: CameraOptions(
-            center: _currentPosition != null
-                ? Point(
-                    coordinates: Position(
-                      _currentPosition!.longitude,
-                      _currentPosition!.latitude,
-                    ),
-                  )
-                : Point(coordinates: Position(-74.0060, 40.7128)),
-            zoom: 15.0, // Zoom in closer for 3D effect
-            pitch: 60.0, // Tilt camera for 3D view
+      body: Stack(
+        children: [
+          GestureDetector(
+            onTapUp: _onMapTap,
+            child: MapWidget(
+              key: const ValueKey('mapWidget'),
+              styleUri: 'mapbox://styles/swiftdash/cmjwvnoqp001v01rdeseu6fz1',
+              cameraOptions: CameraOptions(
+                center: _currentPosition != null
+                    ? Point(
+                        coordinates: Position(
+                          _currentPosition!.longitude,
+                          _currentPosition!.latitude,
+                        ),
+                      )
+                    : Point(coordinates: Position(-74.0060, 40.7128)),
+                zoom: 15.0, // Zoom in closer for 3D effect
+                pitch: 60.0, // Tilt camera for 3D view
+              ),
+              onCameraChangeListener: _onCameraChangeListener,
+              onMapCreated: _onMapCreated,
+              onTapListener: _onMapTapWrapper, // Native tap listener
+            ),
           ),
-          onCameraChangeListener: _onCameraChangeListener,
-          onMapCreated: _onMapCreated,
-          onTapListener: _onMapTapWrapper, // Native tap listener
-        ),
+
+          // Active User Count Pill
+          if (_activeUserCount > 0)
+            Positioned(
+              top: 60,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: GestureDetector(
+                  onTap: () {
+                    showModalBottomSheet(
+                      context: context,
+                      backgroundColor: Colors.transparent,
+                      isScrollControlled: true,
+                      builder: (context) => const ActiveUsersBottomSheet(),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_isFetching)
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.black,
+                            ),
+                          )
+                        else
+                          const Text('👀', style: TextStyle(fontSize: 16)),
+                        const SizedBox(width: 6),
+                        Text(
+                          _isFetching
+                              ? 'Updating map...'
+                              : '$_activeUserCount people active on map',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -479,17 +585,33 @@ class MapScreenState extends State<MapScreen> {
     if (_mapboxMap == null || _currentUserData == null) return;
 
     try {
-      // 1. Check Zoom Level
+      setState(() => _isFetching = true);
+
+      // 1. Check Zoom Level (Threshold lowered to match minZoom)
       final cameraState = await _mapboxMap?.getCameraState();
       if (cameraState == null) return;
 
-      if (cameraState.zoom < 10) {
+      if (cameraState.zoom < 5.0) {
         print(
           '🔎 Zoom level ${cameraState.zoom} is too low. Clearing markers.',
         );
         if (_tables.isNotEmpty) {
           setState(() => _tables = []);
-          _tableMarkerManager?.deleteAll();
+          // Clear native sources
+          final emptyGeoJson = jsonEncode({
+            'type': 'FeatureCollection',
+            'features': [],
+          });
+          _mapboxMap?.style.setStyleSourceProperty(
+            'tables-cluster-source',
+            'data',
+            emptyGeoJson,
+          );
+          _mapboxMap?.style.setStyleSourceProperty(
+            'tables-3d-source',
+            'data',
+            emptyGeoJson,
+          );
         }
         return;
       }
@@ -546,9 +668,6 @@ class MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // 3. Fetch Tables (with Ghosts!)
-      _generateGhosts(minLat, maxLat, minLng, maxLng);
-
       var fetchedTables = await _tableService.getMapReadyTables(
         userLat: _currentPosition?.latitude,
         userLng: _currentPosition?.longitude,
@@ -601,7 +720,7 @@ class MapScreenState extends State<MapScreen> {
       setState(() {
         _tables = fetchedTables;
       });
-      _clearGhosts();
+      // Ghosts cleared, replaced by Pop Animation later
 
       // 5. Clustering & Native Layers Implementation
       final style = _mapboxMap?.style;
@@ -733,10 +852,15 @@ class MapScreenState extends State<MapScreen> {
 
       print('✅ Updated Cluster Source with ${features.length} features');
 
+      // Trigger "Spring Pop" Animation now that data is on map
+      _startPopAnimation();
+
       // Update 3D Layer Data
       _update3DLayerData(fetchedTables);
     } catch (e) {
       print('❌ Error updating map clusters: $e');
+    } finally {
+      if (mounted) setState(() => _isFetching = false);
     }
   }
 
@@ -755,7 +879,7 @@ class MapScreenState extends State<MapScreen> {
         CircleLayer(
           id: 'clusters',
           sourceId: sourceId,
-          minZoom: 0,
+          minZoom: 5.5, // Hide at country level
           maxZoom: 22,
           circleColor: Colors.deepPurpleAccent.value,
           circleRadius: 20.0,
@@ -769,19 +893,13 @@ class MapScreenState extends State<MapScreen> {
       );
       print('✅ Clusters layer added');
 
-      // 1.5 Ghost Layer (Initialize empty)
-      // We initialize it here so the layer stack order is correct (below clusters/points if possible, or mixed)
-      await _updateGhostLayer(
-        jsonEncode({'type': 'FeatureCollection', 'features': []}),
-      );
-
       // 2. Cluster Counts (Text)
       print('➕ Adding cluster-count layer...');
       await style.addLayer(
         SymbolLayer(
           id: 'cluster-count',
           sourceId: sourceId,
-          minZoom: 0,
+          minZoom: 5.5, // Hide at country level
           maxZoom: 22,
           textFieldExpression: ['get', 'point_count_abbreviated'],
           textSize: 14.0,
@@ -797,7 +915,7 @@ class MapScreenState extends State<MapScreen> {
         SymbolLayer(
           id: 'unclustered-points',
           sourceId: sourceId,
-          minZoom: 0,
+          minZoom: 5.5, // Hide at country level
           maxZoom: 22,
           filter: [
             '!',
@@ -1286,93 +1404,20 @@ class MapScreenState extends State<MapScreen> {
     }
   }
 
-  // --- HOLOGRAPHIC GHOST LOGIC ---
+  // --- MARKER POP ANIMATION LOGIC ---
 
-  void _generateGhosts(
-    double minLat,
-    double maxLat,
-    double minLng,
-    double maxLng,
-  ) {
-    print('👻 _generateGhosts called'); // DEBUG
-    if (_mapboxMap == null) return;
+  Timer? _popAnimationTimer;
+  double _markerScale = 0.0;
+  int _animationStep = 0;
 
-    final random = Random();
-    final List<Map<String, dynamic>> ghostFeatures = [];
+  void _startPopAnimation() {
+    print('💥 _startPopAnimation started');
+    _popAnimationTimer?.cancel();
+    _animationStep = 0;
 
-    // Generate 3-5 ghosts
-    final count = 3 + random.nextInt(3);
-    print('👻 Generating $count ghost features'); // DEBUG
-
-    for (int i = 0; i < count; i++) {
-      final lat = minLat + random.nextDouble() * (maxLat - minLat);
-      final lng = minLng + random.nextDouble() * (maxLng - minLng);
-
-      ghostFeatures.add({
-        'type': 'Feature',
-        'id': 'ghost_$i',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [lng, lat],
-        },
-        'properties': {'ghost': true},
-      });
-    }
-
-    final geoJsonData = jsonEncode({
-      'type': 'FeatureCollection',
-      'features': ghostFeatures,
-    });
-
-    // Update source
-    _updateGhostLayer(geoJsonData);
-    _startGhostAnimation();
-  }
-
-  Future<void> _updateGhostLayer(String geoJsonData) async {
-    print(
-      '👻 _updateGhostLayer called with data length: ${geoJsonData.length}',
-    ); // DEBUG
-    try {
-      final style = _mapboxMap?.style;
-      if (style == null) {
-        print('👻 Style is null!');
-        return;
-      }
-
-      final sourceExists = await style.styleSourceExists('ghost-source');
-      if (sourceExists) {
-        print('👻 Source exists, updating data');
-        await style.setStyleSourceProperty('ghost-source', 'data', geoJsonData);
-      } else {
-        print('👻 Source missing, creating source & layer');
-        // Create source/layer on the fly if needed
-        await style.addSource(
-          GeoJsonSource(id: 'ghost-source', data: geoJsonData),
-        );
-        await style.addLayer(
-          CircleLayer(
-            id: 'ghost-layer',
-            sourceId: 'ghost-source',
-            circleColor: Colors
-                .white
-                .value, // Changed to solid white for visibility test
-            circleRadius: 20.0, // Increased size check
-            circleBlur: 0.5,
-            circleOpacity: 0.8, // Increased opacity check
-          ),
-        );
-        print('👻 Ghost layer added');
-      }
-    } catch (e) {
-      print('👻 Error updating ghosts: $e');
-    }
-  }
-
-  void _startGhostAnimation() {
-    print('👻 _startGhostAnimation started'); // DEBUG
-    _ghostAnimationTimer?.cancel();
-    _ghostAnimationTimer = Timer.periodic(const Duration(milliseconds: 100), (
+    // Simple spring simulation 0 -> 1.2 -> 1.0
+    // We'll run at 60fps (16ms) for ~500ms
+    _popAnimationTimer = Timer.periodic(const Duration(milliseconds: 16), (
       timer,
     ) {
       if (!mounted || _mapboxMap?.style == null) {
@@ -1380,32 +1425,63 @@ class MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // Removed setState to avoid frequent rebuilds, logic is purely visual layer update
-      if (_ghostOpacityRising) {
-        _ghostOpacity += 0.05;
-        if (_ghostOpacity >= 0.8) _ghostOpacityRising = false; // Higher max
-      } else {
-        _ghostOpacity -= 0.05;
-        if (_ghostOpacity <= 0.3) _ghostOpacityRising = true;
+      _animationStep++;
+
+      // Elastic Out Curve Approximation
+      // t goes from 0.0 to 1.0 over approx 40 steps (640ms)
+      double t = (_animationStep * 16) / 600.0;
+      if (t > 1.0) {
+        _markerScale = 1.0;
+        _updateLayerScale(_markerScale);
+        timer.cancel();
+        return;
       }
 
-      try {
-        _mapboxMap?.style.setStyleLayerProperty(
-          'ghost-layer',
-          'circle-opacity',
-          _ghostOpacity,
-        );
-        // print('👻 Opacity: $_ghostOpacity'); // PROBABLY TOO NOISY
-      } catch (e) {
-        // fast fails ignored
+      // Physics: Overshoot
+      // f(t) = 1 + 2^(-10t) * sin((t - 0.3/4) * (2pi/0.3)) ... roughly
+      // Let's use a simpler "boing" function directly:
+      // sin(t * pi * (0.2 + 2.5 * t * t * t)) * pow(1 - t, 2.2) + t
+      // Actually let's just use a simple dampened sine wave for "spring"
+      // Val = Target + Amplitude * sin(freq * t) * decay^t
+
+      // Or manually keyframe for simplicity and control:
+      // 0-200ms: 0 -> 1.2
+      // 200-400ms: 1.2 -> 0.9
+      // 400-600ms: 0.9 -> 1.0
+
+      if (t < 0.3) {
+        // First 30% time: Shoot up to 1.2
+        _markerScale = (t / 0.3) * 1.2;
+      } else if (t < 0.6) {
+        // Next 30%: 1.2 down to 0.9
+        _markerScale = 1.2 - ((t - 0.3) / 0.3) * 0.3;
+      } else {
+        // Final: 0.9 up to 1.0
+        _markerScale = 0.9 + ((t - 0.6) / 0.4) * 0.1;
       }
+
+      _updateLayerScale(_markerScale);
     });
   }
 
-  void _clearGhosts() {
-    _ghostAnimationTimer?.cancel();
-    // Empty feature collection
-    final emptyData = jsonEncode({'type': 'FeatureCollection', 'features': []});
-    _updateGhostLayer(emptyData);
+  void _updateLayerScale(double scale) {
+    try {
+      final style = _mapboxMap?.style;
+      if (style == null) return;
+
+      // 1. Scale Unclustered Points (Icons)
+      style.setStyleLayerProperty('unclustered-points', 'icon-size', scale);
+
+      // 2. Scale Clusters (Bubbles)
+      // Base radius is 20, so we multiply
+      style.setStyleLayerProperty('clusters', 'circle-radius', 20.0 * scale);
+
+      // 3. Scale Cluster Text (Counts)
+      style.setStyleLayerProperty('cluster-count', 'text-size', 14.0 * scale);
+    } catch (e) {
+      // Ignored
+    }
   }
+
+  // End of MapScreenState
 }

@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
+import 'dart:async';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/features/map/widgets/table_details_bottom_sheet.dart';
-import 'package:intl/intl.dart';
+
+import 'package:bitemates/features/map/widgets/create_table_modal.dart';
+import 'package:bitemates/features/home/widgets/social_post_card.dart';
+import 'package:bitemates/features/home/widgets/create_post_modal.dart';
+
+import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/services/ably_service.dart';
+import 'package:bitemates/core/services/location_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class FeedScreen extends StatefulWidget {
   const FeedScreen({super.key});
@@ -13,623 +20,440 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
-  List<Map<String, dynamic>> _tables = [];
+  final SocialService _socialService = SocialService();
+
+  List<Map<String, dynamic>> _socialPosts = [];
   bool _isLoading = true;
-  double _scrollOffset = 0;
+  bool _isLoadingMore = false;
+  int _socialPostsOffset = 0;
+  final int _postsPageSize = 10;
+
+  Position? _userPosition;
+  final List<StreamSubscription> _ablySubscriptions = [];
+
+  Timer? _scrollDebounce;
 
   @override
   void initState() {
     super.initState();
-    _loadTables();
-    _scrollController.addListener(() {
-      setState(() {
-        _scrollOffset = _scrollController.offset;
-      });
+    _scrollController.addListener(_onScroll);
+    _getUserLocation();
+    // _loadSocialPosts(); // Will load after getting location
+  }
+
+  Future<void> _getUserLocation() async {
+    try {
+      final position = await LocationService().getCurrentLocation();
+      if (mounted) {
+        setState(() {
+          _userPosition = position;
+        });
+        _loadSocialPosts();
+        _subscribeToAblyFeed();
+      }
+    } catch (e) {
+      print('❌ Error getting user location: $e');
+      if (mounted) _loadSocialPosts(); // Fallback to load without location
+    }
+  }
+
+  void _onScroll() {
+    if (_scrollDebounce?.isActive ?? false) _scrollDebounce!.cancel();
+
+    _scrollDebounce = Timer(const Duration(milliseconds: 200), () {
+      if (!mounted) return;
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent * 0.8) {
+        if (!_isLoadingMore) {
+          _loadMorePosts();
+        }
+      }
     });
+  }
+
+  void _subscribeToAblyFeed() {
+    // Cancel existing subscriptions
+    for (var sub in _ablySubscriptions) {
+      sub.cancel();
+    }
+    _ablySubscriptions.clear();
+
+    if (_userPosition == null) return;
+
+    // Get H3 cells for current location (center + neighbors)
+    final h3Cells = _socialService.getH3CellsForLocation(
+      _userPosition!.latitude,
+      _userPosition!.longitude,
+    );
+
+    print('📍 Subscribing to ${h3Cells.length} H3 cells');
+
+    // Subscribe to each cell's channel
+    for (final cell in h3Cells) {
+      final stream = AblyService().subscribeToCityFeed(
+        cell,
+      ); // Use cell as channel name
+      if (stream != null) {
+        final sub = stream.listen((message) {
+          if (!mounted) return;
+
+          if (message.name == 'post_created') {
+            final postData = message.data as Map<String, dynamic>;
+            // Avoid duplicates
+            if (_socialPosts.any((p) => p['id'] == postData['id'])) return;
+
+            setState(() {
+              _socialPosts.insert(0, postData);
+            });
+          } else if (message.name == 'post_deleted') {
+            final data = message.data as Map<String, dynamic>;
+            final postId = data['post_id'];
+            setState(() {
+              _socialPosts.removeWhere((post) => post['id'] == postId);
+            });
+          }
+        });
+        _ablySubscriptions.add(sub);
+      }
+    }
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _scrollDebounce?.cancel();
+    for (var sub in _ablySubscriptions) {
+      sub.cancel();
+    }
     super.dispose();
   }
 
-  Future<void> _loadTables() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadSocialPosts({bool force = false}) async {
+    if (!force && _isLoading && _socialPosts.isNotEmpty) return;
+
+    // Don't set isLoading true here if it's already true (initial load)
+    if (!(_isLoading && _socialPosts.isEmpty)) {
+      setState(() => _isLoading = true);
+    }
+
     try {
-      final tables = await SupabaseConfig.client
-          .from('tables')
-          .select('''
-            *
-          ''')
-          .gte('datetime', DateTime.now().toIso8601String())
-          .order('datetime', ascending: true)
-          .limit(20);
-
-      // Fetch host data separately for each table
-      final enrichedTables = await Future.wait(
-        tables.map((table) async {
-          try {
-            final hostData = await SupabaseConfig.client
-                .from('users')
-                .select('display_name, trust_score')
-                .eq('id', table['host_id'])
-                .maybeSingle();
-
-            return {...table, 'users': hostData};
-          } catch (e) {
-            print('Error loading host for table ${table['id']}: $e');
-            return {
-              ...table,
-              'users': {'display_name': 'Unknown', 'trust_score': 0},
-            };
-          }
-        }).toList(),
+      final posts = await _socialService.getFeed(
+        limit: _postsPageSize,
+        offset: 0,
+        userLat: _userPosition?.latitude,
+        userLng: _userPosition?.longitude,
       );
 
       if (mounted) {
         setState(() {
-          _tables = enrichedTables;
-          _isLoading = false;
+          _socialPosts = posts;
+          _socialPostsOffset = posts.length;
         });
       }
     } catch (e) {
-      print('❌ Error loading feed: $e');
+      print('❌ Error loading social posts: $e');
+    } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (_isLoadingMore) return;
+
+    setState(() => _isLoadingMore = true);
+
+    try {
+      final newPosts = await _socialService.getFeed(
+        limit: _postsPageSize,
+        offset: _socialPostsOffset,
+        userLat: _userPosition?.latitude,
+        userLng: _userPosition?.longitude,
+      );
+
+      if (mounted && newPosts.isNotEmpty) {
+        setState(() {
+          _socialPosts.addAll(newPosts);
+          _socialPostsOffset += newPosts.length;
+          _isLoadingMore = false;
+        });
+      } else {
+        setState(() => _isLoadingMore = false);
+      }
+    } catch (e) {
+      print('❌ Error loading more posts: $e');
+      if (mounted) setState(() => _isLoadingMore = false);
+    }
+  }
+
+  void _showCreatePost() async {
+    final result = await showModalBottomSheet<Map<String, dynamic>?>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const CreatePostModal(),
+    );
+
+    // Optimistic update: Add post immediately to UI
+    if (result != null && mounted) {
+      setState(() {
+        _socialPosts.insert(0, result);
+      });
+      // Refresh to get the actual post with all data from server
+      _loadSocialPosts();
+    }
+  }
+
+  void _showCreateHangout() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => CreateTableModal(
+        onTableCreated: () {
+          // Do nothing or navigate to map?
+        },
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.white,
-              const Color(0xFF16213E),
-              const Color(0xFF0F3460),
-            ],
-            stops: [0.0, 0.5 + (_scrollOffset / 1000).clamp(-0.2, 0.2), 1.0],
-          ),
-        ),
-        child: SafeArea(
-          child: _isLoading
-              ? _buildLoadingState()
-              : RefreshIndicator(
-                  onRefresh: _loadTables,
-                  color: const Color(0xFF00FF00),
-                  backgroundColor: Colors.white,
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    physics: const BouncingScrollPhysics(),
-                    slivers: [
-                      _buildHeader(),
-                      _buildFeaturedSection(),
-                      _buildMainFeed(),
+      backgroundColor: Colors.white,
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'feed_fab',
+        onPressed: _showCreateHangout,
+        backgroundColor: Theme.of(context).primaryColor,
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+      body: _isLoading
+          ? _buildLoadingState()
+          : RefreshIndicator(
+              onRefresh: _loadSocialPosts,
+              color: Theme.of(context).primaryColor,
+              backgroundColor: Colors.white,
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  // 1. App Bar
+                  SliverAppBar(
+                    floating: true,
+                    backgroundColor: Colors.white,
+                    surfaceTintColor: Colors.white,
+                    elevation: 0,
+                    title: Row(
+                      children: [
+                        const Text(
+                          'HangHut',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'BETA',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.notifications_outlined,
+                          color: Colors.black,
+                        ),
+                        onPressed: () {},
+                      ),
+                      const SizedBox(width: 8),
+                      // Avatar
+                      Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: CircleAvatar(
+                          radius: 18,
+                          backgroundColor: Colors.grey[200],
+                          backgroundImage:
+                              SupabaseConfig
+                                      .client
+                                      .auth
+                                      .currentUser
+                                      ?.userMetadata?['avatar_url'] !=
+                                  null
+                              ? NetworkImage(
+                                  SupabaseConfig
+                                      .client
+                                      .auth
+                                      .currentUser!
+                                      .userMetadata!['avatar_url'],
+                                )
+                              : null,
+                          child:
+                              SupabaseConfig
+                                      .client
+                                      .auth
+                                      .currentUser
+                                      ?.userMetadata?['avatar_url'] ==
+                                  null
+                              ? const Icon(
+                                  Icons.person,
+                                  color: Colors.grey,
+                                  size: 20,
+                                )
+                              : null,
+                        ),
+                      ),
                     ],
                   ),
-                ),
-        ),
-      ),
+
+                  // 2. Thread Creation Bar
+                  _buildThreadCreationBar(),
+
+                  // 3. Threads Feed
+                  if (_socialPosts.isEmpty && !_isLoading)
+                    SliverFillRemaining(
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.forum_outlined,
+                              size: 64,
+                              color: Colors.grey[300],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No threads yet.\nStart the conversation!',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          // Check if we are at the bottom and loading more
+                          if (index == _socialPosts.length) {
+                            if (_isLoadingMore) {
+                              return Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Center(
+                                  child: SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Theme.of(context).primaryColor,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            } else {
+                              return const SizedBox(
+                                height: 80,
+                              ); // Bottom padding for FAB
+                            }
+                          }
+
+                          final post = _socialPosts[index];
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            child: SocialPostCard(post: post),
+                          );
+                        },
+                        childCount:
+                            _socialPosts.length + 1, // +1 for loader/padding
+                      ),
+                    ),
+                ],
+              ),
+            ),
     );
   }
 
   Widget _buildLoadingState() {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [
-                      Color(0xFF00FF00),
-                      Color(0xFF00FF00).withOpacity(0.3),
-                    ],
-                  ),
-                ),
-                child: const Center(
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 3,
-                  ),
-                ),
-              )
-              .animate(onPlay: (controller) => controller.repeat())
-              .scale(
-                duration: 1500.ms,
-                begin: const Offset(0.8, 0.8),
-                end: const Offset(1.2, 1.2),
-              )
-              .then()
-              .scale(
-                duration: 1500.ms,
-                begin: const Offset(1.2, 1.2),
-                end: const Offset(0.8, 0.8),
-              ),
-          const SizedBox(height: 24),
-          Text(
-                'Finding tables...',
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-              )
-              .animate(onPlay: (controller) => controller.repeat())
-              .fadeIn(duration: 800.ms)
-              .then()
-              .fadeOut(duration: 800.ms),
-        ],
-      ),
+      child: CircularProgressIndicator(color: Theme.of(context).primaryColor),
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildThreadCreationBar() {
     return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                      'Discover',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 40,
-                        fontWeight: FontWeight.bold,
-                        height: 1.2,
-                      ),
-                    )
-                    .animate()
-                    .fadeIn(duration: 600.ms, curve: Curves.easeOut)
-                    .slideX(begin: -0.3, end: 0),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-                  'Tables happening around you',
-                  style: TextStyle(
-                    color: const Color(0xFF00FF00),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                )
-                .animate()
-                .fadeIn(delay: 200.ms, duration: 600.ms)
-                .slideX(begin: -0.3, end: 0),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFeaturedSection() {
-    if (_tables.isEmpty) return const SliverToBoxAdapter(child: SizedBox());
-
-    final featured = _tables.take(3).toList();
-
-    return SliverToBoxAdapter(
-      child: SizedBox(
-        height: 200,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          physics: const BouncingScrollPhysics(),
-          itemCount: featured.length,
-          itemBuilder: (context, index) {
-            return _buildFeaturedCard(featured[index], index);
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFeaturedCard(Map<String, dynamic> table, int index) {
-    final markerUrl = table['marker_image_url'];
-    final hostName = table['users']?['display_name'] ?? 'Unknown';
-    final datetime = DateTime.parse(table['datetime']);
-    final timeUntil = datetime.difference(DateTime.now());
-
-    return GestureDetector(
-      onTap: () => _showTableDetails(table),
-      child:
-          Container(
-                width: 300,
-                margin: const EdgeInsets.only(right: 16, bottom: 8),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFF00FF00).withOpacity(0.2),
-                      Color(0xFF00FF00).withOpacity(0.05),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: Color(0xFF00FF00).withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Stack(
-                  children: [
-                    // Background Pattern
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _CirclePatternPainter(
-                          color: Colors.white.withOpacity(0.03),
-                          offset: _scrollOffset * (index + 1) * 0.1,
-                        ),
-                      ),
-                    ),
-
-                    // Content
-                    Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Marker Image
-                          if (markerUrl != null)
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.network(
-                                markerUrl,
-                                width: 60,
-                                height: 60,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          else
-                            Container(
-                              width: 60,
-                              height: 60,
-                              decoration: BoxDecoration(
-                                color: Color(0xFF00FF00),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(
-                                Icons.restaurant,
-                                color: Colors.black,
-                              ),
-                            ),
-                          // Title
-                          Text(
-                            table['title'],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          // Time & Host
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.access_time,
-                                    color: Color(0xFF00FF00),
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    _formatTimeUntil(timeUntil),
-                                    style: TextStyle(
-                                      color: Color(0xFF00FF00),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Hosted by $hostName',
-                                style: TextStyle(
-                                  color: Colors.white60,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              )
-              .animate()
-              .fadeIn(delay: (300 + index * 100).ms, duration: 600.ms)
-              .slideX(begin: 0.3, end: 0, curve: Curves.easeOutBack)
-              .scale(begin: const Offset(0.8, 0.8), curve: Curves.easeOutBack),
-    );
-  }
-
-  Widget _buildMainFeed() {
-    if (_tables.isEmpty) {
-      return SliverFillRemaining(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                    padding: const EdgeInsets.all(32),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          Color(0xFF00FF00).withOpacity(0.2),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.restaurant_menu,
-                      size: 64,
-                      color: Color(0xFF00FF00).withOpacity(0.5),
-                    ),
-                  )
-                  .animate(onPlay: (controller) => controller.repeat())
-                  .rotate(duration: 4000.ms, begin: 0, end: 1),
-              const SizedBox(height: 24),
-              Text(
-                'No tables yet',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Be the first to host!',
-                style: TextStyle(color: Colors.white60, fontSize: 16),
+      child: GestureDetector(
+        onTap: _showCreatePost,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.grey[200]!),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
             ],
           ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: Colors.grey[200],
+                backgroundImage:
+                    SupabaseConfig
+                            .client
+                            .auth
+                            .currentUser
+                            ?.userMetadata?['avatar_url'] !=
+                        null
+                    ? NetworkImage(
+                        SupabaseConfig
+                            .client
+                            .auth
+                            .currentUser!
+                            .userMetadata!['avatar_url'],
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Start a thread...',
+                style: TextStyle(color: Colors.grey[500], fontSize: 15),
+              ),
+              const Spacer(),
+              Icon(Icons.image_outlined, color: Colors.grey[400], size: 20),
+            ],
+          ),
         ),
-      );
-    }
-
-    return SliverPadding(
-      padding: const EdgeInsets.all(24),
-      sliver: SliverList(
-        delegate: SliverChildBuilderDelegate((context, index) {
-          if (index < 3) return const SizedBox();
-          return _buildTableCard(_tables[index], index);
-        }, childCount: _tables.length),
       ),
     );
   }
-
-  Widget _buildTableCard(Map<String, dynamic> table, int index) {
-    final markerUrl = table['marker_image_url'];
-    final hostName = table['users']?['display_name'] ?? 'Unknown';
-    final datetime = DateTime.parse(table['datetime']);
-    final locationName = table['location_name'] ?? 'Unknown location';
-
-    return GestureDetector(
-      onTap: () => _showTableDetails(table),
-      child:
-          Container(
-                margin: const EdgeInsets.only(bottom: 24),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  color: Colors.white.withOpacity(0.05),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.1),
-                    width: 1,
-                  ),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(24),
-                  child: Stack(
-                    children: [
-                      // Background with parallax effect
-                      if (markerUrl != null)
-                        Positioned.fill(
-                          child: Transform.translate(
-                            offset: Offset(0, _scrollOffset * 0.05),
-                            child: Image.network(
-                              markerUrl,
-                              fit: BoxFit.cover,
-                              color: Colors.black.withOpacity(0.7),
-                              colorBlendMode: BlendMode.darken,
-                            ),
-                          ),
-                        ),
-
-                      // Gradient overlay
-                      Positioned.fill(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                Colors.black.withOpacity(0.8),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Content
-                      Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Host info
-                            Row(
-                              children: [
-                                Container(
-                                  width: 40,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        Color(0xFF00FF00),
-                                        Color(0xFF00FF00).withOpacity(0.6),
-                                      ],
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      hostName[0].toUpperCase(),
-                                      style: const TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 18,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      hostName,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Host',
-                                      style: TextStyle(
-                                        color: Colors.white60,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 80),
-                            // Title
-                            Text(
-                              table['title'],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                height: 1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            // Location
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.location_on,
-                                  color: Color(0xFF00FF00),
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    locationName,
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            // Date/Time
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.calendar_today,
-                                  color: Color(0xFF00FF00),
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  DateFormat(
-                                    'EEEE, MMM d · h:mm a',
-                                  ).format(datetime),
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-              .animate()
-              .fadeIn(delay: (index * 50).ms, duration: 600.ms)
-              .slideY(begin: 0.2, end: 0, curve: Curves.easeOutCubic)
-              .scale(begin: const Offset(0.9, 0.9), curve: Curves.easeOut),
-    );
-  }
-
-  String _formatTimeUntil(Duration duration) {
-    if (duration.inMinutes < 60) {
-      return 'in ${duration.inMinutes}m';
-    } else if (duration.inHours < 24) {
-      return 'in ${duration.inHours}h';
-    } else {
-      return 'in ${duration.inDays}d';
-    }
-  }
-
-  void _showTableDetails(Map<String, dynamic> table) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => TableDetailsBottomSheet(
-        table: table,
-        matchData: null, // No matching data in feed view
-      ),
-    );
-  }
-}
-
-class _CirclePatternPainter extends CustomPainter {
-  final Color color;
-  final double offset;
-
-  _CirclePatternPainter({required this.color, this.offset = 0});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-
-    for (int i = 0; i < 5; i++) {
-      final radius = (size.width / 5) * (i + 1) + (offset % 100);
-      canvas.drawCircle(Offset(size.width / 2, size.height / 2), radius, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CirclePatternPainter oldDelegate) =>
-      oldDelegate.offset != offset;
 }

@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // Modern Urban Palette (Uber-like with Yellow Accent)
-  static const Color primaryColor = Colors.black;
+  // Modern Palette (Indigo & White)
+  static const MaterialColor primaryColor = Colors.indigo;
   static const Color secondaryColor = Colors.white;
-  static const Color accentColor = Color(0xFFFFC107); // Amber/Yellow from 5.png
+  static const MaterialColor accentColor = Colors.indigo;
   static const Color backgroundColor = Colors.white;
   static const Color surfaceColor = Color(0xFFF5F5F5); // Light Grey
-  static const Color textPrimary = Colors.black;
+  static const Color textPrimary = Color(0xFF333333); // Dark Gray
   static const Color textSecondary = Color(0xFF757575);
   static const Color errorColor = Color(0xFFD32F2F);
 
@@ -98,12 +98,13 @@ class AppTheme {
         hintStyle: GoogleFonts.inter(color: textSecondary.withOpacity(0.6)),
       ),
 
-      // Button Theme - Bold & Rectangular
+      // Button Theme - Bold & Rectangular with Glow
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryColor,
           foregroundColor: Colors.white,
-          elevation: 0, // Flat
+          shadowColor: primaryColor.withOpacity(0.5), // Indigo glow
+          elevation: 8, // Increased elevation for glow visibility
           padding: const EdgeInsets.symmetric(vertical: 18),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           textStyle: GoogleFonts.inter(
@@ -111,6 +112,19 @@ class AppTheme {
             fontWeight: FontWeight.w600,
           ),
         ),
+      ),
+
+      // FAB Theme with Glow
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: primaryColor,
+        foregroundColor: Colors.white,
+        elevation: 8,
+        focusElevation: 10,
+        hoverElevation: 10,
+        highlightElevation: 12,
+        enableFeedback: true,
+        sizeConstraints: const BoxConstraints.tightFor(width: 56, height: 56),
+        extendedSizeConstraints: const BoxConstraints.tightFor(height: 56),
       ),
 
       outlinedButtonTheme: OutlinedButtonThemeData(

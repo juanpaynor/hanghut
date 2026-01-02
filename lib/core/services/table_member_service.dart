@@ -1,6 +1,4 @@
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/core/services/stream_service.dart';
-import 'package:stream_feeds/stream_feeds.dart';
 
 class TableMemberService {
   // Join a table (instant join)
@@ -64,25 +62,6 @@ class TableMemberService {
         'approved_at': DateTime.now().toIso8601String(),
         'joined_at': DateTime.now().toIso8601String(),
       });
-
-      // STREAM ACTIVITY FEED INTEGRATION
-      try {
-        final streamService = StreamService();
-        await streamService.userFeed.addActivity(
-          request: FeedAddActivityRequest(
-            type: 'join',
-            text: 'Joined a table at ${table['title'] ?? 'Unknown Location'}',
-            custom: {
-              'table_id': tableId,
-              'title': table['title'] ?? 'Table',
-              'location_name': table['location_name'] ?? 'Unknown Location',
-            },
-          ),
-        );
-        print('✅ STREAM: Activity posted for table join');
-      } catch (e) {
-        print('⚠️ STREAM: Failed to post join activity: $e');
-      }
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
@@ -224,7 +203,12 @@ class TableMemberService {
               id,
               display_name,
               bio,
-              trust_score
+              trust_score,
+              avatar_url,
+              user_photos (
+                photo_url,
+                is_primary
+              )
             )
           ''')
           .eq('table_id', tableId)

@@ -7,7 +7,8 @@ import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
-import 'package:bitemates/core/services/stream_service.dart';
+import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/features/profile/screens/user_list_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -121,6 +122,16 @@ class _UserProfileScreenState extends State<UserProfileScreen>
       // 5. Get Badges (Gamification)
       final badges = await GamificationService().getUserBadges(widget.userId);
 
+      // 6. Get Connections (Following/Followers)
+      final socialService = SocialService();
+      // Fetch concurrently for speed
+      final results = await Future.wait([
+        socialService.getFollowing(widget.userId),
+        socialService.getFollowers(widget.userId),
+      ]);
+      final followingCount = results[0].length;
+      final followersCount = results[1].length;
+
       if (mounted) {
         setState(() {
           _userData = userResponse;
@@ -128,7 +139,8 @@ class _UserProfileScreenState extends State<UserProfileScreen>
           _stats = {
             'hosted': tablesHosted,
             'joined': tablesJoined,
-            'friends': 0, // Mock for now
+            'following': followingCount,
+            'followers': followersCount,
             'rating': 5.0, // Mock for now
           };
           _hostedTables = List<Map<String, dynamic>>.from(hostedTablesData);
@@ -147,6 +159,19 @@ class _UserProfileScreenState extends State<UserProfileScreen>
         });
       }
     }
+  }
+
+  void _openUserList(String title, Future<List<dynamic>> Function() fetchFunc) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => UserListScreen(
+          title: title,
+          currentUserId: widget.userId,
+          fetchFunction: fetchFunc,
+        ),
+      ),
+    );
   }
 
   Future<void> _launchInstagram() async {
@@ -226,10 +251,20 @@ class _UserProfileScreenState extends State<UserProfileScreen>
           // Header / App Bar
           SliverAppBar(
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.arrow_back,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
               onPressed: () {
                 if (widget.isOwnProfile) {
-                  // If on own profile tab, go to Map Screen
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(
                       builder: (context) =>
@@ -242,7 +277,28 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                 }
               },
             ),
-            expandedHeight: 300,
+            actions: [
+              // Options menu for both own and other profiles?
+              // For now, keep it simple. If own profile, maybe settings icon?
+              // User asked for "Edit Profile" as a button, not icon.
+              if (!widget.isOwnProfile)
+                IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.more_vert,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  onPressed: () {},
+                ),
+            ],
+            expandedHeight: 380, // Taller header
             pinned: true,
             backgroundColor: AppTheme.primaryColor,
             elevation: 0,
@@ -250,7 +306,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Carousel or Placeholder
+                  // 1. Image Layer
                   if (showCarousel)
                     PageView.builder(
                       controller: _carouselController,
@@ -277,173 +333,164 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                       ),
                     ),
 
-                  // Gradient Overlay
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.7),
-                        ],
+                  // 2. Gradient Overlay (Top) - For status bar visibility
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 100,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.black54, Colors.transparent],
+                        ),
                       ),
                     ),
                   ),
 
-                  // Indicator Dots
+                  // 3. Gradient Overlay (Bottom) - For text readability
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: 200,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: [
+                            Colors.black.withOpacity(0.9),
+                            Colors.black.withOpacity(0.6),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // 4. Indicator Dots
                   if (showCarousel && _userPhotos.length > 1)
                     Positioned(
-                      top: 100,
-                      right: 20,
+                      top: 110,
+                      right: 16,
                       child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
                         ),
                         decoration: BoxDecoration(
                           color: Colors.black45,
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white24),
                         ),
                         child: Text(
                           '${_currentCarouselIndex + 1}/${_userPhotos.length}',
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
                     ),
-                  // User Info Layer
+
+                  // 5. User Info (Name & Verified)
                   Positioned(
-                    bottom: 20,
+                    bottom: 24,
                     left: 20,
                     right: 20,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Name & Verified
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Text(
-                              _userData!['display_name'] ?? 'Unknown',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 36,
-                                fontWeight: FontWeight.bold,
-                                height: 1.0,
+                            Expanded(
+                              // Allow text to wrap if name is long
+                              child: Text(
+                                _userData!['display_name'] ?? 'Unknown',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 32, // Slightly smaller but cleaner
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.1,
+                                  letterSpacing: -0.5,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            SizedBox(width: 8),
-                            if ((_userData!['trust_score'] ?? 0) > 80)
+                            if ((_userData!['trust_score'] ?? 0) > 80) ...[
+                              const SizedBox(width: 8),
                               Icon(
                                 Icons.verified,
-                                color: AppTheme.accentColor,
+                                color: AppTheme.accentColor, // Gold/Yellow
                                 size: 28,
                               ),
+                            ],
                           ],
                         ),
-                        /* Trust Score Removed
-                        SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.star,
-                              color: AppTheme.accentColor,
-                              size: 18,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'Trust Score: ${_userData!['trust_score'] ?? 0}',
+                        // Optional: Add occupation line here if user has one
+                        if (_userData!['occupation'] != null &&
+                            _userData!['occupation'].toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: Text(
+                              _userData!['occupation'],
                               style: TextStyle(
                                 color: Colors.white70,
                                 fontSize: 16,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
-                          ],
-                        ),
-                        */
+                          ),
                       ],
                     ),
                   ),
                 ],
               ),
             ),
-            actions: [
-              if (widget.isOwnProfile)
-                IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.3),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.edit, color: Colors.white),
-                  ),
-                  onPressed: () async {
-                    // Navigate to Edit Profile
-                    final result = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => EditProfileScreen(
-                          userProfile: _userData!,
-                          userPhotos: _userPhotos,
-                        ),
-                      ),
-                    );
-
-                    // Refresh if saved
-                    if (result == true) {
-                      _loadUserProfile();
-                    }
-                  },
-                ),
-              if (!widget.isOwnProfile)
-                IconButton(
-                  icon: Container(
-                    padding: EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.3),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(Icons.more_vert, color: Colors.white),
-                  ),
-                  onPressed: () {
-                    // Show options menu (report, block, etc)
-                  },
-                ),
-            ],
           ),
 
-          // Stats Row
+          // Stats Row (Clean, Passport Style)
           SliverToBoxAdapter(
             child: Container(
-              margin: EdgeInsets.all(20),
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryColor,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+              child: Column(
                 children: [
-                  _buildStatItem(
-                    'Hosted',
-                    '${_stats!['hosted']}',
-                    Icons.restaurant,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildPassportStat('Hosted', '${_stats!['hosted'] ?? 0}'),
+                      _buildVerticalDivider(),
+                      _buildPassportStat('Joined', '${_stats!['joined'] ?? 0}'),
+                      _buildVerticalDivider(),
+                      _buildPassportStat(
+                        'Following',
+                        '${_stats!['following'] ?? 0}',
+                        onTap: () => _openUserList(
+                          'Following',
+                          () => SocialService().getFollowing(widget.userId),
+                        ),
+                      ),
+                      _buildVerticalDivider(),
+                      _buildPassportStat(
+                        'Followers',
+                        '${_stats!['followers'] ?? 0}',
+                        onTap: () => _openUserList(
+                          'Followers',
+                          () => SocialService().getFollowers(widget.userId),
+                        ),
+                      ),
+                    ],
                   ),
-                  _buildStatItem(
-                    'Joined',
-                    '${_stats!['joined']}',
-                    Icons.people,
-                  ),
-                  _buildStatItem(
-                    'Friends',
-                    '${_stats!['friends']}',
-                    Icons.favorite,
-                  ),
-                  _buildStatItem('Rating', '${_stats!['rating']}', Icons.star),
+                  const SizedBox(height: 24),
+
+                  // Main Action Button (Edit or Follow)
+                  _buildMainActionButton(context),
                 ],
               ),
             ),
@@ -702,10 +749,10 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                     ElevatedButton(
                       onPressed: () async {
                         try {
-                          final streamService = StreamService();
-                          // For now, always follow (since isFollowing returns false)
+                          final socialService = SocialService();
+                          // For now, always follow (since isFollowing logic needs update)
                           // In the future, this will toggle based on follow status
-                          await streamService.followUser(widget.userId);
+                          await socialService.followUser(widget.userId);
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -801,21 +848,125 @@ class _UserProfileScreenState extends State<UserProfileScreen>
     return fullLocation;
   }
 
-  Widget _buildStatItem(String label, String value, IconData icon) {
-    return Column(
-      children: [
-        Icon(icon, color: AppTheme.accentColor, size: 24),
-        SizedBox(height: 8),
-        Text(
-          value,
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
+  Widget _buildPassportStat(String label, String value, {VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color: AppTheme.primaryColor,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerticalDivider() {
+    return Container(height: 24, width: 1, color: Colors.grey[300]);
+  }
+
+  Widget _buildMainActionButton(BuildContext context) {
+    if (widget.isOwnProfile) {
+      return SizedBox(
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: () async {
+            // Navigate to Edit Profile
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => EditProfileScreen(
+                  userProfile: _userData!,
+                  userPhotos: _userPhotos,
+                ),
+              ),
+            );
+
+            // Refresh if saved
+            if (result == true) {
+              _loadUserProfile();
+            }
+          },
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: Colors.grey[300]!),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: EdgeInsets.symmetric(vertical: 16),
+            foregroundColor: AppTheme.primaryColor,
+          ),
+          child: const Text(
+            'Edit Profile',
+            style: TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
-        SizedBox(height: 4),
-        Text(label, style: TextStyle(color: Colors.white70, fontSize: 12)),
+      );
+    }
+
+    // For other users: Message & Follow Buttons
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton(
+            onPressed: () {
+              // Placeholder for Follow action
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Follow feature coming soon!')),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              elevation: 0,
+            ),
+            child: const Text(
+              'Follow',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () {
+              // Placeholder for Message action
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Messaging coming soon!')),
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.grey[300]!),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              foregroundColor: AppTheme.primaryColor,
+            ),
+            child: const Text(
+              'Message',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
       ],
     );
   }

@@ -201,7 +201,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBody: true,
+      extendBody: true, // Allow body to extend behind navbar/fab
       body: Stack(
         children: [
           // Full screen content
@@ -209,8 +209,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             child: IndexedStack(index: _selectedIndex, children: _screens),
           ),
 
-          // Floating menu button - top right
-          // Hide on Profile screen (assuming index 3) as it has its own actions
+          // Floating menu button - top right (Settings)
           if (_selectedIndex != 3)
             Positioned(
               top: 60,
@@ -246,54 +245,86 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             ),
         ],
       ),
-      bottomNavigationBar: Container(
+      floatingActionButton: Container(
+        height: 64,
+        width: 64,
         decoration: BoxDecoration(
-          color: Colors.white,
+          shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 8,
-              offset: const Offset(0, -2),
+              color: Theme.of(context).primaryColor.withOpacity(0.4),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
-        child: NavigationBar(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          indicatorColor: Colors.black.withOpacity(0.05),
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: (index) {
-            if (index == 2) {
-              _showCreateTableModal();
-            } else {
-              _onItemTapped(index > 2 ? index - 1 : index);
-            }
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home),
-              label: 'Home',
+        child: FloatingActionButton(
+          heroTag: 'main_fab', // Unique tag to prevent collisions
+          onPressed: _showCreateTableModal,
+          backgroundColor: Theme.of(context).primaryColor,
+          elevation: 0,
+          shape: const CircleBorder(),
+          child: const Icon(Icons.add, color: Colors.white, size: 32),
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      bottomNavigationBar: BottomAppBar(
+        color: Colors.white,
+        surfaceTintColor: Colors.white,
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 8.0,
+        height: 80, // Taller bar
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
+            _buildNavItem(1, Icons.map_outlined, Icons.map, 'Map'),
+            const SizedBox(width: 48), // Spacer for FAB
+            _buildNavItem(
+              2,
+              Icons.flight_outlined,
+              Icons.flight,
+              'Trips',
+            ), // Assuming index 2 is still Trips in _screens logic (which is NOT true anymore, see logic check)
+            _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem(
+    int index,
+    IconData iconOutlined,
+    IconData iconFilled,
+    String label,
+  ) {
+    final isSelected = _selectedIndex == index;
+    // Use primary color for selected item
+    final activeColor = Theme.of(context).primaryColor;
+
+    return InkWell(
+      onTap: () => _onItemTapped(index),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isSelected ? iconFilled : iconOutlined,
+              color: isSelected ? activeColor : Colors.grey[400],
+              size: 26,
             ),
-            NavigationDestination(
-              icon: Icon(Icons.map_outlined),
-              selectedIcon: Icon(Icons.map),
-              label: 'Map',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.add_circle_outline),
-              selectedIcon: Icon(Icons.add_circle),
-              label: 'Host',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.flight_outlined),
-              selectedIcon: Icon(Icons.flight),
-              label: 'Trips',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: 'Profile',
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? activeColor : Colors.grey[400],
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+              ),
             ),
           ],
         ),
