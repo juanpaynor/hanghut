@@ -3,6 +3,8 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 
 class SocialPostCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -72,7 +74,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardTheme.color ?? Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey[100]!),
         boxShadow: [
@@ -107,9 +109,11 @@ class _SocialPostCardState extends State<SocialPostCard> {
                               displayName.isNotEmpty
                                   ? displayName[0].toUpperCase()
                                   : 'U',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: Colors.black87,
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodyLarge?.color,
                               ),
                             )
                           : null,
@@ -121,10 +125,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
                         children: [
                           Text(
                             displayName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 16,
-                              color: Colors.black87,
+                              color: Theme.of(
+                                context,
+                              ).textTheme.bodyLarge?.color,
                             ),
                           ),
                           if (postTime != null)
@@ -140,7 +146,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     ),
                     // More options menu (only show for post owner)
                     if (widget.post['user_id'] ==
-                        widget.post['current_user_id'])
+                        SupabaseConfig.client.auth.currentUser?.id)
                       PopupMenuButton<String>(
                         icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
                         onSelected: (value) async {
@@ -214,10 +220,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Text(
                       content,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         height: 1.5,
-                        color: Colors.black87,
+                        color: Theme.of(context).textTheme.bodyLarge?.color,
                       ),
                     ),
                   ),
@@ -276,18 +282,28 @@ class _SocialPostCardState extends State<SocialPostCard> {
   }
 
   Widget _buildSingleImage(String url) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: CachedNetworkImage(
-        imageUrl: url,
-        width: double.infinity,
-        height: 250,
-        fit: BoxFit.cover,
-        placeholder: (context, url) => Container(
-          color: Colors.grey[200],
-          child: const Center(child: CircularProgressIndicator()),
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FullScreenImageViewer(imageUrl: url),
+          ),
+        );
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: CachedNetworkImage(
+          imageUrl: url,
+          width: double.infinity,
+          height: 250,
+          fit: BoxFit.cover,
+          placeholder: (context, url) => Container(
+            color: Colors.grey[200],
+            child: const Center(child: CircularProgressIndicator()),
+          ),
+          errorWidget: (context, url, error) => _buildErrorImage(),
         ),
-        errorWidget: (context, url, error) => _buildErrorImage(),
       ),
     );
   }
@@ -302,16 +318,27 @@ class _SocialPostCardState extends State<SocialPostCard> {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: CachedNetworkImage(
-                  imageUrl: imageUrls[index],
-                  width: double.infinity,
-                  height: 250,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Container(
-                    color: Colors.grey[200],
-                    child: const Center(child: CircularProgressIndicator()),
+                child: GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            FullScreenImageViewer(imageUrl: imageUrls[index]),
+                      ),
+                    );
+                  },
+                  child: CachedNetworkImage(
+                    imageUrl: imageUrls[index],
+                    width: double.infinity,
+                    height: 250,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Container(
+                      color: Colors.grey[200],
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    errorWidget: (context, url, error) => _buildErrorImage(),
                   ),
-                  errorWidget: (context, url, error) => _buildErrorImage(),
                 ),
               ),
               // Page indicator
@@ -324,7 +351,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.black54,
+                    color: Theme.of(context).textTheme.bodyMedium?.color,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(

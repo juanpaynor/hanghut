@@ -11,8 +11,6 @@ class SocialService {
 
   final SupabaseClient _client = SupabaseConfig.client;
 
-  /// Fetch the main feed posts
-  /// Returns a list of posts with user data and counts
   Future<List<Map<String, dynamic>>> getFeed({
     int limit = 20,
     int offset = 0,
@@ -20,69 +18,39 @@ class SocialService {
     double? userLng,
   }) async {
     try {
-      var query = _client.from('posts').select('''
-            *,
-            user:user_id!inner (
-              id,
-              display_name,
-              avatar_url,
-              user_photos (photo_url, is_primary)
-            ),
-            post_likes (user_id),
-            comments (id)
-          ''');
-
-      // Apply H3 location filter if coordinates provided
+      // Calculate H3 cells client-side to pass to RPC
+      List<String>? h3Cells;
       if (userLat != null && userLng != null) {
-        final h3Cells = getH3CellsForLocation(userLat, userLng);
-        if (h3Cells.isNotEmpty) {
-          query = query.inFilter('h3_cell', h3Cells);
-        }
+        h3Cells = getH3CellsForLocation(userLat, userLng);
       }
 
-      // Execute query with ordering and pagination
-      final response = await query
-          .order('created_at', ascending: false)
-          .range(offset, offset + limit - 1);
+      final params = {
+        'p_limit': limit,
+        'p_offset': offset,
+        'p_user_lat': userLat,
+        'p_user_lng': userLng,
+        'p_h3_cells': h3Cells,
+      };
 
-      // Transform data to be friendlier for UI
+      final response = await _client.rpc('get_main_feed', params: params);
+
       final List<Map<String, dynamic>> posts = List<Map<String, dynamic>>.from(
         response,
       );
+
+      // Map RPC result back to expected format
       return posts.map((post) {
-        // Enriched user data logic if needed (e.g. pick primary photo)
-        final userData = post['user'] as Map<String, dynamic>?;
-        String? avatarUrl = userData?['avatar_url'];
-
-        // Try to get primary photo from user_photos if avatar_url is null
-        if (avatarUrl == null &&
-            userData != null &&
-            userData['user_photos'] != null) {
-          final photos = userData['user_photos'] as List;
-          if (photos.isNotEmpty) {
-            final primary = photos.firstWhere(
-              (p) => p['is_primary'] == true,
-              orElse: () => photos.first,
-            );
-            avatarUrl = primary['photo_url'];
-          }
-        }
-
-        // Add computed fields
-        final likes = post['post_likes'] as List;
-        final currentUserId = _client.auth.currentUser?.id;
+        // user_data comes as JSONB from RPC, ensure it's a Map
+        final userData = post['user_data'] as Map<String, dynamic>? ?? {};
 
         return {
           ...post,
-          'user': {...userData ?? {}, 'avatar_url': avatarUrl},
-          'like_count': likes.length,
-          'comment_count': (post['comments'] as List).length,
-          'is_liked': likes.any((l) => l['user_id'] == currentUserId),
-          'current_user_id': currentUserId,
+          'user': userData,
+          // Counts and is_liked are already calculated by RPC
         };
       }).toList();
     } catch (e) {
-      print('❌ Error fetching feed: $e');
+      print('❌ Error fetching feed (RPC): $e');
       return [];
     }
   }
@@ -155,7 +123,14 @@ class SocialService {
                 ? imageUrls!.first
                 : null,
           })
-          .select()
+          .select('''
+            *,
+            user:user_id (
+              id,
+              display_name,
+              avatar_url
+            )
+          ''')
           .single();
 
       // Publish to Ably for real-time updates (use H3 cell as channel)
@@ -169,6 +144,60 @@ class SocialService {
       return response;
     } catch (e) {
       print('❌ Error creating post: $e');
+      return null;
+    }
+  }
+
+  /// Create a system post (e.g., Hangout Card) without images but with metadata
+  Future<Map<String, dynamic>?> createSystemPost({
+    required String content,
+    required String postType, // 'hangout', etc
+    required Map<String, dynamic> metadata,
+    String visibility = 'public', // public, followers, private
+    double? latitude,
+    double? longitude,
+  }) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) throw Exception('User not logged in');
+
+      // Calculate H3 cell
+      String? h3Cell;
+      if (latitude != null && longitude != null) {
+        h3Cell = _calculateH3Cell(latitude, longitude);
+      }
+
+      final response = await _client
+          .from('posts')
+          .insert({
+            'user_id': userId,
+            'content': content,
+            'latitude': latitude,
+            'longitude': longitude,
+            'h3_cell': h3Cell,
+            'post_type': postType,
+            'metadata': metadata,
+            'visibility': visibility,
+          })
+          .select('''
+            *,
+            user:user_id (
+              id,
+              display_name,
+              avatar_url
+            )
+          ''')
+          .single();
+
+      // Publish to Ably (only if public for now, or handle visibility in Ably later)
+      // For now, only public posts go to the public feed channel
+      if (h3Cell != null && h3Cell.isNotEmpty && visibility == 'public') {
+        AblyService().publishPostCreated(city: h3Cell, postData: response);
+      }
+
+      return response;
+    } catch (e) {
+      print('❌ Error creating system post: $e');
       return null;
     }
   }
@@ -442,10 +471,10 @@ class SocialService {
       final userId = _client.auth.currentUser?.id;
       if (userId == null) return false;
 
-      // Get post city before deleting for Ably
+      // Get post h3_cell before deleting for Ably
       final post = await _client
           .from('posts')
-          .select('city')
+          .select('h3_cell')
           .eq('id', postId)
           .eq('user_id', userId)
           .maybeSingle();
@@ -456,8 +485,8 @@ class SocialService {
       });
 
       // Publish to Ably
-      if (post != null && post['city'] != null) {
-        AblyService().publishPostDeleted(city: post['city'], postId: postId);
+      if (post != null && post['h3_cell'] != null) {
+        AblyService().publishPostDeleted(city: post['h3_cell'], postId: postId);
       }
 
       return true;

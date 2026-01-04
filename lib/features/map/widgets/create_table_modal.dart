@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
-
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
-import 'package:bitemates/features/shared/widgets/date_time_selector.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'package:intl/intl.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter/foundation.dart' as foundation;
 
 class CreateTableModal extends StatefulWidget {
   final double? currentLat;
@@ -32,7 +31,7 @@ class CreateTableModal extends StatefulWidget {
 class _CreateTableModalState extends State<CreateTableModal> {
   final _activityController = TextEditingController();
   final _venueController = TextEditingController();
-  final _emojiController = TextEditingController(text: '📍'); // Default emoji
+  final _descriptionController = TextEditingController(); // NEW: Description
   final _tableService = TableService();
   final _imagePicker = ImagePicker();
 
@@ -47,7 +46,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
   DateTime _selectedDateTime = DateTime.now().add(
     const Duration(minutes: 60),
   ); // Default 1 hour from now
-  double _maxCapacity = 4; // Changed to double for Slider
+  double _maxCapacity = 4;
   String _budgetRange = 'medium';
   String _goalType = 'friends';
   bool _requiresApproval = false;
@@ -57,6 +56,26 @@ class _CreateTableModalState extends State<CreateTableModal> {
   String? _selectedGifUrl;
   bool _showGifPicker = false;
   File? _markerImage;
+  String? _selectedEmoji = '📍'; // Default emoji
+
+  // Curated Emojis for Grid
+  final List<String> _commonEmojis = [
+    '📍',
+    '☕️',
+    '🍺',
+    '🍔',
+    '🍕',
+    '🍣',
+    '🏀',
+    '🎾',
+    '🎬',
+    '🎮',
+    '🎤',
+    '🏋️',
+    '📚',
+    '💻',
+    '🎉',
+  ];
 
   // Google Places
   List<Map<String, dynamic>> _placePredictions = [];
@@ -81,6 +100,20 @@ class _CreateTableModalState extends State<CreateTableModal> {
     );
   }
 
+  Future<void> _loadUserProfile() async {
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user != null) {
+      final response = await SupabaseConfig.client
+          .from('users')
+          .select('display_name')
+          .eq('id', user.id)
+          .single();
+      setState(() {
+        _userName = response['display_name'];
+      });
+    }
+  }
+
   Future<void> _pickMarkerImage() async {
     final XFile? image = await _imagePicker.pickImage(
       source: ImageSource.gallery,
@@ -92,89 +125,106 @@ class _CreateTableModalState extends State<CreateTableModal> {
     }
   }
 
-  // ... (existing loadUserProfile, onSearchChanged, getPlacePredictions, getPlaceDetails methods)
-  // I will preserve them by not overwriting them, but I need to be careful with range.
-  // The user told me to keep existing code.
-  // BUT I need to inject `_pickMarkerImage` and imports.
-  // I'll assume the replacement covers the whole class content or I'll split it.
+  // --- Date & Time Pickers (NEW) ---
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDateTime,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 90)), // 3 months out
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            primaryColor: Colors.indigo,
+            colorScheme: const ColorScheme.light(
+              primary: Colors.indigo,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+            buttonTheme: const ButtonThemeData(
+              textTheme: ButtonTextTheme.primary,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
 
-  // Actually, I can replace the whole file content efficiently since I have it all.
-  // Wait, I should try to target specific blocks.
-
-  // Block 1: Imports + Class Definition + State Variables
-  // Block 2: _createTable method (updated arguments)
-  // Block 3: build method (Group Size Slider + Marker Section)
-
-  // Implementation below uses MultiReplace or just strategic single replace if allowed?
-  // Tool `replace_file_content` says "use this tool ONLY when you are making a SINGLE CONTIGUOUS block of edits".
-  // So I cannot do multiple blocks.
-  // I will use `replace_file_content` on the `build` method primarily, and *another* call for imports/state?
-  // No, sequential tool calls.
-
-  // Let's replace the properties first.
-
-  // Block 1: Properties & Imports.
-  // I will add imports at the top.
-  // Then I will add properties to `_CreateTableModalState`.
-
-  // Block 2: `_createTable` and `build`.
-  // These are contiguous if I include the helper methods in between or if they are close.
-  // They are close. `_createTable` is at 156. `build` at 204.
-  // So I can replace 156 to end of file to handle `_createTable` + `build`.
-
-  // Let's do Imports first.
-  // Lines 12-13.
-
-  // Oops, I can only do ONE replace per turn? "Do NOT make multiple parallel calls to this tool".
-  // I will start with Imports + State.
-  // Wait, if I change state, the `build` method might error if I don't update it in the same turn?
-  // No, Dart analysis happens after.
-
-  // Actually, I'll rewrite the whole file in one go since I have the content and it's safer to ensure consistency.
-  // 464 lines is manageable.
-  // But strictly, "SINGULAR CONTIGUOUS BLOCK".
-  // I will replace from line 1 (imports) to line 464?
-  // That's fine.
-
-  // Let's construct the full file.
-
-  // WARNING: I need to keep `_loadUserProfile`, `_onSearchChanged`, `_getPlacePredictions`, `_getPlaceDetails` exactly as is.
-  // Retyping them risks typos.
-
-  // Better strategy:
-  // 1. Add Imports.
-  // 2. Add State fields.
-  // 3. Update `_createTable` logic.
-  // 4. Update `build` UI.
-
-  // I'll do this in steps.
-  // Step 1: Update Imports (lines 1-13).
-  // Step 2: Update State (lines 31-59).
-  // Step 3: Update `_createTable` (lines 156-201).
-  // Step 4: Update `build` (lines 204-464).
-
-  // Wait, I can do 1 and 2 in one go if I include the class decl.
-  // No, imports are separated by class def.
-
-  // I'll just use `multi_replace_file_content`!
-  // It allows multiple chunks.
-
-  // I will use `replace_file_content` for imports.
-  // Then `replace_file_content` for State.
-  // Wait, "Do NOT make multiple parallel calls".
-  // I have to do 1 tool call.
-  // `multi_replace_file_content` fits perfectly.
-
-  Future<void> _loadUserProfile() async {
-    final user = SupabaseConfig.client.auth.currentUser;
-    if (user != null) {
-      final response = await SupabaseConfig.client
-          .from('users')
-          .select('display_name')
-          .eq('id', user.id)
-          .single();
+    if (picked != null) {
       setState(() {
-        _userName = response['display_name'];
+        _selectedDateTime = DateTime(
+          picked.year,
+          picked.month,
+          picked.day,
+          _selectedDateTime.hour,
+          _selectedDateTime.minute,
+        );
+      });
+    }
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_selectedDateTime),
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            primaryColor: Colors.indigo,
+            colorScheme: const ColorScheme.light(
+              primary: Colors.indigo,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+            timePickerTheme: TimePickerThemeData(
+              backgroundColor: Colors.white,
+              hourMinuteTextColor: WidgetStateColor.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.indigo;
+                }
+                return Colors.black;
+              }),
+              hourMinuteColor: WidgetStateColor.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.indigo.withOpacity(0.12);
+                }
+                return Colors.grey.shade200;
+              }),
+              dayPeriodTextColor: WidgetStateColor.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.white;
+                }
+                return Colors.black; // Text color for unselected AM/PM
+              }),
+              dayPeriodColor: WidgetStateColor.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.indigo;
+                }
+                return Colors.transparent; // Bg color for unselected AM/PM
+              }),
+              dialHandColor: Colors.indigo,
+              dialBackgroundColor: Colors.grey[200],
+              dialTextColor: Colors.black,
+              entryModeIconColor: Colors.indigo,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDateTime = DateTime(
+          _selectedDateTime.year,
+          _selectedDateTime.month,
+          _selectedDateTime.day,
+          picked.hour,
+          picked.minute,
+        );
       });
     }
   }
@@ -276,6 +326,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
     try {
       final activity = _activityController.text.trim();
       final title = '${_userName ?? "Someone"} wants to $activity';
+      final description = _descriptionController.text.trim(); // NEW
 
       await _tableService.createTable(
         latitude: _venueLat!,
@@ -285,7 +336,9 @@ class _CreateTableModalState extends State<CreateTableModal> {
         venueName: _venueName!,
         venueAddress: _venueAddress!,
         title: title, // CUSTOM TITLE
-        description: "", // Description is now implicit in the title
+        description: description.isNotEmpty
+            ? description
+            : null, // Pass description
         maxCapacity: _maxCapacity.round(), // Convert double to int
         budgetMin: _budgetRange == 'low'
             ? 0
@@ -298,7 +351,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
         imageUrl: _selectedGifUrl,
         markerImage: _markerImage, // PASS MARKER IMAGE
         markerEmoji: _markerImage == null
-            ? (_emojiController.text.isEmpty ? '📍' : _emojiController.text)
+            ? (_selectedEmoji ?? '📍')
             : null, // Default to emoji if no image
       );
 
@@ -323,10 +376,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.92,
-      decoration: const BoxDecoration(
+      height:
+          MediaQuery.of(context).size.height * 0.95, // Taller for more content
+      decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border.all(color: Colors.indigo.withOpacity(0.1), width: 1),
       ),
       child: Column(
         children: [
@@ -407,7 +462,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     ),
                   ),
 
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
 
                   // WHERE? Input (Venue)
                   Text(
@@ -496,9 +551,41 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       ),
                     ),
 
-                  const SizedBox(height: 32),
+                  // DESCRIPTION / DETAILS (NEW)
+                  const SizedBox(height: 24),
+                  Text(
+                    'Details',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _descriptionController,
+                    maxLines: 3,
+                    minLines: 1,
+                    style: const TextStyle(fontSize: 15),
+                    decoration: InputDecoration(
+                      hintText: 'Add description, menu links, etc...',
+                      hintStyle: TextStyle(color: Colors.grey[400]),
+                      filled: true,
+                      fillColor: Colors.grey[50], // Lighter background
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Colors.grey[200]!),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Colors.grey[200]!),
+                      ),
+                    ),
+                  ),
 
-                  // WHEN? (DateTime Selector)
+                  const SizedBox(height: 24),
+
+                  // WHEN? (New Pickers)
                   Text(
                     'When?',
                     style: TextStyle(
@@ -507,15 +594,86 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       color: Colors.grey[800],
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  DateTimeSelector(
-                    initialDate: _selectedDateTime,
-                    onDateTimeChanged: (dt) {
-                      setState(() => _selectedDateTime = dt);
-                    },
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      // Date Chip
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _pickDate,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 14,
+                              horizontal: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.calendar_today,
+                                  size: 18,
+                                  color: Colors.black54,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  DateFormat(
+                                    'EEE, MMM d',
+                                  ).format(_selectedDateTime),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Time Chip
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _pickTime,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 14,
+                              horizontal: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.access_time,
+                                  size: 18,
+                                  color: Colors.black54,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  DateFormat(
+                                    'h:mm a',
+                                  ).format(_selectedDateTime),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
 
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
 
                   // ADD A VIBE (GIF)
                   GestureDetector(
@@ -579,9 +737,9 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     ),
                   ],
 
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
 
-                  // MARKER APPEARANCE (NEW)
+                  // MARKER APPEARANCE (NEW GRID)
                   Text(
                     'Map Marker',
                     style: TextStyle(
@@ -591,118 +749,267 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      // Image Option
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: _pickMarkerImage,
-                          child: Container(
-                            height: 80,
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(12),
-                              border: _markerImage != null
-                                  ? Border.all(color: Colors.black, width: 2)
-                                  : null,
-                              image: _markerImage != null
-                                  ? DecorationImage(
-                                      image: FileImage(_markerImage!),
-                                      fit: BoxFit.cover,
-                                    )
-                                  : null,
-                            ),
-                            child: _markerImage == null
-                                ? const Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.add_a_photo,
-                                        color: Colors.black54,
-                                      ),
-                                      SizedBox(height: 4),
-                                      Text(
-                                        'Add Image',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.black54,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : null,
-                          ),
+
+                  // 1. Image Upload Option (Large Card)
+                  GestureDetector(
+                    onTap: _pickMarkerImage,
+                    child: Container(
+                      height: 60,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: _markerImage != null
+                            ? Colors.green[50]
+                            : Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _markerImage != null
+                              ? Colors.green
+                              : Colors.transparent,
+                          width: 2,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      // Emoji Option (Fallback)
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () => setState(() => _markerImage = null),
-                          child: Container(
-                            height: 80,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(12),
-                              border: _markerImage == null
-                                  ? Border.all(color: Colors.black, width: 2)
-                                  : null, // Highlight if no image
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text(
-                                  'Or use Emoji',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.black54,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                SizedBox(
-                                  height: 30,
-                                  child: TextField(
-                                    controller: _emojiController,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(fontSize: 24),
-                                    decoration: const InputDecoration(
-                                      border: InputBorder.none,
-                                      contentPadding: EdgeInsets.zero,
-                                    ),
-                                    maxLength: 2, // 1 char + emoji sometimes 2?
-                                    buildCounter:
-                                        (
-                                          _, {
-                                          required currentLength,
-                                          required isFocused,
-                                          required maxLength,
-                                        }) => null,
-                                    onTap: () =>
-                                        setState(() => _markerImage = null),
-                                  ),
-                                ),
-                              ],
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _markerImage != null
+                                ? Icons.check_circle
+                                : Icons.camera_alt,
+                            color: _markerImage != null
+                                ? Colors.green
+                                : Colors.black54,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _markerImage != null
+                                ? 'Custom Image Selected'
+                                : 'Upload Custom Image',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _markerImage != null
+                                  ? Colors.green[700]
+                                  : Colors.black87,
                             ),
                           ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  if (_markerImage == null) ...[
+                    const SizedBox(height: 16),
+                    const Center(
+                      child: Text(
+                        "OR CHOOSE AN EMOJI",
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.grey,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Quick Select + More Button
+                    SizedBox(
+                      height: 50,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          // "More" Button
+                          GestureDetector(
+                            onTap: () {
+                              showModalBottomSheet(
+                                context: context,
+                                builder: (context) {
+                                  return SizedBox(
+                                    height: 400,
+                                    child: EmojiPicker(
+                                      onEmojiSelected: (category, emoji) {
+                                        setState(() {
+                                          _selectedEmoji = emoji.emoji;
+                                        });
+                                        Navigator.pop(context);
+                                      },
+                                      config: Config(
+                                        height: 256,
+                                        checkPlatformCompatibility: true,
+                                        viewOrderConfig:
+                                            const ViewOrderConfig(),
+                                        emojiViewConfig: EmojiViewConfig(
+                                          // Issue: https://github.com/flutter/flutter/issues/28894
+                                          emojiSizeMax:
+                                              28 *
+                                              (foundation.defaultTargetPlatform ==
+                                                      TargetPlatform.iOS
+                                                  ? 1.20
+                                                  : 1.0),
+                                          backgroundColor: Colors.white,
+                                          columns: 7,
+                                        ),
+                                        skinToneConfig: const SkinToneConfig(),
+                                        categoryViewConfig:
+                                            const CategoryViewConfig(
+                                              indicatorColor: Colors.indigo,
+                                              iconColorSelected: Colors.indigo,
+                                            ),
+                                        bottomActionBarConfig:
+                                            const BottomActionBarConfig(
+                                              backgroundColor: Colors.white,
+                                              buttonColor: Colors.white,
+                                              buttonIconColor: Colors.grey,
+                                            ),
+                                        searchViewConfig:
+                                            const SearchViewConfig(
+                                              backgroundColor: Colors.white,
+                                            ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(right: 12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(25),
+                                border: Border.all(
+                                  color: Colors.indigo.withOpacity(0.3),
+                                ),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.add_reaction_outlined,
+                                    color: Colors.indigo,
+                                    size: 20,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'More',
+                                    style: TextStyle(
+                                      color: Colors.indigo,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          // Common Emojis (subset)
+                          ..._commonEmojis.take(10).map((emoji) {
+                            final isSelected = _selectedEmoji == emoji;
+                            return GestureDetector(
+                              onTap: () =>
+                                  setState(() => _selectedEmoji = emoji),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                margin: const EdgeInsets.only(right: 12),
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? Colors.indigo
+                                      : Colors.white,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Colors.indigo
+                                        : Colors.grey[300]!,
+                                  ),
+                                  boxShadow: isSelected
+                                      ? [
+                                          BoxShadow(
+                                            color: Colors.indigo.withOpacity(
+                                              0.3,
+                                            ),
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ]
+                                      : [],
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  emoji,
+                                  style: const TextStyle(fontSize: 24),
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+
+                    // Selected Preview (if picked from "More")
+                    if (!_commonEmojis.take(10).contains(_selectedEmoji) &&
+                        _selectedEmoji != '📍')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 16.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              "Selected: ",
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.indigo.withOpacity(0.3),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Text(
+                                _selectedEmoji!,
+                                style: const TextStyle(fontSize: 24),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+
+                  const SizedBox(height: 32),
+
+                  // ATTENDEES (Capacity)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Max Guests',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      Text(
+                        _maxCapacity.round().toString(),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
                         ),
                       ),
                     ],
                   ),
-
-                  const SizedBox(height: 32),
-
-                  // DETAILS (Capacity, Budget, Approval)
-                  // Use Slider for Capacity (2-30)
-                  Text(
-                    'Group Size: ${_maxCapacity.round()}',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       activeTrackColor: Colors.black,
@@ -716,7 +1023,6 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       min: 2,
                       max: 30,
                       divisions: 28,
-                      label: _maxCapacity.round().toString(),
                       onChanged: (val) => setState(() => _maxCapacity = val),
                     ),
                   ),
@@ -734,7 +1040,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                 child: ElevatedButton(
                   onPressed: _isLoading ? null : _createTable,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
+                    backgroundColor: Colors.indigo,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -768,6 +1074,4 @@ class _CreateTableModalState extends State<CreateTableModal> {
       ),
     );
   }
-
-  // Removed _buildCapacityButton helper as it's replaced by Slider
 }

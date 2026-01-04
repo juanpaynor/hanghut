@@ -7,7 +7,6 @@ import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/profile_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
-import 'package:bitemates/providers/auth_provider.dart';
 
 class ProfileSetupScreen extends StatefulWidget {
   const ProfileSetupScreen({super.key});
@@ -327,12 +326,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           'budget_min': _budgetRange.start.round(),
           'budget_max': _budgetRange.end.round(),
           'primary_goal': _primaryGoal,
-          'open_to_all_goals': false,
-          'preferred_meetup_mode': 'both',
-          'gender_preference': 'no_preference',
         },
         photoUrl: _uploadedPhotoUrl,
       );
+
+      if (!mounted) return;
 
       if (mounted) {
         Navigator.of(context).pushReplacement(

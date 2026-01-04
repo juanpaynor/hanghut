@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
+import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -32,6 +33,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _ablyService = AblyService();
   final _chatDatabase = ChatDatabase();
+  final _memberService = TableMemberService();
   final _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -706,7 +708,38 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  @override
+  Future<void> _leaveTable() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Leave Chat?'),
+        content: const Text(
+          'You will be removed from this activity and its chat.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Leave', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    if (mounted) setState(() => _isLoading = true);
+
+    await _memberService.leaveTable(widget.tableId);
+
+    if (mounted) {
+      Navigator.pop(context, true); // Close chat with change signal
+    }
+  }
+
   @override
   void dispose() {
     _batchSyncTimer?.cancel();
@@ -755,10 +788,10 @@ class _ChatScreenState extends State<ChatScreen> {
     // Set a fixed height for the sheet (e.g., 90% of screen)
     // or let it adapt if we prefer. Given it's a chat, taking most of the screen is good.
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: Column(
@@ -785,8 +818,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       children: [
                         Text(
                           widget.tableTitle,
-                          style: const TextStyle(
-                            color: Colors.black87,
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodyLarge?.color,
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
                           ),
@@ -826,6 +859,50 @@ class _ChatScreenState extends State<ChatScreen> {
                       ],
                     ),
                   ),
+                  // Actions Menu
+                  PopupMenuButton<String>(
+                    icon: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.more_horiz,
+                        size: 18,
+                        color: Colors.black54,
+                      ),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    onSelected: (value) {
+                      if (value == 'leave') {
+                        _leaveTable();
+                      }
+                    },
+                    itemBuilder: (BuildContext context) =>
+                        <PopupMenuEntry<String>>[
+                          const PopupMenuItem<String>(
+                            value: 'leave',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.exit_to_app,
+                                  color: Colors.red,
+                                  size: 20,
+                                ),
+                                SizedBox(width: 12),
+                                Text(
+                                  'Leave Chat',
+                                  style: TextStyle(color: Colors.red),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                  ),
+                  const SizedBox(width: 8),
                   // Close Button
                   IconButton(
                     icon: Container(
@@ -1265,16 +1342,20 @@ class _ChatScreenState extends State<ChatScreen> {
                               children: [
                                 Text(
                                   'Replying to ${_replyingTo!['senderName']}',
-                                  style: const TextStyle(
-                                    color: Colors.black87,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).textTheme.bodyLarge?.color,
                                     fontWeight: FontWeight.bold,
                                     fontSize: 12,
                                   ),
                                 ),
                                 Text(
                                   _replyingTo!['content'],
-                                  style: const TextStyle(
-                                    color: Colors.black54,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium?.color,
                                     fontSize: 13,
                                   ),
                                   maxLines: 1,
@@ -1315,10 +1396,18 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                           child: TextField(
                             controller: _messageController,
-                            style: const TextStyle(color: Colors.black87),
-                            decoration: const InputDecoration(
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).textTheme.bodyLarge?.color,
+                            ),
+                            decoration: InputDecoration(
                               hintText: 'Type a message...',
-                              hintStyle: TextStyle(color: Colors.black38),
+                              hintStyle: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodyMedium?.color,
+                              ),
                               border: InputBorder.none,
                               contentPadding: EdgeInsets.symmetric(
                                 horizontal: 20,
@@ -1337,8 +1426,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Container(
                           width: 44,
                           height: 44,
-                          decoration: const BoxDecoration(
-                            color: Colors.black,
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).primaryColor, // Bright indigo
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
@@ -1463,7 +1554,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -1540,7 +1631,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👏'];
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:bitemates/core/config/supabase_config.dart';
 
-import 'package:bitemates/features/map/widgets/create_table_modal.dart';
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/create_post_modal.dart';
 
@@ -10,9 +9,14 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
+import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/features/notifications/screens/notifications_screen.dart';
 
 class FeedScreen extends StatefulWidget {
-  const FeedScreen({super.key});
+  final Function(String)? onJoinTable;
+
+  const FeedScreen({super.key, this.onJoinTable});
 
   @override
   State<FeedScreen> createState() => _FeedScreenState();
@@ -62,6 +66,8 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
 
     _scrollDebounce = Timer(const Duration(milliseconds: 200), () {
       if (!mounted) return;
+      if (!_scrollController.hasClients) return;
+
       if (_scrollController.position.pixels >=
           _scrollController.position.maxScrollExtent * 0.8) {
         if (!_isLoadingMore) {
@@ -203,29 +209,11 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _showCreateHangout() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => CreateTableModal(
-        onTableCreated: () {
-          // Do nothing or navigate to map?
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'feed_fab',
-        onPressed: _showCreateHangout,
-        backgroundColor: Theme.of(context).primaryColor,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      // FAB Removed: Handled by MainNavigationScreen
       body: _isLoading
           ? _buildLoadingState()
           : RefreshIndicator(
@@ -239,93 +227,103 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
                   // 1. App Bar
                   SliverAppBar(
                     floating: true,
-                    backgroundColor: Colors.white,
-                    surfaceTintColor: Colors.white,
+                    backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                    surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
                     elevation: 0,
-                    title: Row(
-                      children: [
-                        const Text(
-                          'HangHut',
-                          style: TextStyle(
-                            color: Colors.black,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).primaryColor,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Text(
-                            'BETA',
+                    centerTitle: false,
+                    title: Padding(
+                      padding: const EdgeInsets.only(left: 8.0),
+                      child: Row(
+                        children: [
+                          Text(
+                            'HangHut',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).primaryColor,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.5,
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                     actions: [
-                      IconButton(
-                        icon: const Icon(
-                          Icons.notifications_outlined,
-                          color: Colors.black,
-                        ),
-                        onPressed: () {},
-                      ),
-                      const SizedBox(width: 8),
-                      // Avatar
-                      Padding(
-                        padding: const EdgeInsets.only(right: 16),
-                        child: CircleAvatar(
-                          radius: 18,
-                          backgroundColor: Colors.grey[200],
-                          backgroundImage:
-                              SupabaseConfig
-                                      .client
-                                      .auth
-                                      .currentUser
-                                      ?.userMetadata?['avatar_url'] !=
-                                  null
-                              ? NetworkImage(
-                                  SupabaseConfig
-                                      .client
-                                      .auth
-                                      .currentUser!
-                                      .userMetadata!['avatar_url'],
-                                )
-                              : null,
-                          child:
-                              SupabaseConfig
-                                      .client
-                                      .auth
-                                      .currentUser
-                                      ?.userMetadata?['avatar_url'] ==
-                                  null
-                              ? const Icon(
-                                  Icons.person,
-                                  color: Colors.grey,
-                                  size: 20,
-                                )
-                              : null,
+                      Hero(
+                        tag: 'notification_bell',
+                        child: Material(
+                          color: const Color(0xFFF1F5F9),
+                          shape: const CircleBorder(),
+                          clipBehavior: Clip.antiAlias,
+                          child: IconButton(
+                            icon: const Icon(
+                              Icons.notifications_outlined,
+                              color: Colors.black87,
+                              size: 24,
+                            ),
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                PageRouteBuilder(
+                                  opaque: false,
+                                  barrierDismissible: true,
+                                  barrierColor: Colors.black12,
+                                  pageBuilder: (_, __, ___) =>
+                                      const NotificationsScreen(),
+                                  transitionsBuilder: (_, anim, __, child) {
+                                    return FadeTransition(
+                                      opacity: anim,
+                                      child: child,
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ],
                   ),
 
-                  // 2. Thread Creation Bar
+                  // 2. Context Header (Welcome/Location)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _userPosition != null
+                                ? 'Happening Nearby'
+                                : 'Discover Hangouts',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1E293B),
+                              letterSpacing: -1,
+                              height: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Find your next bite with friends.',
+                            style: TextStyle(
+                              fontSize: 15,
+                              color: Theme.of(
+                                context,
+                              ).primaryColor, // Bright indigo
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // 2. Thread Creation Bar logic removed or moved
+                  // _buildThreadCreationBar(),
+
+                  // 3. Thread Creation Bar
                   _buildThreadCreationBar(),
 
-                  // 3. Threads Feed
+                  // 4. Threads Feed
                   if (_socialPosts.isEmpty && !_isLoading)
                     SliverFillRemaining(
                       child: Center(
@@ -379,6 +377,40 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
 
                           final post = _socialPosts[index];
 
+                          // Check post type for Hangout Feed Card
+                          if (post['post_type'] == 'hangout') {
+                            return HangoutFeedCard(
+                              post: post,
+                              onTap: () {
+                                final metadata = post['metadata'];
+                                if (metadata != null &&
+                                    metadata['table_id'] != null) {
+                                  if (widget.onJoinTable != null) {
+                                    widget.onJoinTable!(metadata['table_id']);
+                                  } else {
+                                    // Fallback for standalone usage
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => TableCompactModal(
+                                          table: {'id': metadata['table_id']},
+                                          matchData: const {},
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                              onPostDeleted: (postId) {
+                                setState(() {
+                                  _socialPosts.removeWhere(
+                                    (p) => p['id'] == postId,
+                                  );
+                                });
+                              },
+                            );
+                          }
+
                           return Padding(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
@@ -411,7 +443,7 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
           margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).cardTheme.color ?? Colors.white,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: Colors.grey[200]!),
             boxShadow: [

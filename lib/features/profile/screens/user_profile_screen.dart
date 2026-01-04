@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:bitemates/core/services/gamification_service.dart';
-import 'package:bitemates/core/theme/app_theme.dart';
-import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/features/settings/screens/settings_screen.dart';
+import 'package:bitemates/features/map/screens/map_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/features/profile/widgets/rpg_stats_radar.dart';
+import 'package:bitemates/features/profile/widgets/quest_card.dart';
 import 'package:bitemates/core/services/social_service.dart';
-import 'package:bitemates/features/profile/screens/user_list_screen.dart';
+import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
+import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -24,236 +27,207 @@ class UserProfileScreen extends StatefulWidget {
   State<UserProfileScreen> createState() => _UserProfileScreenState();
 }
 
-class _UserProfileScreenState extends State<UserProfileScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  final PageController _carouselController = PageController(); // Restored
-  int _currentCarouselIndex = 0; // Restored
-
+class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
-  List<Map<String, dynamic>> _userPhotos = [];
   Map<String, dynamic>? _stats;
-  List<Map<String, dynamic>> _upcomingTables = [];
-  List<Map<String, dynamic>> _pastTables = [];
-  List<Map<String, dynamic>> _hostedTables = [];
-  List<Map<String, dynamic>> _badges = [];
+  List<dynamic> _badges = [];
+  List<dynamic> _hostedTables = [];
+  List<Map<String, dynamic>> _userPhotos = [];
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
     _loadUserProfile();
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    _carouselController.dispose(); // Restored
-    super.dispose();
-  }
-
   Future<void> _loadUserProfile() async {
-    setState(() => _isLoading = true);
-
     try {
       final supabase = SupabaseConfig.client;
 
-      // 1. Fetch User Data (Basic info)
+      // 1. Fetch User Data
       final userResponse = await supabase
           .from('users')
-          .select(
-            'id, display_name, bio, avatar_url, trust_score, occupation, social_instagram, tags',
-          )
+          .select()
           .eq('id', widget.userId)
           .single();
 
-      // 2. Fetch User Photos (Gallery) - Sorted by sort_order
-      final photosResponse = await supabase
-          .from('user_photos')
-          .select()
-          .eq('user_id', widget.userId)
-          .order('sort_order', ascending: true);
-
-      // 3. Fetch User Stats (Hosted, Joined) - Simplified/Mocked for now or aggregate
-      // Ideally this would be a specialized query or edge function
-      final tablesHosted = await supabase
+      // 2. Fetch Stats (Mock or Real)
+      // We'll calculate real stats from tables
+      final hostedCount = await supabase
           .from('tables')
-          .count(CountOption.exact)
+          .count()
           .eq('host_id', widget.userId);
 
-      final tablesJoined = await supabase
+      final joinedCount = await supabase
           .from('table_participants')
-          .count(CountOption.exact)
+          .count()
           .eq('user_id', widget.userId);
 
-      // 4. Fetch Actual Tables
+      // 3. Fetch Badges (Mock logic for now as table structure might vary)
+      // Assuming a 'user_badges' table or just mocking
+      final List<dynamic> badges = [
+        {'name': 'Early Bird', 'icon': Icons.wb_sunny, 'color': Colors.orange},
+        {
+          'name': 'Night Owl',
+          'icon': Icons.nights_stay,
+          'color': Colors.purple,
+        },
+        {'name': 'Sushi Lover', 'icon': Icons.rice_bowl, 'color': Colors.red},
+      ];
 
-      // Hosted Tables
-      final hostedTablesData = await supabase
+      // 4. Fetch Hosted Tables (History)
+      final tablesResponse = await supabase
           .from('tables')
           .select('*, participants:table_participants(count)')
           .eq('host_id', widget.userId)
-          .order('datetime', ascending: false);
+          .order('datetime', ascending: false)
+          .limit(5);
 
-      // Joined Tables (Upcoming & Past)
-      final joinedTablesData = await supabase
-          .from('table_participants')
-          .select('tables(*)')
+      // 5. Fetch Photos
+      final photosResponse = await supabase
+          .from('user_photos')
+          .select()
           .eq('user_id', widget.userId);
 
-      // Process Joined Tables
-      final List<Map<String, dynamic>> upcoming = [];
-      final List<Map<String, dynamic>> past = [];
+      final List<Map<String, dynamic>> photos = List<Map<String, dynamic>>.from(
+        photosResponse,
+      );
 
-      for (var entry in joinedTablesData) {
-        final table = entry['tables'];
-        if (table != null) {
-          final dt = DateTime.parse(table['datetime']);
-          if (dt.isAfter(DateTime.now())) {
-            upcoming.add(entry);
-          } else {
-            past.add(entry);
-          }
-        }
+      String avatarUrl = '';
+      try {
+        final primary = photos.firstWhere(
+          (p) => p['is_primary'] == true,
+          orElse: () => photos.isNotEmpty ? photos.first : {'photo_url': ''},
+        );
+        avatarUrl = primary['photo_url'];
+      } catch (e) {
+        // Fallback or empty
       }
-
-      // 5. Get Badges (Gamification)
-      final badges = await GamificationService().getUserBadges(widget.userId);
-
-      // 6. Get Connections (Following/Followers)
-      final socialService = SocialService();
-      // Fetch concurrently for speed
-      final results = await Future.wait([
-        socialService.getFollowing(widget.userId),
-        socialService.getFollowers(widget.userId),
-      ]);
-      final followingCount = results[0].length;
-      final followersCount = results[1].length;
 
       if (mounted) {
         setState(() {
-          _userData = userResponse;
-          _userPhotos = List<Map<String, dynamic>>.from(photosResponse);
-          _stats = {
-            'hosted': tablesHosted,
-            'joined': tablesJoined,
-            'following': followingCount,
-            'followers': followersCount,
-            'rating': 5.0, // Mock for now
+          _userData = {
+            ...userResponse,
+            'avatar_url': avatarUrl, // Override or inject avatar_url
           };
-          _hostedTables = List<Map<String, dynamic>>.from(hostedTablesData);
-          _upcomingTables = upcoming;
-          _pastTables = past;
+          _stats = {
+            'hosted': hostedCount,
+            'joined': joinedCount,
+            'followers': 0,
+            'following': 0,
+          };
           _badges = badges;
+          _hostedTables = tablesResponse;
+          _userPhotos = photos;
           _isLoading = false;
         });
       }
     } catch (e) {
-      print('Error loading profile: $e');
       if (mounted) {
         setState(() {
+          _errorMessage = e.toString();
           _isLoading = false;
-          _errorMessage = 'Failed to load profile. Please try again.';
         });
       }
     }
   }
 
-  void _openUserList(String title, Future<List<dynamic>> Function() fetchFunc) {
+  void _showSettingsMenu(BuildContext context) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => UserListScreen(
-          title: title,
-          currentUserId: widget.userId,
-          fetchFunction: fetchFunc,
-        ),
-      ),
+      MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
   }
 
-  Future<void> _launchInstagram() async {
-    final handle = _userData?['social_instagram'];
-    if (handle != null && handle.isNotEmpty) {
-      final uri = Uri.parse('https://instagram.com/$handle');
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      }
+  // RPG Logic Helper
+  Map<String, double> _calculateRpgStats() {
+    if (_stats == null) return {};
+    // Normalize to 0.0 - 1.0 based on arbitrary max values
+    double social = ((_stats!['hosted'] ?? 0) / 10.0).clamp(0.0, 1.0);
+    double active = ((_stats!['joined'] ?? 0) / 20.0).clamp(0.0, 1.0);
+    double karma = ((_userData?['trust_score'] ?? 50) / 100.0).clamp(0.0, 1.0);
+    double explore = (_userPhotos.length / 5.0).clamp(
+      0.0,
+      1.0,
+    ); // Mock explore based on photos
+    double taste = 0.7; // Mock taste
+
+    return {
+      'Social': social,
+      'Active': active,
+      'Karma': karma,
+      'Explore': explore,
+      'Taste': taste,
+    };
+  }
+
+  String _getCharacterClass(Map<String, double> rpgStats) {
+    if (rpgStats.isEmpty) return 'Novice Foodie';
+
+    // Find highest stat
+    var highest = rpgStats.entries.reduce((a, b) => a.value > b.value ? a : b);
+
+    switch (highest.key) {
+      case 'Social':
+        return 'Grand Host';
+      case 'Active':
+        return 'Table Hopper';
+      case 'Karma':
+        return 'Trusty Guide';
+      case 'Explore':
+        return 'Flavor Scout';
+      case 'Taste':
+        return 'Gourmand';
+      default:
+        return 'Foodie Adventurer';
     }
+  }
+
+  int _calculateLevel() {
+    // Simple level formula: (Hosted * 10 + Joined * 5) / 50
+    int hosted = _stats?['hosted'] ?? 0;
+    int joined = _stats?['joined'] ?? 0;
+    int xp = (hosted * 100) + (joined * 50);
+    return (xp / 100).floor() + 1; // Start at Level 1, max infinite
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         body: Center(
           child: CircularProgressIndicator(color: AppTheme.accentColor),
         ),
       );
     }
 
-    if (_errorMessage != null) {
+    if (_errorMessage != null || _userData == null) {
       return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          leading: IconButton(
-            icon: Icon(Icons.arrow_back, color: Colors.black),
-            onPressed: () => Navigator.pop(context),
-          ),
-        ),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.error_outline, size: 48, color: Colors.red),
-              SizedBox(height: 16),
-              Text(
-                _errorMessage!,
-                style: TextStyle(color: Colors.black54, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _loadUserProfile,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.accentColor,
-                  foregroundColor: Colors.black,
-                ),
-                child: Text('Retry'),
-              ),
-            ],
-          ),
-        ),
+        appBar: AppBar(title: const Text('Profile')),
+        body: Center(child: Text('User not found: $_errorMessage')),
       );
     }
 
-    if (_userData == null) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(child: Text('User not found')),
-      );
-    }
-
-    final showCarousel = _userPhotos.isNotEmpty;
-    final primaryPhoto = showCarousel
-        ? _userPhotos.first
-        : {'photo_url': _userData?['avatar_url']};
+    final rpgStats = _calculateRpgStats();
+    final charClass = _getCharacterClass(rpgStats);
+    final level = _calculateLevel();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: CustomScrollView(
         slivers: [
-          // Header / App Bar
+          // 1. RPG Header (SliverAppBar)
           SliverAppBar(
+            pinned: true,
+            expandedHeight: 280,
             leading: IconButton(
               icon: Container(
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: Colors.black26,
                   shape: BoxShape.circle,
                 ),
@@ -263,569 +237,523 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                   size: 20,
                 ),
               ),
-              onPressed: () {
-                if (widget.isOwnProfile) {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          const MainNavigationScreen(initialIndex: 1),
-                    ),
-                    (route) => false,
-                  );
-                } else {
-                  Navigator.of(context).pop();
-                }
-              },
+              onPressed: () => Navigator.pop(context),
             ),
             actions: [
-              // Options menu for both own and other profiles?
-              // For now, keep it simple. If own profile, maybe settings icon?
-              // User asked for "Edit Profile" as a button, not icon.
-              if (!widget.isOwnProfile)
+              if (widget.isOwnProfile) ...[
                 IconButton(
                   icon: Container(
                     padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: Colors.black26,
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
-                      Icons.more_vert,
+                      Icons.edit,
                       color: Colors.white,
                       size: 20,
                     ),
                   ),
-                  onPressed: () {},
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => EditProfileScreen(
+                          userProfile: _userData ?? {},
+                          userPhotos: _userPhotos,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 8),
+              ],
+              if (widget.isOwnProfile)
+                IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(
+                      color: Colors.black26,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.settings_outlined,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  onPressed: () => _showSettingsMenu(context),
                 ),
             ],
-            expandedHeight: 380, // Taller header
-            pinned: true,
-            backgroundColor: AppTheme.primaryColor,
-            elevation: 0,
             flexibleSpace: FlexibleSpaceBar(
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // 1. Image Layer
-                  if (showCarousel)
-                    PageView.builder(
-                      controller: _carouselController,
-                      itemCount: _userPhotos.length,
-                      onPageChanged: (index) =>
-                          setState(() => _currentCarouselIndex = index),
-                      itemBuilder: (context, index) {
-                        return Image.network(
-                          _userPhotos[index]['photo_url'],
-                          fit: BoxFit.cover,
-                        );
-                      },
-                    )
-                  else if (primaryPhoto['photo_url'] != null)
-                    Image.network(primaryPhoto['photo_url'], fit: BoxFit.cover)
-                  else
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [AppTheme.accentColor, Colors.white],
-                        ),
-                      ),
-                    ),
-
-                  // 2. Gradient Overlay (Top) - For status bar visibility
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 100,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colors.black54, Colors.transparent],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // 3. Gradient Overlay (Bottom) - For text readability
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    height: 200,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.bottomCenter,
-                          end: Alignment.topCenter,
-                          colors: [
-                            Colors.black.withOpacity(0.9),
-                            Colors.black.withOpacity(0.6),
-                            Colors.transparent,
+              background: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: isDark
+                        ? [
+                            Colors.purple.shade900,
+                            Theme.of(context).scaffoldBackgroundColor,
+                          ]
+                        : [
+                            Colors.blue.shade100,
+                            Theme.of(context).scaffoldBackgroundColor,
                           ],
-                        ),
-                      ),
-                    ),
                   ),
-
-                  // 4. Indicator Dots
-                  if (showCarousel && _userPhotos.length > 1)
-                    Positioned(
-                      top: 110,
-                      right: 16,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black45,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: Text(
-                          '${_currentCarouselIndex + 1}/${_userPhotos.length}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-
-                  // 5. User Info (Name & Verified)
-                  Positioned(
-                    bottom: 24,
-                    left: 20,
-                    right: 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Expanded(
-                              // Allow text to wrap if name is long
-                              child: Text(
-                                _userData!['display_name'] ?? 'Unknown',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 32, // Slightly smaller but cleaner
-                                  fontWeight: FontWeight.w800,
-                                  height: 1.1,
-                                  letterSpacing: -0.5,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if ((_userData!['trust_score'] ?? 0) > 80) ...[
-                              const SizedBox(width: 8),
-                              Icon(
-                                Icons.verified,
-                                color: AppTheme.accentColor, // Gold/Yellow
-                                size: 28,
-                              ),
-                            ],
-                          ],
-                        ),
-                        // Optional: Add occupation line here if user has one
-                        if (_userData!['occupation'] != null &&
-                            _userData!['occupation'].toString().isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: Text(
-                              _userData!['occupation'],
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Stats Row (Clean, Passport Style)
-          SliverToBoxAdapter(
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 100, 20, 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildPassportStat('Hosted', '${_stats!['hosted'] ?? 0}'),
-                      _buildVerticalDivider(),
-                      _buildPassportStat('Joined', '${_stats!['joined'] ?? 0}'),
-                      _buildVerticalDivider(),
-                      _buildPassportStat(
-                        'Following',
-                        '${_stats!['following'] ?? 0}',
-                        onTap: () => _openUserList(
-                          'Following',
-                          () => SocialService().getFollowing(widget.userId),
-                        ),
-                      ),
-                      _buildVerticalDivider(),
-                      _buildPassportStat(
-                        'Followers',
-                        '${_stats!['followers'] ?? 0}',
-                        onTap: () => _openUserList(
-                          'Followers',
-                          () => SocialService().getFollowers(widget.userId),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Main Action Button (Edit or Follow)
-                  _buildMainActionButton(context),
-                ],
-              ),
-            ),
-          ),
-
-          // Bio Section
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'About',
-                        style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      // Instagram Button (Restored)
-                      if (_userData!['social_instagram'] != null &&
-                          _userData!['social_instagram'].toString().isNotEmpty)
-                        GestureDetector(
-                          onTap: _launchInstagram,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
+                      // Avatar & Level
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: AppTheme.surfaceColor,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.camera_alt,
-                                  size: 16,
-                                  color: AppTheme.textPrimary,
-                                ),
-                                SizedBox(width: 4),
-                                Text(
-                                  '@${_userData!['social_instagram']}',
-                                  style: TextStyle(
-                                    color: AppTheme.textPrimary,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                  ),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppTheme.accentColor,
+                                width: 3,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppTheme.accentColor.withOpacity(0.5),
+                                  blurRadius: 10,
                                 ),
                               ],
                             ),
+                            child: CircleAvatar(
+                              radius: 40,
+                              backgroundImage: NetworkImage(
+                                _userData?['avatar_url'] ?? '',
+                              ),
+                              backgroundColor: Colors.grey,
+                            ),
                           ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppTheme.accentColor.withOpacity(0.5),
+                              ),
+                            ),
+                            child: Text(
+                              'LVL $level',
+                              style: const TextStyle(
+                                color: AppTheme.accentColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: 24),
+                      // Name & Class
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(height: 10),
+                            Text(
+                              _userData?['display_name'] ?? 'Unknown',
+                              style: Theme.of(context).textTheme.headlineMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
+                                  ),
+                            ),
+                            Text(
+                              charClass.toUpperCase(),
+                              style: const TextStyle(
+                                color: AppTheme.accentColor,
+                                letterSpacing: 1.2,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // XP Bar
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: 0.7, // Mock XP
+                                backgroundColor: isDark
+                                    ? Colors.black26
+                                    : Colors.white54,
+                                valueColor: const AlwaysStoppedAnimation(
+                                  AppTheme.accentColor,
+                                ),
+                                minHeight: 8,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '350 / 500 XP to next level',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isDark ? Colors.white60 : Colors.black54,
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
                     ],
                   ),
-                  SizedBox(height: 12),
-                  Text(
-                    _userData!['bio'] ?? 'No bio yet',
-                    style: TextStyle(
-                      color: _userData!['bio'] != null
-                          ? AppTheme.textSecondary
-                          : Colors.grey,
-                      fontSize: 16,
-                      height: 1.5,
-                      fontStyle: _userData!['bio'] != null
-                          ? FontStyle.normal
-                          : FontStyle.italic,
-                    ),
-                  ),
+                ),
+              ),
+            ),
+          ),
 
-                  // Tags Display
-                  if (_userData!['tags'] != null &&
+          // 2. Action Buttons & Bio
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Action Buttons
+                  // Action Buttons (Only for others)
+                  if (!widget.isOwnProfile) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {}, // Follow logic
+                            child: const Text('Follow'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed: () {}, // Message logic
+                          child: const Text('Message'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+
+                  // Bio
+                  if (_userData?['bio'] != null) ...[
+                    Text(
+                      _userData!['bio'],
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Interests / Tags
+                  if (_userData?['tags'] != null &&
                       (_userData!['tags'] as List).isNotEmpty) ...[
-                    SizedBox(height: 16),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: (_userData!['tags'] as List).map<Widget>((tag) {
                         return Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: AppTheme.surfaceColor,
+                            color: AppTheme.accentColor.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.grey.shade300),
+                            border: Border.all(
+                              color: AppTheme.accentColor.withOpacity(0.3),
+                            ),
                           ),
                           child: Text(
                             tag.toString(),
                             style: TextStyle(
-                              color: AppTheme.textPrimary,
                               fontSize: 12,
+                              color: AppTheme.accentColor,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                         );
                       }).toList(),
                     ),
+                    const SizedBox(height: 24),
                   ],
 
-                  SizedBox(height: 20),
+                  // Photos Gallery
+                  if (_userPhotos.isNotEmpty) ...[
+                    Text(
+                      'GALLERY',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 100, // Horizontal strip
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _userPhotos.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, index) {
+                          final url = _userPhotos[index]['photo_url'] ?? '';
+                          return GestureDetector(
+                            onTap: () {
+                              if (url.isNotEmpty) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        FullScreenImageViewer(imageUrl: url),
+                                  ),
+                                );
+                              }
+                            },
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Hero(
+                                tag: url,
+                                child: CachedNetworkImage(
+                                  imageUrl: url,
+                                  height: 100,
+                                  width: 100,
+                                  fit: BoxFit.cover,
+                                  placeholder: (context, url) =>
+                                      Container(color: Colors.grey[200]),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
 
-          // Photos Gallery
-          if (_userPhotos.length > 1)
-            SliverToBoxAdapter(
+          // 3. Radar Chart Canvas
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      'Photos',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.hexagon_outlined,
+                        size: 16,
+                        color: Colors.grey,
                       ),
+                      SizedBox(width: 8),
+                      Text(
+                        'STATS MATRIX',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          letterSpacing: 2,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Icon(
+                        Icons.hexagon_outlined,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    height: 200,
+                    child: RpgStatsRadar(
+                      stats: rpgStats,
+                      color: AppTheme.accentColor,
                     ),
                   ),
-                  SizedBox(height: 12),
-                  Container(
-                    height: 120,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: _userPhotos.length,
-                      itemBuilder: (context, index) {
-                        final photo = _userPhotos[index];
-                        return Container(
-                          width: 120,
-                          margin: EdgeInsets.only(right: 12),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            image: DecorationImage(
-                              image: NetworkImage(photo['photo_url']),
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  SizedBox(height: 20),
                 ],
               ),
             ),
+          ),
 
-          // Badges Section
-          if (_badges.isNotEmpty)
-            SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      'Passport',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+          // 3. Quests
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                _buildSectionHeader(context, 'ACTIVE QUESTS'),
+                const SizedBox(height: 12),
+                const QuestCard(
+                  title: 'Weekend Warrior',
+                  description: 'Join a table this weekend',
+                  progress: 0.3,
+                  reward: '+100 XP',
+                  type: 'Weekly',
+                ),
+                if ((_stats?['hosted'] ?? 0) > 0)
+                  const QuestCard(
+                    title: 'First Host',
+                    description: 'Host your first table',
+                    progress: 1.0,
+                    reward: 'UNLOCKED',
+                    isCompleted: true,
+                    type: 'Lifetime',
+                  )
+                else
+                  const QuestCard(
+                    title: 'First Host',
+                    description: 'Host your first table',
+                    progress: 0.0,
+                    reward: 'Badge + 500 XP',
+                    type: 'Lifetime',
                   ),
-                  SizedBox(height: 12),
-                  Container(
-                    height: 90,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: _badges.length,
-                      itemBuilder: (context, index) {
-                        final badge = _badges[index];
-                        return Container(
-                          width: 80,
-                          margin: EdgeInsets.only(right: 12),
+                const SizedBox(height: 24),
+              ]),
+            ),
+          ),
+
+          // 4. Loot Bag (Badges)
+          if (_badges.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  _buildSectionHeader(context, 'LOOT BAG'),
+                  const SizedBox(height: 12),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 4,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                        ),
+                    itemCount: _badges.length,
+                    itemBuilder: (context, index) {
+                      final badge = _badges[index];
+                      return Tooltip(
+                        message: badge['name'],
+                        child: Container(
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: isDark ? Colors.grey[900] : Colors.white,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: badge['color'].withOpacity(0.3),
+                              color: (badge['color'] as Color).withOpacity(0.5),
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.05),
-                                blurRadius: 4,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                badge['icon'],
-                                color: badge['color'],
-                                size: 32,
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                badge['name'],
-                                style: TextStyle(
-                                  color: AppTheme.textPrimary,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
+                                color: (badge['color'] as Color).withOpacity(
+                                  0.1,
                                 ),
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
                               ),
                             ],
                           ),
-                        );
-                      },
+                          child: Icon(
+                            badge['icon'],
+                            color: badge['color'],
+                            size: 32,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                ]),
+              ),
+            ),
+
+          // 5. Adventure Log (History)
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                _buildSectionHeader(context, 'ADVENTURE LOG'),
+                const SizedBox(height: 12),
+                if (_hostedTables.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Center(
+                      child: Text(
+                        'No adventures yet.',
+                        style: TextStyle(color: Colors.grey),
+                      ),
                     ),
                   ),
-                  SizedBox(height: 20),
-                ],
-              ),
-            ),
-
-          // Action Buttons
-          if (!widget.isOwnProfile)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          // TODO: Send message
-                        },
-                        icon: Icon(Icons.message),
-                        label: Text('Message'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.accentColor,
-                          foregroundColor: Colors.black,
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                ..._hostedTables.map(
+                  (table) => Card(
+                    elevation: 0,
+                    color: isDark
+                        ? Colors.white.withOpacity(0.05)
+                        : Colors.grey.shade50,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accentColor.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.history_edu,
+                          color: AppTheme.accentColor,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(
+                        table['title'] ?? 'Unknown Quest',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text(
+                        table['datetime'] != null
+                            ? DateFormat(
+                                'MMM d, y',
+                              ).format(DateTime.parse(table['datetime']))
+                            : 'Unknown Date',
+                      ),
+                      trailing: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          '+50 XP',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
                           ),
                         ),
                       ),
                     ),
-                    SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: () async {
-                        try {
-                          final socialService = SocialService();
-                          // For now, always follow (since isFollowing logic needs update)
-                          // In the future, this will toggle based on follow status
-                          await socialService.followUser(widget.userId);
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Following ${_userData!['display_name']}',
-                                ),
-                                backgroundColor: AppTheme.accentColor,
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        } catch (e) {
-                          print('Error following user: $e');
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Failed to follow user'),
-                                backgroundColor: Colors.red,
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        }
-                      },
-                      child: Icon(Icons.person_add),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primaryColor,
-                        foregroundColor: Colors.white,
-                        padding: EdgeInsets.all(16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-
-          SliverToBoxAdapter(child: SizedBox(height: 20)),
-
-          // Tables Tabs
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: TabBar(
-                controller: _tabController,
-                labelColor: AppTheme.primaryColor,
-                unselectedLabelColor: Colors.grey,
-                indicatorColor: AppTheme.accentColor,
-                indicatorWeight: 3,
-                labelStyle: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-                tabs: [
-                  Tab(text: 'Upcoming'),
-                  Tab(text: 'Past'),
-                  Tab(text: 'Hosted'),
-                ],
-              ),
-            ),
-          ),
-
-          // Tables Content
-          SliverFillRemaining(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _buildTablesList(_upcomingTables, false),
-                _buildTablesList(_pastTables, false),
-                _buildTablesList(_hostedTables, true),
-              ],
+                const SizedBox(height: 40),
+              ]),
             ),
           ),
         ],
@@ -833,247 +761,26 @@ class _UserProfileScreenState extends State<UserProfileScreen>
     );
   }
 
-  String _getDisplayLocation(String fullLocation) {
-    // If viewing own profile or is friend, show full location
-    if (widget.isOwnProfile) {
-      return fullLocation;
-    }
-
-    // For non-friends, show only general area (city/neighborhood)
-    // Example: "Starbucks, Makati, Metro Manila" -> "Makati, Metro Manila"
-    final parts = fullLocation.split(',');
-    if (parts.length >= 2) {
-      return parts.sublist(1).join(',').trim();
-    }
-    return fullLocation;
-  }
-
-  Widget _buildPassportStat(String label, String value, {VoidCallback? onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              color: AppTheme.primaryColor,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          SizedBox(height: 4),
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVerticalDivider() {
-    return Container(height: 24, width: 1, color: Colors.grey[300]);
-  }
-
-  Widget _buildMainActionButton(BuildContext context) {
-    if (widget.isOwnProfile) {
-      return SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: () async {
-            // Navigate to Edit Profile
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => EditProfileScreen(
-                  userProfile: _userData!,
-                  userPhotos: _userPhotos,
-                ),
-              ),
-            );
-
-            // Refresh if saved
-            if (result == true) {
-              _loadUserProfile();
-            }
-          },
-          style: OutlinedButton.styleFrom(
-            side: BorderSide(color: Colors.grey[300]!),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            padding: EdgeInsets.symmetric(vertical: 16),
-            foregroundColor: AppTheme.primaryColor,
-          ),
-          child: const Text(
-            'Edit Profile',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-      );
-    }
-
-    // For other users: Message & Follow Buttons
+  Widget _buildSectionHeader(BuildContext context, String title) {
     return Row(
       children: [
-        Expanded(
-          child: ElevatedButton(
-            onPressed: () {
-              // Placeholder for Follow action
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Follow feature coming soon!')),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              elevation: 0,
-            ),
-            child: const Text(
-              'Follow',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+        Container(
+          width: 4,
+          height: 16,
+          decoration: BoxDecoration(
+            color: AppTheme.accentColor,
+            borderRadius: BorderRadius.circular(2),
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () {
-              // Placeholder for Message action
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Messaging coming soon!')),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(color: Colors.grey[300]!),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              foregroundColor: AppTheme.primaryColor,
-            ),
-            child: const Text(
-              'Message',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildTablesList(List<Map<String, dynamic>> tables, bool isHosted) {
-    if (tables.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 40),
-        children: [
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.restaurant_menu,
-                  size: 64,
-                  color: Colors.grey.withOpacity(0.3),
-                ),
-                SizedBox(height: 16),
-                Text(
-                  'No tables yet',
-                  style: TextStyle(color: Colors.grey, fontSize: 16),
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-    }
-
-    return ListView.builder(
-      padding: EdgeInsets.all(20),
-      itemCount: tables.length,
-      itemBuilder: (context, index) {
-        final item = tables[index];
-        final table = isHosted ? item : item['tables'];
-        final datetime = DateTime.parse(table['datetime']);
-
-        return Container(
-          margin: EdgeInsets.only(bottom: 16),
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 10,
-                offset: Offset(0, 4),
-              ),
-            ],
-            border: Border.all(color: Colors.grey.shade100),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                table['title'],
-                style: TextStyle(
-                  color: AppTheme.primaryColor,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(
-                    Icons.location_on,
-                    color: AppTheme.accentColor,
-                    size: 16,
-                  ),
-                  SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      _getDisplayLocation(table['location_name']),
-                      style: TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(
-                    Icons.calendar_today,
-                    color: AppTheme.accentColor,
-                    size: 16,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    DateFormat('MMM d, yyyy · h:mm a').format(datetime),
-                    style: TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

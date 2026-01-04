@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/features/home/screens/feed_screen.dart';
 import 'package:bitemates/features/map/screens/map_screen.dart';
 import 'package:bitemates/features/map/widgets/create_table_modal.dart';
-import 'package:bitemates/features/tables/screens/my_tables_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/activity/screens/activity_screen.dart';
+import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
+import 'package:bitemates/features/activity/widgets/joined_tables_list.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/providers/auth_provider.dart';
@@ -33,9 +35,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
 
     return [
-      const FeedScreen(),
+      FeedScreen(
+        onJoinTable: (tableId) {
+          setState(() {
+            _selectedIndex = 1; // Switch to Map
+          });
+          // Wait for rebuild then open details
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _mapScreenKey.currentState?.showTableDetails(tableId);
+          });
+        },
+      ),
       MapScreen(key: _mapScreenKey),
-      const MyTablesScreen(), // My Tables / Trips
+      const ActivityScreen(), // Tables + Trips
       currentUserId != null
           ? UserProfileScreen(userId: currentUserId, isOwnProfile: true)
           : const Center(
@@ -73,133 +85,102 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  void _showSettingsMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
+  void _showQuickChat() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: true,
+        barrierColor: Colors.black54,
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return Stack(
+            children: [
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(color: Colors.transparent),
               ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings, color: Colors.black),
-              title: const Text(
-                'Settings',
-                style: TextStyle(color: Colors.white),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Settings coming soon!')),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.help_outline, color: Colors.black),
-              title: const Text(
-                'Help & Support',
-                style: TextStyle(color: Colors.white),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Help center coming soon!')),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline, color: Colors.black),
-              title: const Text('About', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('About page coming soon!')),
-                );
-              },
-            ),
-            const Divider(color: Colors.white24, height: 1),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: const Text('Log Out', style: TextStyle(color: Colors.red)),
-              onTap: () => _confirmLogout(context),
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _confirmLogout(BuildContext context) {
-    Navigator.pop(context); // Close settings menu
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF000000),
-        title: const Text('Log Out', style: TextStyle(color: Colors.white)),
-        content: const Text(
-          'Are you sure you want to log out?',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context); // Close dialog
-
-              try {
-                // Sign out from Supabase
-                await SupabaseConfig.client.auth.signOut();
-
-                // Update auth provider state
-                if (context.mounted) {
-                  context.read<AuthProvider>().signOut();
-
-                  // Navigate to login screen
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (context) => const LoginScreen(),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Hero(
+                  tag: 'quick_chat_bubble',
+                  child: Material(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(20),
                     ),
-                    (route) => false,
-                  );
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Error logging out: $e'),
-                      backgroundColor: Colors.red,
+                    clipBehavior: Clip.antiAlias,
+                    elevation: 16,
+                    child: SizedBox(
+                      height: MediaQuery.of(context).size.height * 0.7,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Use OverflowBox to allow content to exceed constraint during flight
+                          // but keep it alive to avoid state loss/GlobalKey issues.
+                          // Opacity hides the mess when very small.
+                          return OverflowBox(
+                            minHeight: 0,
+                            maxHeight: double.infinity,
+                            minWidth: 0,
+                            maxWidth: double.infinity,
+                            alignment: Alignment.topCenter,
+                            child: Opacity(
+                              opacity: constraints.maxHeight < 200 ? 0.0 : 1.0,
+                              child: SizedBox(
+                                height:
+                                    MediaQuery.of(context).size.height * 0.7,
+                                width: constraints.maxWidth,
+                                child: Column(
+                                  children: [
+                                    // Handle
+                                    Container(
+                                      margin: const EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                      width: 40,
+                                      height: 4,
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey[300],
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
+                                    // Title
+                                    Padding(
+                                      padding: const EdgeInsets.all(16.0),
+                                      child: Text(
+                                        'Active Chats',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleLarge
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                      ),
+                                    ),
+                                    // List
+                                    const Expanded(child: JoinedTablesList()),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                  );
-                }
-              }
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Log Out'),
-          ),
-        ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+
     return Scaffold(
       extendBody: true, // Allow body to extend behind navbar/fab
       body: Stack(
@@ -209,40 +190,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             child: IndexedStack(index: _selectedIndex, children: _screens),
           ),
 
-          // Floating menu button - top right (Settings)
-          if (_selectedIndex != 3)
-            Positioned(
-              top: 60,
-              right: 16,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 12,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(28),
-                    onTap: () => _showSettingsMenu(context),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      child: const Icon(
-                        Icons.menu,
-                        color: Color(0xFF000000),
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          // Draggable Chat Bubble (visible except on Activity screen maybe?)
+          // Showing everywhere for consistency as requested
+          if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
         ],
       ),
       floatingActionButton: Container(
@@ -269,8 +219,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(
-        color: Colors.white,
-        surfaceTintColor: Colors.white,
+        color: Theme.of(context).scaffoldBackgroundColor,
+        surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
         shape: const CircularNotchedRectangle(),
         notchMargin: 8.0,
         height: 80, // Taller bar
@@ -283,10 +233,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             const SizedBox(width: 48), // Spacer for FAB
             _buildNavItem(
               2,
-              Icons.flight_outlined,
-              Icons.flight,
-              'Trips',
-            ), // Assuming index 2 is still Trips in _screens logic (which is NOT true anymore, see logic check)
+              Icons.grid_view_outlined,
+              Icons.grid_view,
+              'Activity',
+            ), // Activity Screen
             _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
           ],
         ),

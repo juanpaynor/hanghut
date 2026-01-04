@@ -16,6 +16,8 @@ import 'package:path_provider/path_provider.dart';
 import '../widgets/liquid_morph_route.dart';
 import '../widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/active_users_bottom_sheet.dart';
+import 'package:provider/provider.dart';
+import 'package:bitemates/providers/theme_provider.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -69,6 +71,59 @@ class MapScreenState extends State<MapScreen>
       _updateHeartbeat();
     });
     _updateHeartbeat(); // Initial run
+  }
+
+  /// Public method to open table details from external screens (e.g. Feed)
+  Future<void> showTableDetails(String tableId) async {
+    try {
+      // 1. Check if table is already loaded in current view
+      var table = _tables.firstWhere(
+        (t) => t['id'] == tableId,
+        orElse: () => {},
+      );
+
+      // 2. If not found locally, fetch from DB
+      if (table.isEmpty) {
+        final response = await SupabaseConfig.client
+            .from('tables')
+            .select()
+            .eq('id', tableId)
+            .single();
+        table = response;
+      }
+
+      // 3. Prepare match data (needed for modal)
+      // Ensure user data is loaded
+      if (_currentUserData == null) {
+        await _loadCurrentUserData();
+      }
+
+      final matchData = _matchingService.calculateMatch(
+        currentUser: _currentUserData ?? {}, // Fallback empty if fetch failed
+        table: table,
+      );
+
+      // 4. Open Modal
+      if (mounted) {
+        // Center of screen for morph effect
+        final size = MediaQuery.of(context).size;
+        final center = Offset(size.width / 2, size.height / 2);
+
+        Navigator.of(context).push(
+          LiquidMorphRoute(
+            center: center,
+            page: TableCompactModal(table: table, matchData: matchData),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error showing table details: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not load table details')),
+        );
+      }
+    }
   }
 
   Future<void> _updateHeartbeat() async {
@@ -376,14 +431,21 @@ class MapScreenState extends State<MapScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required by AutomaticKeepAliveClientMixin
+    // Map Styles
+    const lightMapStyle = 'mapbox://styles/swiftdash/cmjwvnoqp001v01rdeseu6fz1';
+    const darkMapStyle =
+        'mapbox://styles/swiftdash/cmjyv1kco003m01rd6nkjcd27'; // Custom dark style
+
+    final isDarkMode = context.watch<ThemeProvider>().isDarkMode;
+
     return Scaffold(
       body: Stack(
         children: [
           GestureDetector(
             onTapUp: _onMapTap,
             child: MapWidget(
-              key: const ValueKey('mapWidget'),
-              styleUri: 'mapbox://styles/swiftdash/cmjwvnoqp001v01rdeseu6fz1',
+              key: ValueKey('mapWidget_${isDarkMode ? 'dark' : 'light'}'),
+              styleUri: isDarkMode ? darkMapStyle : lightMapStyle,
               cameraOptions: CameraOptions(
                 center: _currentPosition != null
                     ? Point(

@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/social_service.dart';
 
 class TableService {
   // Fetch active tables from map_ready_tables view
@@ -148,7 +149,7 @@ class TableService {
     required String venueName,
     required String venueAddress,
     String? title,
-    String? description,
+    String? description, // NEW parameter
     required int maxCapacity,
     required int budgetMin,
     required int budgetMax,
@@ -160,11 +161,7 @@ class TableService {
   }) async {
     print('📊 TABLE SERVICE: createTable called');
     print('  - Venue: $venueName');
-    print('  - Location: ($latitude, $longitude)');
-    print('  - Scheduled: ${scheduledTime.toIso8601String()}');
-    print('  - Activity: $activityType, Capacity: $maxCapacity');
-    print('  - Has marker image: ${markerImage != null}');
-    print('  - Marker emoji: $markerEmoji');
+    print('  - Description: ${description ?? "None"}');
 
     try {
       final user = SupabaseConfig.client.auth.currentUser;
@@ -180,7 +177,7 @@ class TableService {
         'datetime': scheduledTime.toIso8601String(),
         'location_name': venueName,
         'venue_address': venueAddress,
-        'description': description,
+        'description': description, // Pass description to DB
         'max_guests': maxCapacity,
         'cuisine_type': activityType,
         'price_per_person': budgetMax,
@@ -205,15 +202,18 @@ class TableService {
       print('  - Table ID: $tableId');
 
       // Upload marker image if provided
+      String? markerImageUrl;
       if (markerImage != null) {
         print('📸 TABLE SERVICE: Processing marker image upload...');
-        final imageUrl = await _uploadMarkerImage(tableId, markerImage);
-        if (imageUrl != null) {
-          print('📝 TABLE SERVICE: Updating table with marker URL: $imageUrl');
+        markerImageUrl = await _uploadMarkerImage(tableId, markerImage);
+        if (markerImageUrl != null) {
+          print(
+            '📝 TABLE SERVICE: Updating table with marker URL: $markerImageUrl',
+          );
           // Update table with image URL
           await SupabaseConfig.client
               .from('tables')
-              .update({'marker_image_url': imageUrl})
+              .update({'marker_image_url': markerImageUrl})
               .eq('id', tableId);
           print('✅ TABLE SERVICE: Table updated with marker image URL');
         } else {
@@ -225,11 +225,121 @@ class TableService {
         print('ℹ️ TABLE SERVICE: No marker image provided');
       }
 
+      // 4. Add Host as a Member (Critical for Chat/List visibility)
+      try {
+        print('👤 TABLE SERVICE: Adding host to table_members...');
+        await SupabaseConfig.client.from('table_members').insert({
+          'table_id': tableId,
+          'user_id': user.id,
+          'role': 'host',
+          'status': 'approved', // Using 'approved' to match list filter
+          'requested_at': DateTime.now().toIso8601String(),
+          'approved_at': DateTime.now().toIso8601String(),
+          'joined_at': DateTime.now().toIso8601String(),
+        });
+        print('✅ TABLE SERVICE: Host added as member');
+      } catch (e) {
+        print('⚠️ TABLE SERVICE: Failed to add host as member: $e');
+      }
+
+      // Auto-Post to Feed (New Feature)
+      try {
+        print('📣 TABLE SERVICE: Auto-posting to feed...');
+
+        await SocialService().createSystemPost(
+          content: 'New Hangout: $venueName',
+          postType: 'hangout',
+          visibility: 'public',
+          latitude: latitude,
+          longitude: longitude,
+          metadata: {
+            'table_id': tableId,
+            'venue_name': venueName,
+            'venue_address': venueAddress,
+            'scheduled_time': scheduledTime.toIso8601String(),
+            'activity_type': activityType,
+            'description': description, // Pass to Feed Metadata
+            'image_url': markerImageUrl ?? imageUrl,
+            'marker_emoji': markerEmoji,
+            'max_capacity': maxCapacity,
+          },
+        );
+        print('✅ TABLE SERVICE: Auto-post successful');
+      } catch (e) {
+        print('⚠️ TABLE SERVICE: Failed to auto-post: $e');
+      }
+
       return tableId;
     } catch (e) {
       print('❌ TABLE SERVICE: Error creating table');
       print('  - Error: $e');
       print('  - Type: ${e.runtimeType}');
+      rethrow;
+    }
+  }
+
+  // Delete a table
+  Future<void> deleteTable(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('🗑️ TABLE SERVICE: Deleting table $tableId');
+
+      // 1. Get table details first (for cleanup if needed)
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select()
+          .eq('id', tableId)
+          .single();
+
+      // 2. Delete the table (This will cascade to members, chat, etc. based on DB rules)
+      await SupabaseConfig.client
+          .from('tables')
+          .delete()
+          .eq('id', tableId)
+          .eq('host_id', user.id); // Security: Ensure host owns it
+
+      print('✅ TABLE SERVICE: Table deleted from DB');
+
+      // 3. Mark associated Feed Post as ENDED (instead of deleting it?)
+      // We search for a post where metadata->>table_id matches
+      final postResponse = await SupabaseConfig.client
+          .from('posts')
+          .select('id, metadata')
+          .eq('post_type', 'hangout')
+          // Using a filter on jsonb column
+          // Note: .filter('metadata->>table_id', 'eq', tableId)
+          .filter('metadata->>table_id', 'eq', tableId)
+          .maybeSingle();
+
+      if (postResponse != null) {
+        final postId = postResponse['id'];
+        final metadata = postResponse['metadata'] as Map<String, dynamic>;
+
+        print('🔄 TABLE SERVICE: Updating associated feed post $postId');
+
+        // Update status in metadata
+        metadata['status'] = 'ended';
+
+        await SupabaseConfig.client
+            .from('posts')
+            .update({'metadata': metadata})
+            .eq('id', postId);
+
+        // Notify Ably about the update (using 'post_updated' event if we had one,
+        // but for now the client might just see it on refresh.
+        // Ideally we'd emit an event. Let's assume AblyService handles this if we add it.)
+      }
+
+      // 4. Cleanup Marker Image
+      if (table['marker_image_url'] != null) {
+        await deleteMarkerImage(table['marker_image_url']);
+      }
+    } catch (e) {
+      print('❌ TABLE SERVICE: Error deleting table - $e');
       rethrow;
     }
   }
