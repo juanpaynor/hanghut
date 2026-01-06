@@ -6,7 +6,6 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
 import 'package:bitemates/features/activity/widgets/joined_tables_list.dart';
-import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:provider/provider.dart';

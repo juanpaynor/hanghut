@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'dart:math';
 
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -18,6 +19,7 @@ import '../widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/active_users_bottom_sheet.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/providers/theme_provider.dart';
+import 'package:bitemates/core/constants/model_registry.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -41,6 +43,7 @@ class MapScreenState extends State<MapScreen>
   Timer? _heartbeatTimer;
   int _activeUserCount = 0;
   bool _isFetching = false; // Added loading state
+  Set<String> _last3DTableIds = {}; // Cache to prevent unnecessary 3D rebuilds
 
   @override
   bool get wantKeepAlive => true;
@@ -292,25 +295,41 @@ class MapScreenState extends State<MapScreen>
     try {
       final style = _mapboxMap?.style;
 
-      // 1. Try local asset (Robust Method: Copy to temp file)
-      try {
-        final modelPath = await _copyAssetToTemp(
-          'assets/models/coffee_shop_cup.glb',
-          'shop_cup.glb',
-        );
-        print('☕ Coffee model copied to: $modelPath');
+      // 1. Load ALL Models from Registry
+      // We iterate through our known assets and load them into the style
+      // This is efficient because we only load unique models once
+      final modelsToLoad = {
+        'tennis_racket.glb': 'tennis-racket-model',
+        'basketball.glb': 'basketball-model',
+        'soccer_ball.glb': 'soccer-ball-model',
+        'burger.glb': 'burger-model',
+        'pizza.glb': 'pizza-model',
+        'chinese_food_box.glb': 'chinese-food-model',
+        'creamed_coffee.glb': 'creamed-coffee-model',
+        'coffee_shop_cup.glb': 'coffee-shop-model',
+        'arrow.glb': 'arrow-model',
+      };
 
-        await style?.addStyleModel('coffee-shop-model', 'file://$modelPath');
-      } catch (e) {
-        print('⚠️ Failed to load local coffee model: $e');
-        // Fallback to remote if local fails absolutely
+      for (final entry in modelsToLoad.entries) {
+        final assetName = entry.key;
+        final modelId = entry.value;
+
         try {
-          await style?.addStyleModel(
-            'coffee-shop-model',
-            'https://github.com/KhronosGroup/glTF-Sample-Models/raw/master/2.0/Duck/glTF-Binary/Duck.glb',
+          // Check if model already exists (optional optimization, but addStyleModel handles duplicates gracefully usually)
+          // Actually, Mapbox style API throws if you add duplicate ID.
+          // There isn't a direct 'hasModel' check exposed easily in this SDK wrapper typically,
+          // avoiding complex checks by wrapping in try-catch or just adding.
+          // Let's use the temp file approach for robustness
+
+          final modelPath = await _copyAssetToTemp(
+            'assets/models/$assetName',
+            assetName,
           );
-        } catch (e2) {
-          print('⚠️ Remote fallback failed: $e2');
+          print('📦 Loaded 3D Model: $assetName -> $modelId');
+          await style?.addStyleModel(modelId, 'file://$modelPath');
+        } catch (e) {
+          // Ignore "already exists" errors or similar
+          print('⚠️ Note loading $assetName: $e');
         }
       }
 
@@ -332,36 +351,67 @@ class MapScreenState extends State<MapScreen>
             sourceId: 'tables-3d-source',
             minZoom: 5.5, // Hide at country level
             maxZoom: 22.0,
-            modelId: 'coffee-shop-model',
+            modelId:
+                'coffee-shop-model', // Default; overridden by property below
             // Massive scale increase
             modelScale: [1500.0, 1500.0, 1500.0],
             // Lift it up significantly + slight tilt
             modelRotation: [0.0, 0.0, 0.0],
             // Lift significantly higher to account for massive scale pushing geometry down
             // Reduced height since we are reducing the scale
+            // Lift significantly higher (50m vertical offset)
             modelTranslation: [0.0, 0.0, 50.0],
             // Using model-scale as main visibility driver first.
             modelOpacity: 1.0,
             modelEmissiveStrength: 1.0,
           ),
         );
+
+        // 5. Update 'model-id' with expression for dynamic switching
+        await style?.setStyleLayerProperty(
+          'tables-3d-layer',
+          'model-id',
+          jsonEncode(['get', 'modelId']),
+        );
       }
 
-      // 4. Update 'model-scale' with an expression to make it responsive
+      // 4. Update 'model-scale' with Fixed Scaling.
+      // NOTE: Mapbox does NOT support zoom interpolation for model-scale with GeoJSON sources!
+      // Using fixed scale values instead.
+
+      final fixedScales = {
+        'tennis-racket-model': [
+          1.0,
+          1.0,
+          1.0,
+        ], // No scaling - using base model size
+        'basketball-model': [500.0, 500.0, 500.0],
+        'soccer-ball-model': [500.0, 500.0, 500.0],
+        'arrow-model': [4000.0, 4000.0, 4000.0],
+        'burger-model': [800.0, 800.0, 800.0],
+        'pizza-model': [800.0, 800.0, 800.0],
+        'chinese-food-model': [800.0, 800.0, 800.0],
+        'creamed-coffee-model': [800.0, 800.0, 800.0],
+        'coffee-shop-model': [800.0, 800.0, 800.0],
+      };
+
+      final matchCases = <Object>[];
+      fixedScales.forEach((id, scale) {
+        matchCases.add(id);
+        matchCases.add(scale);
+      });
+
+      // Default Fallback
+      matchCases.add([1000.0, 1000.0, 1000.0]);
+
       try {
         await style?.setStyleLayerProperty(
           'tables-3d-layer',
           'model-scale',
           jsonEncode([
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            10.0,
-            [800.0, 800.0, 800.0], // Zoom 10 (City): Much smaller (was 4000)
-            16.0,
-            [300.0, 300.0, 300.0], // Zoom 16 (Street): Smaller (was 1500)
-            20.0,
-            [20.0, 20.0, 20.0], // Zoom 20 (Close up): Tiny
+            "match",
+            ["get", "modelId"],
+            ...matchCases,
           ]),
         );
       } catch (e) {
@@ -690,9 +740,8 @@ class MapScreenState extends State<MapScreen>
         final double zoomDiff = (cameraState.zoom - _lastFetchCameraState!.zoom)
             .abs();
 
-        // Thresholds: 500 meters or 0.5 zoom level change
-        // Adjust these based on UX preference
-        if (dist < 500 && zoomDiff < 0.5) {
+        // Thresholds: 2km or 1.0 zoom level change (increased to reduce DB queries)
+        if (dist < 2000 && zoomDiff < 1.0) {
           print(
             'Skipping fetch: Moved ${dist.toStringAsFixed(0)}m, Zoom diff ${zoomDiff.toStringAsFixed(2)}',
           );
@@ -1004,6 +1053,13 @@ class MapScreenState extends State<MapScreen>
   Future<void> _update3DLayerData(List<Map<String, dynamic>> tables) async {
     if (_mapboxMap == null) return;
 
+    // Skip rebuild if table IDs haven't changed (prevents flicker on pan)
+    final currentTableIds = tables.map((t) => t['id'].toString()).toSet();
+    if (_last3DTableIds.isNotEmpty && currentTableIds == _last3DTableIds) {
+      return; // Data unchanged, skip rebuild
+    }
+    _last3DTableIds = currentTableIds;
+
     try {
       final style = _mapboxMap?.style;
       final sourceExists =
@@ -1019,24 +1075,91 @@ class MapScreenState extends State<MapScreen>
         }
       }
 
-      final features = tables.asMap().entries.map((entry) {
-        final index = entry.key;
+      // Group tables by location to detect overlaps
+      // Round to ~1 meter precision (5 decimal places ≈ 1.1m)
+      Map<String, List<MapEntry<int, Map<String, dynamic>>>> locationGroups =
+          {};
+
+      for (var entry in tables.asMap().entries) {
         final table = entry.value;
-        return {
-          'type': 'Feature',
-          'id': table['id'],
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [table['location_lng'], table['location_lat']],
-          },
-          'properties': {
-            'title': table['title'],
-            'index': index, // Added index for tap identification
-            'modelId': 'coffee-shop-model',
-            'rotation': [0.0, 0.0, 0.0],
-          },
-        };
-      }).toList();
+        final lat = table['location_lat'] as double;
+        final lng = table['location_lng'] as double;
+
+        // Create location key with 5 decimal precision
+        String locationKey =
+            '${lat.toStringAsFixed(5)}_${lng.toStringAsFixed(5)}';
+        locationGroups.putIfAbsent(locationKey, () => []).add(entry);
+      }
+
+      // Build features with radial expansion for overlapping tables
+      final features = <Map<String, dynamic>>[];
+
+      for (var group in locationGroups.values) {
+        if (group.length == 1) {
+          // Single table at this location - use exact coordinates
+          final entry = group.first;
+          final table = entry.value;
+          features.add({
+            'type': 'Feature',
+            'id': table['id'],
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [table['location_lng'], table['location_lat']],
+            },
+            'properties': {
+              'title': table['title'],
+              'index': entry.key,
+              'modelId': _getModelIdForAsset(table['marker_model']),
+              'modelScale': ModelRegistry.getScaleFactor(
+                table['marker_model'] ?? '',
+              ),
+              'rotation': [0.0, 0.0, 0.0],
+            },
+          });
+        } else {
+          // Multiple tables at same location - apply radial expansion
+          final baseLat = group.first.value['location_lat'] as double;
+          final baseLng = group.first.value['location_lng'] as double;
+          const double radiusMeters = 15.0; // 15 meter radius
+
+          for (int i = 0; i < group.length; i++) {
+            final entry = group[i];
+            final table = entry.value;
+
+            // Calculate angle for this table in the circle
+            double angle = (2 * pi * i) / group.length;
+
+            // Convert meters to degrees
+            // 1 degree latitude ≈ 111,320 meters
+            double offsetLat = radiusMeters / 111320;
+            // Longitude degrees vary by latitude
+            double offsetLng =
+                radiusMeters / (111320 * cos(baseLat * pi / 180));
+
+            // Calculate new position
+            double newLat = baseLat + (offsetLat * cos(angle));
+            double newLng = baseLng + (offsetLng * sin(angle));
+
+            features.add({
+              'type': 'Feature',
+              'id': table['id'],
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [newLng, newLat],
+              },
+              'properties': {
+                'title': table['title'],
+                'index': entry.key,
+                'modelId': _getModelIdForAsset(table['marker_model']),
+                'modelScale': ModelRegistry.getScaleFactor(
+                  table['marker_model'] ?? '',
+                ),
+                'rotation': [0.0, 0.0, 0.0],
+              },
+            });
+          }
+        }
+      }
 
       final geoJson = {'type': 'FeatureCollection', 'features': features};
 
@@ -1048,6 +1171,23 @@ class MapScreenState extends State<MapScreen>
     } catch (e) {
       print('⚠️ Error updating 3D layer source: $e');
     }
+  }
+
+  // Helper to map DB asset path to Mapbox Style Model ID
+  String _getModelIdForAsset(String? assetPath) {
+    if (assetPath == null) return 'arrow-model'; // Default
+
+    // Map asset filenames to our internal IDs
+    if (assetPath.contains('tennis')) return 'tennis-racket-model';
+    if (assetPath.contains('basketball')) return 'basketball-model';
+    if (assetPath.contains('soccer')) return 'soccer-ball-model';
+    if (assetPath.contains('burger')) return 'burger-model';
+    if (assetPath.contains('pizza')) return 'pizza-model';
+    if (assetPath.contains('chinese')) return 'chinese-food-model';
+    if (assetPath.contains('creamed')) return 'creamed-coffee-model';
+    if (assetPath.contains('coffee_shop')) return 'coffee-shop-model';
+
+    return 'arrow-model'; // Fallback
   }
 
   Future<Uint8List> _createCustomMarkerImage({

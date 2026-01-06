@@ -375,13 +375,19 @@ class _CreateTableModalState extends State<CreateTableModal> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Container(
       height:
           MediaQuery.of(context).size.height * 0.95, // Taller for more content
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: theme.colorScheme.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(color: Colors.indigo.withOpacity(0.1), width: 1),
+        border: Border.all(
+          color: theme.dividerColor.withOpacity(0.1),
+          width: 1,
+        ),
       ),
       child: Column(
         children: [
@@ -392,7 +398,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.grey[300],
+                color: isDark ? Colors.grey[700] : Colors.grey[300],
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -434,27 +440,27 @@ class _CreateTableModalState extends State<CreateTableModal> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // I WANT TO... Input
-                  const Text(
+                  Text(
                     'I want to...',
                     style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
-                      color: Colors.black,
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _activityController,
                     autofocus: true,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 22,
-                      color: Colors.black,
+                      color: theme.colorScheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                     decoration: InputDecoration(
                       hintText: 'grab coffee, play tennis, etc.',
                       hintStyle: TextStyle(
-                        color: Colors.grey[400],
+                        color: theme.hintColor,
                         fontWeight: FontWeight.w400,
                       ),
                       border: InputBorder.none,
@@ -470,7 +476,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -478,12 +484,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     controller: _venueController,
                     decoration: InputDecoration(
                       hintText: 'Search for a place',
-                      prefixIcon: const Icon(
+                      prefixIcon: Icon(
                         Icons.search,
-                        color: Colors.black54,
+                        color: theme.iconTheme.color?.withOpacity(0.7),
                       ),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
                         borderSide: BorderSide.none,
@@ -558,7 +564,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -566,32 +572,40 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     controller: _descriptionController,
                     maxLines: 3,
                     minLines: 1,
-                    style: const TextStyle(fontSize: 15),
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: theme.colorScheme.onSurface,
+                    ),
                     decoration: InputDecoration(
                       hintText: 'Add description, menu links, etc...',
-                      hintStyle: TextStyle(color: Colors.grey[400]),
+                      hintStyle: TextStyle(color: theme.hintColor),
                       filled: true,
-                      fillColor: Colors.grey[50], // Lighter background
+                      fillColor: isDark
+                          ? Colors.grey[800]
+                          : Colors.grey[50], // Lighter background
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide(color: Colors.grey[200]!),
+                        borderSide: BorderSide(
+                          color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                        ),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide(color: Colors.grey[200]!),
+                        borderSide: BorderSide(
+                          color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                        ),
                       ),
                     ),
                   ),
 
                   const SizedBox(height: 24),
 
-                  // WHEN? (New Pickers)
                   Text(
                     'When?',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -607,25 +621,34 @@ class _CreateTableModalState extends State<CreateTableModal> {
                               horizontal: 16,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.grey[100],
+                              color: isDark
+                                  ? Colors.grey[800]
+                                  : Colors.grey[100],
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey[300]!),
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.grey[700]!
+                                    : Colors.grey[300]!,
+                              ),
                             ),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.calendar_today,
                                   size: 18,
-                                  color: Colors.black54,
+                                  color: theme.iconTheme.color?.withOpacity(
+                                    0.7,
+                                  ),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
                                   DateFormat(
                                     'EEE, MMM d',
                                   ).format(_selectedDateTime),
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w600,
                                     fontSize: 15,
+                                    color: theme.colorScheme.onSurface,
                                   ),
                                 ),
                               ],
@@ -644,25 +667,34 @@ class _CreateTableModalState extends State<CreateTableModal> {
                               horizontal: 16,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.grey[100],
+                              color: isDark
+                                  ? Colors.grey[800]
+                                  : Colors.grey[100],
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey[300]!),
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.grey[700]!
+                                    : Colors.grey[300]!,
+                              ),
                             ),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.access_time,
                                   size: 18,
-                                  color: Colors.black54,
+                                  color: theme.iconTheme.color?.withOpacity(
+                                    0.7,
+                                  ),
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
                                   DateFormat(
                                     'h:mm a',
                                   ).format(_selectedDateTime),
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w600,
                                     fontSize: 15,
+                                    color: theme.colorScheme.onSurface,
                                   ),
                                 ),
                               ],
@@ -687,7 +719,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
+                            color: theme.colorScheme.onSurface,
                           ),
                         ),
                         const Spacer(),
@@ -745,7 +777,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -758,8 +790,8 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       width: double.infinity,
                       decoration: BoxDecoration(
                         color: _markerImage != null
-                            ? Colors.green[50]
-                            : Colors.grey[100],
+                            ? Colors.green.withOpacity(0.1)
+                            : (isDark ? Colors.grey[800] : Colors.grey[100]),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: _markerImage != null
@@ -777,7 +809,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                                 : Icons.camera_alt,
                             color: _markerImage != null
                                 ? Colors.green
-                                : Colors.black54,
+                                : theme.iconTheme.color?.withOpacity(0.7),
                           ),
                           const SizedBox(width: 8),
                           Text(
@@ -788,8 +820,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
                               color: _markerImage != null
-                                  ? Colors.green[700]
-                                  : Colors.black87,
+                                  ? (isDark
+                                        ? Colors.green[300]
+                                        : Colors.green[700])
+                                  : theme.colorScheme.onSurface.withOpacity(
+                                      0.8,
+                                    ),
                             ),
                           ),
                         ],

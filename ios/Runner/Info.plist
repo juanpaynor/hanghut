@@ -60,5 +60,9 @@
 	<string>BiteMates needs your location to show nearby dining tables and validate venue distances.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>BiteMates needs your location to show nearby dining tables and validate venue distances.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>instagram</string>
+	</array>
 </dict>
 </plist>

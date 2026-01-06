@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/features/settings/widgets/settings_section.dart';
 import 'package:bitemates/features/settings/widgets/settings_switch_tile.dart';
-import 'package:bitemates/core/services/auth_service.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';

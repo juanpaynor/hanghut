@@ -12,6 +12,7 @@ import 'package:bitemates/features/profile/widgets/quest_card.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -139,6 +140,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       context,
       MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
+  }
+
+  Future<void> _launchInstagram(String username) async {
+    final cleanUsername = username.replaceAll('@', '').trim();
+    if (cleanUsername.isEmpty) return;
+
+    final appUrl = Uri.parse('instagram://user?username=$cleanUsername');
+    final webUrl = Uri.parse('https://www.instagram.com/$cleanUsername/');
+
+    try {
+      if (await canLaunchUrl(appUrl)) {
+        await launchUrl(appUrl);
+      } else {
+        await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint('Error launching Instagram: $e');
+    }
   }
 
   // RPG Logic Helper
@@ -385,6 +404,51 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                 fontSize: 14,
                               ),
                             ),
+                            if (_userData?['occupation'] != null &&
+                                _userData!['occupation']
+                                    .toString()
+                                    .isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                _userData!['occupation'],
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: isDark
+                                          ? Colors.grey[400]
+                                          : Colors.grey[700],
+                                    ),
+                              ),
+                            ],
+                            if (_userData?['social_instagram'] != null &&
+                                _userData!['social_instagram']
+                                    .toString()
+                                    .isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              GestureDetector(
+                                onTap: () => _launchInstagram(
+                                  _userData!['social_instagram'],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.camera_alt_outlined,
+                                      size: 14,
+                                      color: AppTheme.accentColor,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '@${_userData!['social_instagram'].toString().replaceAll('@', '')}',
+                                      style: const TextStyle(
+                                        color: AppTheme.accentColor,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 16),
                             // XP Bar
                             ClipRRect(

@@ -6,6 +6,7 @@ import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/features/splash/screens/social_magnet_splash_screen.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 
@@ -39,7 +40,7 @@ class MyApp extends StatelessWidget {
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
             themeMode: themeProvider.themeMode,
-            home: const AuthGate(),
+            home: const SocialMagnetSplashScreen(),
           );
         },
       ),

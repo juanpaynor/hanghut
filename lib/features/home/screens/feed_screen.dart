@@ -292,19 +292,19 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
                         children: [
                           Text(
                             _userPosition != null
-                                ? 'Happening Nearby'
-                                : 'Discover Hangouts',
+                                ? 'Activities Nearby'
+                                : 'Discover Activities',
                             style: const TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.w800,
-                              color: Color(0xFF1E293B),
+                              color: Color.fromARGB(255, 120, 49, 227),
                               letterSpacing: -1,
                               height: 1.2,
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Find your next bite with friends.',
+                            'Find your next activity with friends & strangers.',
                             style: TextStyle(
                               fontSize: 15,
                               color: Theme.of(

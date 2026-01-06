@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/constants/model_registry.dart';
 
 class TableService {
   // Fetch active tables from map_ready_tables view
@@ -169,6 +170,11 @@ class TableService {
         throw Exception('User not authenticated');
       }
 
+      // Detect 3D Model logic (Store-on-Write)
+      // We check title, description, and cuisineType for keywords
+      final textToScan = '${title ?? ''} ${description ?? ''} $activityType';
+      final markerModelPath = ModelRegistry.detectActivityModel(textToScan);
+
       final insertData = {
         'host_id': user.id,
         'title': title ?? venueName,
@@ -184,6 +190,7 @@ class TableService {
         'status': 'open',
         'chat_storage_type':
             'telegram', // New tables use Telegram local-first mode
+        'marker_model': markerModelPath, // NEW: Save the detected 3D model path
         if (markerEmoji != null) 'marker_emoji': markerEmoji,
         if (imageUrl != null) 'image_url': imageUrl,
       };
