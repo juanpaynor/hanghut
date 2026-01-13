@@ -19,12 +19,14 @@ class SocialPostCard extends StatefulWidget {
 class _SocialPostCardState extends State<SocialPostCard> {
   late bool _isLiked;
   late int _likeCount;
+  late int _commentCount;
 
   @override
   void initState() {
     super.initState();
     _isLiked = widget.post['is_liked'] ?? false;
     _likeCount = widget.post['like_count'] ?? 0;
+    _commentCount = widget.post['comment_count'] ?? 0;
   }
 
   void _handleLike() {
@@ -39,7 +41,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
       }
     });
     // Call Service
-    // SocialService().togglePostLike(widget.post['id']); // TODO: Inject or import service
+    SocialService().togglePostLike(widget.post['id']);
   }
 
   @override

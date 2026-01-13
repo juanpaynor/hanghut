@@ -4,6 +4,7 @@ import 'package:bitemates/core/services/trip_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/trips/screens/trip_matches_screen.dart';
 
 class TripDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> trip;
@@ -342,29 +343,50 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
             // 3. Travelers (Matches)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Row(
-                children: [
-                  const Text(
-                    'Also in Town',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const Spacer(),
-                  if (_matches.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black12,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${_matches.length} matches',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+              child: InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          TripMatchesScreen(trip: widget.trip),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Also in Town',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                ],
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
+                    const Spacer(),
+                    if (_matches.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black12,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${_matches.length} matches',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
 

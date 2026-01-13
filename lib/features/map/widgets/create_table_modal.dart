@@ -81,7 +81,15 @@ class _CreateTableModalState extends State<CreateTableModal> {
   List<Map<String, dynamic>> _placePredictions = [];
   Timer? _debounce;
   bool _showPredictions = false;
-  String get _googleApiKey => dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+  // IMPORTANT: Replace with your actual Google Places API key!
+  static const String _fallbackGoogleKey =
+      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
+
+  String get _googleApiKey {
+    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+    if (envKey.isNotEmpty) return envKey;
+    return _fallbackGoogleKey;
+  }
 
   @override
   void initState() {
@@ -764,6 +772,36 @@ class _CreateTableModalState extends State<CreateTableModal> {
                             _selectedGifUrl = url;
                             _showGifPicker = false;
                           });
+                        },
+                      ),
+                    ),
+                  ],
+
+                  // Show selected GIF preview
+                  if (_selectedGifUrl != null) ...[
+                    const SizedBox(height: 16),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.network(
+                        _selectedGifUrl!,
+                        height: 200,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            height: 200,
+                            color: Colors.grey[200],
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                value:
+                                    loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                          loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
                         },
                       ),
                     ),

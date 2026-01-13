@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:provider/provider.dart';
+
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/profile_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:confetti/confetti.dart';
+import 'package:country_picker/country_picker.dart';
 
 class ProfileSetupScreen extends StatefulWidget {
   const ProfileSetupScreen({super.key});
@@ -18,6 +20,13 @@ class ProfileSetupScreen extends StatefulWidget {
 class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   final PageController _pageController = PageController();
   final ProfileService _profileService = ProfileService();
+  late ConfettiController _confettiController;
+
+  // Fixed Theme Colors (User Requirement: Indigo + Light Theme)
+  static const Color _primaryColor = Color(0xFF6B7FFF); // Indigo
+  static const Color _backgroundColor = Colors.white;
+  static const Color _textColor = Colors.black;
+  static const Color _secondaryTextColor = Color(0xFF757575);
 
   int _currentStep = 0;
   final int _totalSteps = 5; // Added photo step
@@ -30,6 +39,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   // Step 2: Basics Controllers
   final _bioController = TextEditingController();
+  Country? _selectedCountry;
   DateTime? _dateOfBirth;
   String? _genderIdentity;
   final List<String> _genderOptions = [
@@ -172,7 +182,18 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   @override
   void initState() {
     super.initState();
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 3),
+    );
     _fetchInterests();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    _bioController.dispose();
+    _confettiController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchInterests() async {
@@ -260,13 +281,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _pageController.dispose();
-    _bioController.dispose();
-    super.dispose();
-  }
-
   void _nextPage() async {
     // If on photo step and photo is selected, upload it first
     if (_currentStep == 0 &&
@@ -330,6 +344,12 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         photoUrl: _uploadedPhotoUrl,
       );
 
+      // Play Confetti! 🎉
+      _confettiController.play();
+
+      // Wait for confetti to play a bit before navigating
+      await Future.delayed(const Duration(seconds: 2));
+
       if (!mounted) return;
 
       if (mounted) {
@@ -353,113 +373,153 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Column(
+    // Force Light Theme
+    return Theme(
+      data: AppTheme.lightTheme.copyWith(
+        scaffoldBackgroundColor: _backgroundColor,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: _primaryColor,
+          primary: _primaryColor,
+          brightness: Brightness.light,
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: _backgroundColor,
+        body: Stack(
           children: [
-            // Header with Progress
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Row(
+            SafeArea(
+              child: Column(
                 children: [
-                  if (_currentStep > 0)
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: _previousPage,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    )
-                  else
-                    IconButton(
-                      icon: const Icon(Icons.logout, color: Colors.red),
-                      onPressed: () async {
-                        await SupabaseConfig.client.auth.signOut();
-                        if (mounted) {
-                          Navigator.of(context).pushReplacementNamed('/');
-                        }
-                      },
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
+                  // Header with Progress
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Row(
+                      children: [
+                        if (_currentStep > 0)
+                          IconButton(
+                            icon: const Icon(
+                              Icons.arrow_back,
+                              color: _textColor,
+                            ),
+                            onPressed: _previousPage,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          )
+                        else
+                          IconButton(
+                            icon: const Icon(
+                              Icons.logout,
+                              color: AppTheme.errorColor,
+                            ),
+                            onPressed: () async {
+                              await SupabaseConfig.client.auth.signOut();
+                              if (mounted) {
+                                Navigator.of(context).pushReplacementNamed('/');
+                              }
+                            },
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
 
-                  const SizedBox(width: 16),
+                        const SizedBox(width: 16),
+
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: (_currentStep + 1) / _totalSteps,
+                              backgroundColor: Colors.grey[200],
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                _primaryColor,
+                              ),
+                              minHeight: 6,
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width: 16),
+
+                        Text(
+                          '${_currentStep + 1}/$_totalSteps',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: _textColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                   Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: (_currentStep + 1) / _totalSteps,
-                        backgroundColor: Colors.grey[200],
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                          Colors.black,
+                    child: PageView(
+                      controller: _pageController,
+                      physics: const NeverScrollableScrollPhysics(),
+                      children: [
+                        _buildPhotoStep(),
+                        _buildBasicsStep(),
+                        _buildPersonalityStep(),
+                        _buildInterestsStep(),
+                        _buildPreferencesStep(),
+                      ],
+                    ),
+                  ),
+
+                  // Bottom Action Button
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _isLoading ? null : _nextPage,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _primaryColor,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shadowColor: _primaryColor.withValues(alpha: 0.4),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
-                        minHeight: 6,
+                        child: _isLoading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _currentStep == _totalSteps - 1
+                                    ? 'Complete Setup'
+                                    : 'Continue',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                       ),
                     ),
                   ),
-
-                  const SizedBox(width: 16),
-
-                  Text(
-                    '${_currentStep + 1}/$_totalSteps',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
                 ],
               ),
             ),
 
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _buildPhotoStep(),
-                  _buildBasicsStep(),
-                  _buildPersonalityStep(),
-                  _buildInterestsStep(),
-                  _buildPreferencesStep(),
+            // Confetti Overlay
+            Align(
+              alignment: Alignment.topCenter,
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirectionality: BlastDirectionality.explosive,
+                shouldLoop: false,
+                colors: const [
+                  _primaryColor,
+                  Colors.pink,
+                  Colors.orange,
+                  Colors.blue,
                 ],
-              ),
-            ),
-
-            // Bottom Action Button
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _nextPage,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          _currentStep == _totalSteps - 1
-                              ? 'Complete Setup'
-                              : 'Continue',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                ),
               ),
             ),
           ],
@@ -477,9 +537,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           const SizedBox(height: 40),
           Text(
             'Add your photo',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+            style: const TextStyle(
+              fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: Colors.black,
+              color: _textColor,
+              letterSpacing: -0.5,
             ),
           ).animate().fadeIn().moveY(begin: 20, end: 0),
 
@@ -488,10 +550,12 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           Text(
             'Show your smile! This helps others recognize you.',
             textAlign: TextAlign.center,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
-          ).animate().fadeIn(delay: 200.ms).moveY(begin: 20, end: 0),
+            style: const TextStyle(
+              fontSize: 16,
+              color: _secondaryTextColor,
+              height: 1.5,
+            ),
+          ).animate().fadeIn(delay: 100.ms).moveY(begin: 20, end: 0),
 
           const SizedBox(height: 48),
 
@@ -630,6 +694,66 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
           const SizedBox(height: 24),
 
+          // Country
+          const Text(
+            'Country',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: () {
+              showCountryPicker(
+                context: context,
+                showPhoneCode: false,
+                countryListTheme: CountryListThemeData(
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                  ),
+                  inputDecoration: InputDecoration(
+                    labelText: 'Search',
+                    hintText: 'Start typing to search',
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                  ),
+                ),
+                onSelect: (Country country) {
+                  setState(() => _selectedCountry = country);
+                },
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey[300]!),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.public, color: Colors.grey[600], size: 20),
+                  const SizedBox(width: 12),
+                  Text(
+                    _selectedCountry == null
+                        ? 'Select Country'
+                        : '${_selectedCountry!.flagEmoji} ${_selectedCountry!.name}',
+                    style: TextStyle(
+                      color: _selectedCountry == null
+                          ? Colors.grey[600]
+                          : Colors.black,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
           // Date of Birth
           const Text(
             'Date of Birth',
@@ -640,9 +764,13 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
             onTap: () async {
               final date = await showDatePicker(
                 context: context,
-                initialDate: DateTime(2000),
+                initialDate: DateTime.now().subtract(
+                  const Duration(days: 365 * 18),
+                ),
                 firstDate: DateTime(1900),
-                lastDate: DateTime.now(),
+                lastDate: DateTime.now().subtract(
+                  const Duration(days: 365 * 18),
+                ),
                 builder: (context, child) {
                   return Theme(
                     data: Theme.of(context).copyWith(
@@ -734,11 +862,13 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const SizedBox(height: 24),
           Text(
             'Vibe Check',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+            style: const TextStyle(
+              fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: Colors.black,
+              color: _textColor,
             ),
           ).animate().fadeIn().moveY(begin: 20, end: 0),
 
@@ -746,18 +876,29 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
           Text(
             'Answer these quick questions so we can find your crowd.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
-          ).animate().fadeIn(delay: 200.ms).moveY(begin: 20, end: 0),
+            style: const TextStyle(
+              fontSize: 16,
+              color: _secondaryTextColor,
+              height: 1.5,
+            ),
+          ).animate().fadeIn(delay: 100.ms).moveY(begin: 20, end: 0),
 
           const SizedBox(height: 32),
 
-          ..._personalityQuestions.asMap().entries.map((entry) {
-            final index = entry.key;
-            final question = entry.value;
-            return _buildQuestionCard(index, question);
-          }),
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _personalityQuestions.length,
+            separatorBuilder: (context, index) => const SizedBox(height: 32),
+            itemBuilder: (context, index) {
+              return _buildQuestionCard(index, _personalityQuestions[index])
+                  .animate()
+                  .fadeIn(delay: (200 + (index * 50)).ms)
+                  .moveY(begin: 20, end: 0);
+            },
+          ),
+
+          const SizedBox(height: 32),
         ],
       ),
     );
@@ -771,30 +912,49 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       children: [
         Text(
           question['question'] as String,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+            color: _textColor,
+          ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         ...List.generate((question['options'] as List).length, (optionIndex) {
           final option = question['options'][optionIndex];
+          final hasSelection = selectedAnswer != null;
           final isSelected = selectedAnswer == option['score'];
 
           return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: InkWell(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: GestureDetector(
               onTap: () {
                 setState(() {
                   _personalityAnswers[index] = option['score'] as int;
                 });
               },
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: isSelected ? Colors.black : Colors.white,
+                  color: isSelected ? _primaryColor : Colors.white,
                   border: Border.all(
-                    color: isSelected ? Colors.black : Colors.grey[300]!,
-                    width: 2,
+                    color: isSelected
+                        ? _primaryColor
+                        : (hasSelection
+                              ? Colors.grey[200]!
+                              : Colors.grey[300]!),
+                    width: isSelected ? 2 : 1.5,
                   ),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: _primaryColor.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
+                      : [],
                 ),
                 child: Row(
                   children: [
@@ -802,25 +962,32 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                       child: Text(
                         option['text'] as String,
                         style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.black,
+                          color: isSelected ? Colors.white : _textColor,
                           fontWeight: isSelected
                               ? FontWeight.bold
-                              : FontWeight.normal,
+                              : FontWeight.w500,
                           fontSize: 15,
                         ),
                       ),
                     ),
                     if (isSelected)
-                      const Icon(Icons.check_circle, color: Colors.white)
+                      const Icon(
+                        Icons.check_circle,
+                        color: Colors.white,
+                        size: 20,
+                      )
                     else
-                      Icon(Icons.circle_outlined, color: Colors.grey[400]),
+                      Icon(
+                        Icons.circle_outlined,
+                        color: Colors.grey[400],
+                        size: 20,
+                      ),
                   ],
                 ),
               ),
             ),
           );
         }),
-        const SizedBox(height: 24),
       ],
     );
   }

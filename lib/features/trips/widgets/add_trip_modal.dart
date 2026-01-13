@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/trip_service.dart';
 import 'package:google_places_flutter/google_places_flutter.dart';
 import 'package:google_places_flutter/model/prediction.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -22,7 +23,15 @@ class _AddTripModalState extends State<AddTripModal> {
       TextEditingController(); // Hidden, populated via parse
   final _descriptionController = TextEditingController();
 
-  String get _googleApiKey => dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+  // IMPORTANT: Replace with your actual Google Places API key!
+  static const String _fallbackGoogleKey =
+      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
+
+  String get _googleApiKey {
+    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+    if (envKey.isNotEmpty) return envKey;
+    return _fallbackGoogleKey;
+  }
 
   DateTime? _startDate;
   DateTime? _endDate;
@@ -134,7 +143,8 @@ class _AddTripModalState extends State<AddTripModal> {
       final user = SupabaseConfig.client.auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      await SupabaseConfig.client.from('user_trips').insert({
+      final tripService = TripService();
+      await tripService.createTrip({
         'user_id': user.id,
         'destination_city': _cityController.text.trim().split(',').first,
         'destination_country': _countryController.text.isNotEmpty

@@ -13,8 +13,14 @@ import 'package:bitemates/providers/theme_provider.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment variables
-  await dotenv.load();
+  // Load environment variables (optional for release builds)
+  try {
+    await dotenv.load();
+    print('✅ .env file loaded successfully');
+  } catch (e) {
+    print('⚠️ .env file not found (using fallback config)');
+    // This is expected for release builds where .env is gitignored
+  }
 
   // Initialize Supabase
   await SupabaseConfig.initialize();

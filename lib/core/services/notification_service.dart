@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -130,6 +131,63 @@ class NotificationService {
         .from('notifications')
         .update({'is_read': true})
         .eq('id', notificationId);
+  }
+
+  // --- Realtime Updates (Smart Ping) ---
+  final StreamController<int> _unreadCountController =
+      StreamController<int>.broadcast();
+  Stream<int> get unreadCountStream => _unreadCountController.stream;
+  RealtimeChannel? _notificationChannel;
+
+  /// Subscribes to realtime INSERT events for the current user's notifications.
+  /// This is lightweight: it just triggers a refresh of the count.
+  void subscribeToNotifications() {
+    final client = SupabaseConfig.client;
+    final userId = client.auth.currentUser?.id;
+
+    if (userId == null) return;
+    if (_notificationChannel != null) return; // Already subscribed
+
+    print('🔔 Subscribing to notification channel for user: $userId');
+
+    _notificationChannel = client
+        .channel('public:notifications:$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: userId,
+          ),
+          callback: (payload) {
+            print('🔔 New notification received! Refreshing count...');
+            _refreshUnreadCount();
+
+            // Optional: Show local notification snackbar or toast here if app is in foreground
+          },
+        )
+        .subscribe();
+
+    // Initial fetch
+    _refreshUnreadCount();
+  }
+
+  void unsubscribeNotifications() {
+    if (_notificationChannel != null) {
+      SupabaseConfig.client.removeChannel(_notificationChannel!);
+      _notificationChannel = null;
+    }
+  }
+
+  Future<void> _refreshUnreadCount() async {
+    try {
+      final count = await getUnreadCount();
+      _unreadCountController.add(count);
+    } catch (e) {
+      print('❌ Error refreshing unread count: $e');
+    }
   }
 
   Future<int> getUnreadCount() async {

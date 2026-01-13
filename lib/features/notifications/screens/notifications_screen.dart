@@ -114,6 +114,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.info;
         iconColor = Colors.grey;
         break;
+      case 'chat':
+        iconData = Icons.chat_bubble;
+        iconColor = Colors.deepPurple;
+        break;
       default:
         iconData = Icons.notifications;
         iconColor = AppTheme.accentColor;

@@ -3,7 +3,15 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class TenorService {
-  static String get _apiKey => dotenv.env['TENOR_API_KEY'] ?? '';
+  // IMPORTANT: Replace with your actual Tenor API key!
+  static const String _fallbackKey = 'AIzaSyAIw1DLbsu3ksGZuwxi0p3IwkTSozD-u8k';
+
+  static String get _apiKey {
+    final envKey = dotenv.env['TENOR_API_KEY'] ?? '';
+    if (envKey.isNotEmpty) return envKey;
+    return _fallbackKey;
+  }
+
   static const String _baseUrl = 'https://tenor.googleapis.com/v2';
 
   // Search GIFs

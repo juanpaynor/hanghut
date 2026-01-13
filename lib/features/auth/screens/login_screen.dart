@@ -1,123 +1,110 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui' as ui;
 
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/auth/screens/signup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Force Light Theme for this screen
+    // Force Light Theme for White/Indigo contrast
     return Theme(
       data: AppTheme.lightTheme,
       child: const Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: Colors.white,
-        resizeToAvoidBottomInset:
-            false, // Handle keyboard manually or avoid resize
-        body: PhysicsLoginBody(),
+        body: ParticleLoginBody(),
       ),
     );
   }
 }
 
-class PhysicsLoginBody extends StatefulWidget {
-  const PhysicsLoginBody({super.key});
+class ParticleLoginBody extends StatefulWidget {
+  const ParticleLoginBody({super.key});
 
   @override
-  State<PhysicsLoginBody> createState() => _PhysicsLoginBodyState();
+  State<ParticleLoginBody> createState() => _ParticleLoginBodyState();
 }
 
-class _PhysicsLoginBodyState extends State<PhysicsLoginBody>
+class _ParticleLoginBodyState extends State<ParticleLoginBody>
     with SingleTickerProviderStateMixin {
-  late Ticker _ticker;
-  final _physicsEngine = PhysicsEngine();
-  StreamSubscription? _accelerometerSub;
+  // Animation & Physics
+  late AnimationController _ticker;
+  final _physicsEngine = ParticleEngine();
+  StreamSubscription? _sensorSub;
 
-  // Form State
+  // Inputs
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isPasswordVisible = false;
 
-  // Layout Logic
-  final GlobalKey _cardKey = GlobalKey();
-  Rect? _staticBodyRect; // The Login Card
+  // Entrance Animations
+  double _cardOpacity = 0.0;
+  Offset _cardOffset = const Offset(0, 0.1);
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick)..start();
+    _ticker = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..repeat();
+    _ticker.addListener(_onTick);
+
     _initSensors();
 
-    // Initial Spawn
+    // Trigger Entrance
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _physicsEngine.spawnInitalNodes(MediaQuery.of(context).size);
-      _updateStaticBody();
+      _physicsEngine.init(MediaQuery.of(context).size);
+      setState(() {
+        _cardOpacity = 1.0;
+        _cardOffset = Offset.zero;
+      });
     });
   }
 
   void _initSensors() {
-    _accelerometerSub = accelerometerEventStream().listen((event) {
-      // Sensitivity factor
-      const sensitivity = 2.0;
-      // Invert X for natural feel (tilt left = slide left)
-      // Y force adds to gravity or counteracts it
+    // Smooth gyro reaction
+    _sensorSub = gyroscopeEventStream().listen((event) {
+      // Sensitivity
+      const double sensitivity = 5.0;
       _physicsEngine.updateSensorForce(
-        Offset(-event.x * sensitivity, event.y * sensitivity),
+        Offset(event.y * sensitivity, event.x * sensitivity),
       );
     });
   }
 
-  void _onTick(Duration elapsed) {
-    // Update Static Body every frame just in case of layout shifts (keyboard)
-    // Optimization: only do this if size changes
-    _updateStaticBody();
-
-    _physicsEngine.update(MediaQuery.of(context).size, _staticBodyRect);
-    setState(() {}); // Redraw
-  }
-
-  void _updateStaticBody() {
-    final renderBox = _cardKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null) {
-      final position = renderBox.localToGlobal(Offset.zero);
-      final size = renderBox.size;
-      // Define the "Roof" of the card as the static collision body
-      // We extend it strictly to the bottom of screen to treat it as solid block
-      final screenHeight = MediaQuery.of(context).size.height;
-      _staticBodyRect = Rect.fromLTWH(
-        position.dx,
-        position.dy,
-        size.width,
-        screenHeight - position.dy, // Extends to bottom
-      );
-    }
+  void _onTick() {
+    _physicsEngine.update(MediaQuery.of(context).size);
+    setState(() {}); // Redraw painter
   }
 
   @override
   void dispose() {
     _ticker.dispose();
-    _accelerometerSub?.cancel();
+    _sensorSub?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _handleLogin() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    // Tap Effect: Explosion!
+    if (!_formKey.currentState!.validate()) {
+      HapticFeedback.heavyImpact();
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    // Explode particles on tap
     _physicsEngine.explode();
 
     final authProvider = context.read<AuthProvider>();
@@ -128,13 +115,20 @@ class _PhysicsLoginBodyState extends State<PhysicsLoginBody>
 
     if (success && mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 600),
+          pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
       );
     } else if (mounted) {
+      HapticFeedback.heavyImpact();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(authProvider.errorMessage ?? 'Login failed'),
-          backgroundColor: AppTheme.errorColor,
+          backgroundColor: const Color(0xFF3F51B5), // Indigo
         ),
       );
     }
@@ -142,194 +136,188 @@ class _PhysicsLoginBodyState extends State<PhysicsLoginBody>
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // 1. Physics Layer (Background)
-        CustomPaint(
-          size: Size.infinite,
-          painter: PhysicsPainter(_physicsEngine.nodes),
-        ),
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    const indigo = Color(0xFF3F51B5);
 
-        // 2. Foreground UI (Login Card)
-        SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24.0,
-                vertical: 16.0,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: Container(
-                    key: _cardKey,
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.9),
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 20,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Branding
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                'BITEMATES',
-                                style: GoogleFonts.outfit(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: -1,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Text('👋', style: TextStyle(fontSize: 24)),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Stack(
+        children: [
+          // 1. Interactive Particle Network (Background)
+          CustomPaint(
+            size: Size.infinite,
+            painter: ParticlePainter(_physicsEngine.particles),
+          ),
 
-                          // Email
-                          TextFormField(
-                            controller: _emailController,
-                            decoration: InputDecoration(
-                              hintText: 'Email',
-                              prefixIcon: const Icon(Icons.email_outlined),
-                              filled: true,
-                              fillColor: Colors.grey[100],
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            validator: (v) =>
-                                v!.contains('@') ? null : 'Invalid email',
-                          ),
-                          const SizedBox(height: 16),
-
-                          // Password
-                          TextFormField(
-                            controller: _passwordController,
-                            obscureText: !_isPasswordVisible,
-                            decoration: InputDecoration(
-                              hintText: 'Password',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              filled: true,
-                              fillColor: Colors.grey[100],
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide.none,
-                              ),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _isPasswordVisible
-                                      ? Icons.visibility
-                                      : Icons.visibility_off,
-                                ),
-                                onPressed: () => setState(
-                                  () =>
-                                      _isPasswordVisible = !_isPasswordVisible,
-                                ),
-                              ),
-                            ),
-                            validator: (v) =>
-                                v!.length > 5 ? null : 'Short password',
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Login Button
-                          Consumer<AuthProvider>(
-                            builder: (context, auth, _) {
-                              return ElevatedButton(
-                                onPressed: auth.isLoading ? null : _handleLogin,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.accentColor,
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  elevation: 0,
-                                ),
-                                child: auth.isLoading
-                                    ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Text(
-                                        'Enter the Hub',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                              );
-                            },
-                          ),
-
-                          // Socials
-                          const SizedBox(height: 20),
-                          Center(
-                            child: Text(
-                              'or continue with',
-                              style: TextStyle(color: Colors.grey[500]),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              _SocialButton(icon: Icons.apple, onTap: () {}),
-                              const SizedBox(width: 16),
-                              _SocialButton(
-                                icon: Icons.g_mobiledata,
-                                onTap: () {},
-                              ),
-                            ],
-                          ),
-
-                          // Sign Up
-                          const SizedBox(height: 20),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                "New here? ",
-                                style: TextStyle(color: Colors.grey[600]),
-                              ),
-                              GestureDetector(
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const SignupScreen(),
-                                  ),
-                                ),
-                                child: Text(
-                                  "Join",
-                                  style: TextStyle(
-                                    color: AppTheme.accentColor,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
+          // 2. Foreground Content
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutCubic,
+            top: 0,
+            bottom: 0, // Fill screen, rely on padding for insets
+            left: 0,
+            right: 0,
+            child: Center(
+              child: SingleChildScrollView(
+                // Ensure content pushes up when keyboard appears
+                padding: EdgeInsets.only(
+                  left: 24,
+                  right: 24,
+                  bottom: bottomInset > 0 ? bottomInset + 20 : 20,
+                  top: 20,
+                ),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 800),
+                  curve: Curves.easeOut,
+                  opacity: _cardOpacity,
+                  child: AnimatedSlide(
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.easeOutCubic,
+                    offset: _cardOffset,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 32,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(32),
+                        boxShadow: [
+                          BoxShadow(
+                            color: indigo.withOpacity(0.15),
+                            blurRadius: 40,
+                            offset: const Offset(0, 20),
                           ),
                         ],
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // HERO SECTION
+                            Center(
+                              child: Image.asset(
+                                'assets/images/logo.png',
+                                height: 220, // Increased a bit as requested
+                                width: 220,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                            // "Hanghut" text removed for cleaner look
+                            const SizedBox(height: 12),
+                            Text(
+                              'Meet new people.',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                color: indigo.withOpacity(0.6),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 24), // Reduced from 32
+                            // INPUTS
+                            _IndigoInput(
+                              controller: _emailController,
+                              hint: 'Email',
+                              icon: Icons.email_outlined,
+                              validator: (v) => v!.contains('@')
+                                  ? null
+                                  : 'Enter a valid email',
+                            ),
+                            const SizedBox(height: 12),
+                            _IndigoInput(
+                              controller: _passwordController,
+                              hint: 'Password',
+                              icon: Icons.lock_outline,
+                              isPassword: true,
+                              isVisible: _isPasswordVisible,
+                              onVisibilityChanged: () => setState(
+                                () => _isPasswordVisible = !_isPasswordVisible,
+                              ),
+                              validator: (v) =>
+                                  v!.length > 5 ? null : 'Password too short',
+                            ),
+                            const SizedBox(height: 24),
+
+                            // ACTION BUTTON
+                            Consumer<AuthProvider>(
+                              builder: (context, auth, _) {
+                                return ElevatedButton(
+                                  onPressed: auth.isLoading
+                                      ? null
+                                      : _handleLogin,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: indigo,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 18,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    elevation: 10,
+                                    shadowColor: indigo.withOpacity(0.4),
+                                  ),
+                                  child: auth.isLoading
+                                      ? const SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  Colors.white,
+                                                ),
+                                          ),
+                                        )
+                                      : Text(
+                                          'Connect',
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                );
+                              },
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // FOOTER
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  "New to Hanghut? ",
+                                  style: TextStyle(
+                                    color: indigo.withOpacity(0.6),
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () {
+                                    HapticFeedback.lightImpact();
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const SignupScreen(),
+                                      ),
+                                    );
+                                  },
+                                  child: Text(
+                                    "Join Here",
+                                    style: TextStyle(
+                                      color: indigo,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -337,246 +325,197 @@ class _PhysicsLoginBodyState extends State<PhysicsLoginBody>
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SocialButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _SocialButton({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        // Indigo Circle for buttons too? User said Indigo circles for emojis
-        width: 50,
-        height: 50,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey[300]!),
-        ),
-        child: Icon(icon, color: Colors.black),
+        ],
       ),
     );
   }
 }
 
-// --- PHYSICS ENGINE ---
+class _IndigoInput extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final IconData icon;
+  final bool isPassword;
+  final bool? isVisible;
+  final VoidCallback? onVisibilityChanged;
+  final String? Function(String?)? validator;
 
-class PhysicsEngine {
-  final List<PhysicsNode> nodes = [];
+  const _IndigoInput({
+    required this.controller,
+    required this.hint,
+    required this.icon,
+    this.isPassword = false,
+    this.isVisible,
+    this.onVisibilityChanged,
+    this.validator,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const indigo = Color(0xFF3F51B5);
+    return TextFormField(
+      controller: controller,
+      obscureText: isPassword && !(isVisible ?? false),
+      style: const TextStyle(color: indigo, fontWeight: FontWeight.w600),
+      cursorColor: indigo,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: indigo.withOpacity(0.4)),
+        prefixIcon: Icon(icon, color: indigo.withOpacity(0.6)),
+        filled: true,
+        fillColor: Colors.grey[50], // Very subtle off-white
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: indigo.withOpacity(0.1)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: indigo, width: 2),
+        ),
+        suffixIcon: isPassword
+            ? IconButton(
+                icon: Icon(
+                  isVisible! ? Icons.visibility : Icons.visibility_off,
+                  color: indigo.withOpacity(0.6),
+                ),
+                onPressed: onVisibilityChanged,
+              )
+            : null,
+      ),
+      validator: validator,
+    );
+  }
+}
+
+// --- PARTICLE ENGINE ---
+
+class ParticleEngine {
+  final List<Particle> particles = [];
   final Random _rnd = Random();
   Offset _sensorForce = Offset.zero;
 
-  // Emojis: Hiking, Basketball, Food, etc.
-  final List<String> _emojis = [
-    '🏀', '⚽', '🎾', '🚵', '🧗', '🏄', // Activities
-    '🍔', '🍕', '🌭', '🍺', '☕', // Food
-    '🌮', '🍦', '🍩', '🥑',
-  ];
-
-  void updateSensorForce(Offset force) {
-    _sensorForce = force;
-  }
-
-  void spawnInitalNodes(Size screenSize) {
-    nodes.clear();
-    // Spawn 15-20 nodes
-    for (int i = 0; i < 20; i++) {
-      nodes.add(
-        PhysicsNode(
+  void init(Size size) {
+    particles.clear();
+    // Create ~60 particles for performance/aesthetic balance
+    for (int i = 0; i < 60; i++) {
+      particles.add(
+        Particle(
           position: Offset(
-            _rnd.nextDouble() * screenSize.width,
-            -_rnd.nextDouble() * 500 - 50, // Start above screen
+            _rnd.nextDouble() * size.width,
+            _rnd.nextDouble() * size.height,
           ),
           velocity: Offset(
-            (_rnd.nextDouble() - 0.5) * 5, // Random X spread
-            _rnd.nextDouble() * 5, // Initial drop speed
+            (_rnd.nextDouble() - 0.5) * 0.5, // Slow drifting
+            (_rnd.nextDouble() - 0.5) * 0.5,
           ),
-          emoji: _emojis[_rnd.nextInt(_emojis.length)],
-          radius: 24.0 + _rnd.nextDouble() * 10, // Random size
+          radius: _rnd.nextDouble() * 3 + 1, // 1-4px
         ),
       );
     }
   }
 
+  void updateSensorForce(Offset force) {
+    // Smooth interpolation could go here, but direct is responsive
+    _sensorForce = force;
+  }
+
   void explode() {
-    // Push everything UP and OUT
-    for (var node in nodes) {
-      node.velocity = Offset(
-        (node.velocity.dx + (node.position.dx % 10 - 5)) * 5,
-        -20.0 - _rnd.nextDouble() * 10, // Big Jump
+    for (var p in particles) {
+      p.velocity += Offset(
+        (_rnd.nextDouble() - 0.5) * 10,
+        (_rnd.nextDouble() - 0.5) * 10,
       );
     }
   }
 
-  void update(Size size, Rect? staticBody) {
-    const gravity = 0.5;
-    const friction = 0.98;
-    const bounce = -0.7;
+  void update(Size size) {
+    for (var p in particles) {
+      // Apply Velocity + Sensor Parallax
+      // We add sensor force to position directly for parallax feel,
+      // or to velocity for physics feel. Let's do velocity for "swarming".
+      p.velocity += _sensorForce * 0.01;
 
-    for (var node in nodes) {
-      // 1. Apply Forces
-      node.velocity += Offset(_sensorForce.dx, gravity + _sensorForce.dy);
-      node.velocity *= friction;
-      node.position += node.velocity;
+      // Drag/Friction to stop infinite acceleration
+      p.velocity *= 0.98;
 
-      // 2. Screen Collisions
-      // Floor
-      if (node.position.dy > size.height - node.radius) {
-        node.position = Offset(node.position.dx, size.height - node.radius);
-        node.velocity = Offset(node.velocity.dx, node.velocity.dy * bounce);
-      }
-      // Walls
-      if (node.position.dx < node.radius) {
-        node.position = Offset(node.radius, node.position.dy);
-        node.velocity = Offset(node.velocity.dx * bounce, node.velocity.dy);
-      }
-      if (node.position.dx > size.width - node.radius) {
-        node.position = Offset(size.width - node.radius, node.position.dy);
-        node.velocity = Offset(node.velocity.dx * bounce, node.velocity.dy);
+      // Keep a minimum drift
+      if (p.velocity.distance < 0.2) {
+        p.velocity += Offset(
+          (_rnd.nextDouble() - 0.5) * 0.02,
+          (_rnd.nextDouble() - 0.5) * 0.02,
+        );
       }
 
-      // 3. Static Body Collision (Login Card) - DISABLED per user request
-      // if (staticBody != null) {
-      //   _resolveStaticCollision(node, staticBody, bounce);
-      // }
-    }
+      p.position += p.velocity;
 
-    // 4. Node-to-Node Collision (Optional, expensive but nice)
-    // skipping for performance/simplicity or can add cheap version
-    _resolveNodeCollisions();
-  }
-
-  void _resolveStaticCollision(PhysicsNode node, Rect body, double bounce) {
-    // Simple AABB-ish check for "Landing on roof" or "Hitting side"
-    // We treat the body as a solid block.
-
-    // Check overlap
-    final circleRect = Rect.fromCircle(
-      center: node.position,
-      radius: node.radius,
-    );
-    if (!circleRect.overlaps(body)) return;
-
-    // Determine nearest edge
-
-    // Since we only really care about landing ON TOP or bouncing OFF SIDES:
-    // We prioritize Top collision if barely overlapping Y
-
-    if (node.position.dy < body.top + node.radius &&
-        node.position.dx > body.left &&
-        node.position.dx < body.right) {
-      // Top Hit
-      node.position = Offset(node.position.dx, body.top - node.radius);
-      node.velocity = Offset(node.velocity.dx, node.velocity.dy * bounce);
-
-      // SLIDE OFF: Push away from center if sitting on top
-      if (node.position.dx < body.center.dx) {
-        node.velocity -= const Offset(2.0, 0); // Push Left
-      } else {
-        node.velocity += const Offset(2.0, 0); // Push Right
-      }
-    } else if (node.position.dx < body.center.dx) {
-      // Left Hit (push out left)
-      if (node.position.dx > body.left - node.radius) {
-        // Penetrated
-        node.position = Offset(body.left - node.radius, node.position.dy);
-        node.velocity = Offset(node.velocity.dx * bounce, node.velocity.dy);
-      }
-    } else {
-      // Right Hit
-      if (node.position.dx < body.right + node.radius) {
-        node.position = Offset(body.right + node.radius, node.position.dy);
-        node.velocity = Offset(node.velocity.dx * bounce, node.velocity.dy);
-      }
-    }
-  }
-
-  void _resolveNodeCollisions() {
-    for (int i = 0; i < nodes.length; i++) {
-      for (int j = i + 1; j < nodes.length; j++) {
-        final n1 = nodes[i];
-        final n2 = nodes[j];
-        final dx = n2.position.dx - n1.position.dx;
-        final dy = n2.position.dy - n1.position.dy;
-        final distSq = dx * dx + dy * dy;
-        final radSum = n1.radius + n2.radius;
-
-        if (distSq < radSum * radSum && distSq > 0) {
-          final dist = sqrt(distSq);
-          final overlap = radSum - dist;
-          final nx = dx / dist;
-          final ny = dy / dist;
-
-          // Separate
-          final separation = overlap * 0.5;
-          n1.position -= Offset(nx * separation, ny * separation);
-          n2.position += Offset(nx * separation, ny * separation);
-
-          // Bounce (simplistic exchange)
-          // Just swapping velocities slightly or creating impulse
-          // Real physics is complex, let's just push them apart for "stacking" feel
-        }
-      }
+      // Wrap around screen
+      if (p.position.dx < -50)
+        p.position = Offset(size.width + 50, p.position.dy);
+      if (p.position.dx > size.width + 50)
+        p.position = Offset(-50, p.position.dy);
+      if (p.position.dy < -50)
+        p.position = Offset(p.position.dx, size.height + 50);
+      if (p.position.dy > size.height + 50)
+        p.position = Offset(p.position.dx, -50);
     }
   }
 }
 
-class PhysicsNode {
+class Particle {
   Offset position;
   Offset velocity;
-  final String emoji;
-  final double radius;
+  double radius;
 
-  PhysicsNode({
+  Particle({
     required this.position,
     required this.velocity,
-    required this.emoji,
     required this.radius,
   });
 }
 
-class PhysicsPainter extends CustomPainter {
-  final List<PhysicsNode> nodes;
-  PhysicsPainter(this.nodes);
+class ParticlePainter extends CustomPainter {
+  final List<Particle> particles;
+  static const indigo = Color(0xFF3F51B5);
+
+  ParticlePainter(this.particles);
 
   @override
   void paint(Canvas canvas, Size size) {
-    // User requested Indigo circles
-    final paint = Paint()..color = Colors.indigo;
+    final dotPaint = Paint()
+      ..color = indigo.withOpacity(0.6)
+      ..style = PaintingStyle.fill;
 
-    for (var node in nodes) {
-      // Draw Circle
-      canvas.drawCircle(node.position, node.radius, paint);
+    final linePaint = Paint()
+      ..color = indigo
+          .withOpacity(0.15) // Faint connections
+      ..strokeWidth = 1.0;
 
-      // Draw Emoji
-      final textSpan = TextSpan(
-        text: node.emoji,
-        style: TextStyle(
-          fontSize: node.radius * 1.2, // Fit inside
-          height: 1, // Fix text height issues
-        ),
-      );
-      final textPainter = TextPainter(
-        text: textSpan,
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-      );
-      textPainter.layout();
-      textPainter.paint(
-        canvas,
-        node.position - Offset(textPainter.width / 2, textPainter.height / 2),
-      );
+    // Draw Particles & Connections
+    for (int i = 0; i < particles.length; i++) {
+      final p1 = particles[i];
+
+      // Draw Dot
+      canvas.drawCircle(p1.position, p1.radius, dotPaint);
+
+      // Connect to neighbors
+      for (int j = i + 1; j < particles.length; j++) {
+        final p2 = particles[j];
+        final dx = p1.position.dx - p2.position.dx;
+        final dy = p1.position.dy - p2.position.dy;
+        final distSq = dx * dx + dy * dy;
+
+        // Connect if close enough (within 100px approx => 10000 sq)
+        if (distSq < 15000) {
+          canvas.drawLine(p1.position, p2.position, linePaint);
+        }
+      }
     }
   }
 
   @override
-  bool shouldRepaint(covariant PhysicsPainter oldDelegate) => true; // Always repaint for physics
+  bool shouldRepaint(covariant ParticlePainter oldDelegate) => true;
 }

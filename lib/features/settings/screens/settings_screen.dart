@@ -6,6 +6,9 @@ import 'package:bitemates/features/settings/widgets/settings_switch_tile.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:bitemates/core/constants/app_constants.dart';
+import 'package:bitemates/features/legal/screens/terms_of_service_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -22,6 +25,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _maxAge = 80; // "80+"
   bool _snoozeMode = false;
   bool _hideDistance = false;
+
+  Future<void> _launchUrl(String urlString) async {
+    final uri = Uri.parse(urlString);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
 
   void _incrementDistance() {
     setState(
@@ -306,6 +316,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 activeColor: Theme.of(context).primaryColor,
                 value: themeProvider.isDarkMode,
                 onChanged: (value) => themeProvider.toggleTheme(value),
+              ),
+            ],
+          ),
+
+          const Divider(),
+
+          SettingsSection(
+            title: 'LEGAL',
+            children: [
+              ListTile(
+                leading: Icon(
+                  Icons.policy,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: const Text('Terms of Service'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const TermsOfServiceScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  Icons.privacy_tip_outlined,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: const Text('Privacy Policy'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _launchUrl(AppConstants.privacyPolicyUrl),
               ),
             ],
           ),

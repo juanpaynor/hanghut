@@ -18,8 +18,11 @@ import '../widgets/liquid_morph_route.dart';
 import '../widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/active_users_bottom_sheet.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/core/constants/model_registry.dart';
+import 'package:bitemates/features/splash/screens/cloud_opening_screen.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -44,6 +47,7 @@ class MapScreenState extends State<MapScreen>
   int _activeUserCount = 0;
   bool _isFetching = false; // Added loading state
   Set<String> _last3DTableIds = {}; // Cache to prevent unnecessary 3D rebuilds
+  bool _showCloudIntro = true; // For cloud transition
 
   @override
   bool get wantKeepAlive => true;
@@ -244,6 +248,17 @@ class MapScreenState extends State<MapScreen>
       if (_mapboxMap != null && mounted) {
         _fetchTablesInViewport();
       }
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST116') {
+        print('⚠️ User profile incomplete, redirecting to setup...');
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const ProfileSetupScreen()),
+          );
+        }
+      } else {
+        print('❌ Error loading current user data: $e');
+      }
     } catch (e) {
       print('❌ Error loading current user data: $e');
     }
@@ -282,10 +297,15 @@ class MapScreenState extends State<MapScreen>
   }
 
   Future<void> _playIntroAnimation() async {
-    await Future.delayed(const Duration(milliseconds: 1000));
+    // Sync with Cloud Dive (starts at 200ms, takes 3s)
+    await Future.delayed(const Duration(milliseconds: 200));
     _mapboxMap?.flyTo(
-      CameraOptions(zoom: 16.0, pitch: 60.0, bearing: 45.0),
-      MapAnimationOptions(duration: 3000),
+      CameraOptions(
+        zoom: 16.0, // Land at street level
+        pitch: 60.0,
+        bearing: 45.0,
+      ),
+      MapAnimationOptions(duration: 3000), // Match cloud flight
     );
   }
 
@@ -505,8 +525,8 @@ class MapScreenState extends State<MapScreen>
                         ),
                       )
                     : Point(coordinates: Position(-74.0060, 40.7128)),
-                zoom: 15.0, // Zoom in closer for 3D effect
-                pitch: 60.0, // Tilt camera for 3D view
+                zoom: 11.0, // Start high up for "dive" effect
+                pitch: 45.0, // Slight tilt initially
               ),
               onCameraChangeListener: _onCameraChangeListener,
               onMapCreated: _onMapCreated,
@@ -575,6 +595,21 @@ class MapScreenState extends State<MapScreen>
                     ),
                   ),
                 ),
+              ),
+            ),
+
+          // Cloud Transition (Map Only)
+          if (_showCloudIntro)
+            Positioned.fill(
+              child: CloudOpeningScreen(
+                key: ValueKey(
+                  'CloudOpening_${DateTime.now().millisecondsSinceEpoch}',
+                ),
+                onAnimationComplete: () {
+                  if (mounted) {
+                    setState(() => _showCloudIntro = false);
+                  }
+                },
               ),
             ),
         ],
@@ -741,7 +776,7 @@ class MapScreenState extends State<MapScreen>
             .abs();
 
         // Thresholds: 2km or 1.0 zoom level change (increased to reduce DB queries)
-        if (dist < 2000 && zoomDiff < 1.0) {
+        if (dist < 5000 && zoomDiff < 2.0) {
           print(
             'Skipping fetch: Moved ${dist.toStringAsFixed(0)}m, Zoom diff ${zoomDiff.toStringAsFixed(2)}',
           );

@@ -18,6 +18,23 @@ class TableMemberService {
           .maybeSingle();
 
       if (existingMember != null) {
+        final status = existingMember['status'];
+        // Allow re-joining if previously left or declined/cancelled
+        if (status == 'left' || status == 'declined' || status == 'cancelled') {
+          // Update existing record to re-join
+          await SupabaseConfig.client
+              .from('table_members')
+              .update({
+                'status': 'approved',
+                'joined_at': DateTime.now().toIso8601String(),
+                'role': 'member',
+              })
+              .eq('table_id', tableId)
+              .eq('user_id', user.id);
+
+          return {'success': true, 'message': 'Successfully joined the table!'};
+        }
+
         return {
           'success': false,
           'message': 'You are already a member of this table',
@@ -27,7 +44,7 @@ class TableMemberService {
       // Get table info to check status and capacity
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests, title, location_name')
+          .select('status, max_guests, title, location_name, host_id')
           .eq('id', tableId)
           .single();
 
@@ -62,6 +79,8 @@ class TableMemberService {
         'approved_at': DateTime.now().toIso8601String(),
         'joined_at': DateTime.now().toIso8601String(),
       });
+
+      // Notification now handled by database trigger (handle_table_join)
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
@@ -117,6 +136,8 @@ class TableMemberService {
           .eq('table_id', tableId)
           .eq('user_id', userId)
           .eq('status', 'pending');
+
+      // Notification now handled by database trigger (handle_join_approval)
 
       return {'success': true, 'message': 'Request approved'};
     } catch (e) {

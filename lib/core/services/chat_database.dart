@@ -39,8 +39,6 @@ class ChatDatabase {
         timestamp INTEGER NOT NULL,
         reply_to_id TEXT,
         message_type TEXT DEFAULT 'text',
-        reply_to_id TEXT,
-        message_type TEXT DEFAULT 'text',
         gif_url TEXT,
         chat_type TEXT DEFAULT 'table',
         synced INTEGER DEFAULT 0
@@ -124,6 +122,28 @@ class ChatDatabase {
       final tableName = isTrip ? 'trip_messages' : 'messages';
       final idColumn = isTrip ? 'chat_id' : 'table_id';
 
+      // Check if reply_to_id message exists in Supabase
+      String? validReplyToId;
+      if (message['reply_to_id'] != null) {
+        try {
+          final replyMsg = await SupabaseConfig.client
+              .from(tableName)
+              .select('id')
+              .eq('id', message['reply_to_id'])
+              .maybeSingle();
+
+          if (replyMsg != null) {
+            validReplyToId = message['reply_to_id'];
+          } else {
+            print(
+              '⚠️ Reply target message not in cloud yet, skipping reply_to_id',
+            );
+          }
+        } catch (e) {
+          print('⚠️ Error checking reply_to_id: $e');
+        }
+      }
+
       final msgForCloud = {
         'id': message['id'],
         idColumn: message['table_id'], // Local DB always calls it table_id
@@ -139,12 +159,12 @@ class ChatDatabase {
         if (!isTrip)
           'content_type':
               message['message_type'] ?? 'text', // Legacy uses content_type
-        if (message['reply_to_id'] != null)
-          'reply_to_id': message['reply_to_id'],
+        if (validReplyToId != null) 'reply_to_id': validReplyToId,
         if (message['gif_url'] != null) 'gif_url': message['gif_url'],
       };
 
-      await SupabaseConfig.client.from(tableName).insert(msgForCloud);
+      // Use upsert to avoid duplicate key errors
+      await SupabaseConfig.client.from(tableName).upsert(msgForCloud);
 
       await _database!.update(
         'messages',
@@ -156,6 +176,17 @@ class ChatDatabase {
       print('☁️ Message synced to cloud: ${message['id']}');
     } catch (e) {
       print('⚠️ Failed to sync message to cloud: $e');
+      // Still mark as synced if it's a duplicate error
+      if (e.toString().contains('duplicate') ||
+          e.toString().contains('already exists')) {
+        await _database!.update(
+          'messages',
+          {'synced': 1},
+          where: 'id = ?',
+          whereArgs: [message['id']],
+        );
+        print('✅ Message already exists in cloud, marked as synced');
+      }
     }
   }
 
@@ -198,6 +229,18 @@ class ChatDatabase {
     } catch (e) {
       print('❌ Initial sync failed: $e');
     }
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    await init();
+
+    await _database!.delete(
+      'messages',
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+
+    print('🗑️ Deleted message: $messageId');
   }
 
   Future<void> deleteTableMessages(String tableId) async {

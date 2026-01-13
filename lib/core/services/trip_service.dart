@@ -4,7 +4,24 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class TripService {
   final SupabaseClient _client = SupabaseConfig.client;
 
-  // Optimized: Fetches matches using O(1) RPC
+  // Create a new trip
+  Future<Map<String, dynamic>?> createTrip(
+    Map<String, dynamic> tripData,
+  ) async {
+    try {
+      final response = await _client
+          .from('user_trips')
+          .insert(tripData)
+          .select()
+          .single();
+      return response;
+    } catch (e) {
+      print('❌ Error creating trip: $e');
+      rethrow;
+    }
+  }
+
+  // Fetch matches using O(1) RPC
   Future<List<Map<String, dynamic>>> getTripMatches(String tripId) async {
     try {
       final response = await _client.rpc(
@@ -15,6 +32,32 @@ class TripService {
     } catch (e) {
       print('❌ Error fetching trip matches: $e');
       return [];
+    }
+  }
+
+  // Get user's trips
+  Future<List<Map<String, dynamic>>> getUserTrips(String userId) async {
+    try {
+      final response = await _client
+          .from('user_trips')
+          .select()
+          .eq('user_id', userId)
+          .order('start_date', ascending: true);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      print('❌ Error fetching user trips: $e');
+      return [];
+    }
+  }
+
+  // Delete a trip
+  Future<bool> deleteTrip(String tripId) async {
+    try {
+      await _client.from('user_trips').delete().eq('id', tripId);
+      return true;
+    } catch (e) {
+      print('❌ Error deleting trip: $e');
+      return false;
     }
   }
 
@@ -76,6 +119,9 @@ class TripService {
           chat = await _client
               .from('trip_group_chats')
               .insert({
+                //'destination_city': trip['destination_city'], // Schema mismatch potentially if strict
+                //'destination_country': trip['destination_country'],
+                // Fixing column names to match potential schema or just use bucket logic
                 'destination_city': trip['destination_city'],
                 'destination_country': trip['destination_country'],
                 'start_date': monthStart.toIso8601String(),
@@ -108,17 +154,6 @@ class TripService {
     } catch (e) {
       print('❌ Error joining trip chat: $e');
       return null;
-    }
-  }
-
-  // Delete a trip
-  Future<bool> deleteTrip(String tripId) async {
-    try {
-      await _client.from('user_trips').delete().eq('id', tripId);
-      return true;
-    } catch (e) {
-      print('❌ Error deleting trip: $e');
-      return false;
     }
   }
 }

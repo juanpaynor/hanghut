@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -6,6 +7,7 @@ import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/avatar_stack.dart';
+import 'package:bitemates/features/shared/widgets/report_modal.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -25,9 +27,12 @@ class _TableCompactModalState extends State<TableCompactModal> {
   List<String> _memberPhotoUrls = [];
   int _totalMembers = 0;
 
-  @override
   void initState() {
     super.initState();
+    print('🎬 TABLE MODAL DEBUG:');
+    print('  - Table ID: ${widget.table['id']}');
+    print('  - image_url: ${widget.table['image_url']}');
+    print('  - marker_image_url: ${widget.table['marker_image_url']}');
     _checkMembershipStatus();
     _fetchMembers();
   }
@@ -159,9 +164,25 @@ class _TableCompactModalState extends State<TableCompactModal> {
                       top: Radius.circular(24),
                     ),
                     child: widget.table['image_url'] != null
-                        ? Image.network(
-                            widget.table['image_url'],
+                        ? CachedNetworkImage(
+                            imageUrl: widget.table['image_url'],
                             fit: BoxFit.cover,
+                            placeholder: (context, url) => Container(
+                              color: Colors.grey[200],
+                              child: const Center(
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.black26,
+                                ),
+                              ),
+                            ),
+                            errorWidget: (context, url, error) => Container(
+                              color: Colors.grey[200],
+                              child: const Icon(
+                                Icons.broken_image,
+                                color: Colors.black26,
+                              ),
+                            ),
                           )
                         : Container(
                             decoration: BoxDecoration(
@@ -205,7 +226,41 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     ),
                   ),
 
-                  // Close Button
+                  // Report Button (Top Left)
+                  if (!_isHost)
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: Material(
+                        color: Colors.white,
+                        elevation: 2,
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          onTap: () {
+                            showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: Colors.transparent,
+                              builder: (context) => ReportModal(
+                                entityType: 'table',
+                                entityId: widget.table['id'],
+                              ),
+                            );
+                          },
+                          customBorder: const CircleBorder(),
+                          child: const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(
+                              Icons.flag_outlined,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Close Button (Top Right)
                   Positioned(
                     top: 12,
                     right: 12,
@@ -228,10 +283,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     ),
                   ),
 
-                  // Match Badge
+                  // Match Badge (Moved down slightly to avoid potential overlap with report)
                   if (matchScore > 0)
                     Positioned(
-                      top: 12,
+                      top: 56, // Moved down below buttons
                       left: 12,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -551,7 +606,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
     return ElevatedButton(
       onPressed: _joinTable,
       style: buttonStyle,
-      child: const Text('Join Table'),
+      child: const Text(
+        'Join Table',
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      ),
     );
   }
 

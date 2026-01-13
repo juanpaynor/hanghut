@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/trips/widgets/add_trip_modal.dart';
 import 'package:bitemates/features/trips/screens/trip_details_screen.dart';
+import 'package:bitemates/core/services/trip_service.dart';
 import 'package:intl/intl.dart';
 
 class MyTripsList extends StatefulWidget {
@@ -22,20 +23,18 @@ class _MyTripsListState extends State<MyTripsList> {
     _loadMyTrips();
   }
 
+  final TripService _tripService = TripService();
+
   Future<void> _loadMyTrips() async {
     final user = SupabaseConfig.client.auth.currentUser;
     if (user == null) return;
 
     try {
-      final response = await SupabaseConfig.client
-          .from('user_trips')
-          .select()
-          .eq('user_id', user.id)
-          .order('start_date', ascending: true);
+      final trips = await _tripService.getUserTrips(user.id);
 
       if (mounted) {
         setState(() {
-          _myTrips = List<Map<String, dynamic>>.from(response);
+          _myTrips = trips;
           _isLoading = false;
         });
       }

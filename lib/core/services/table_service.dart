@@ -192,7 +192,8 @@ class TableService {
             'telegram', // New tables use Telegram local-first mode
         'marker_model': markerModelPath, // NEW: Save the detected 3D model path
         if (markerEmoji != null) 'marker_emoji': markerEmoji,
-        if (imageUrl != null) 'image_url': imageUrl,
+        if (imageUrl != null)
+          'image_url': imageUrl, // Vibe GIF displays in modal header
       };
 
       print('📤 TABLE SERVICE: Sending to Supabase...');

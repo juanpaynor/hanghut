@@ -230,6 +230,9 @@ class SocialService {
           'post_id': postId,
           'user_id': userId,
         });
+
+        // Notification now handled by database trigger (handle_new_like)
+
         return true;
       }
     } catch (e) {
@@ -333,6 +336,48 @@ class SocialService {
           );
           avatarUrl = primary['photo_url'];
         }
+      }
+
+      // NOTIFY POST AUTHOR (or parent comment author if reply)
+      try {
+        if (parentId != null) {
+          // Reply to comment - notify the comment author
+          final parentComment = await _client
+              .from('comments')
+              .select('user_id')
+              .eq('id', parentId)
+              .single();
+
+          final commentAuthorId = parentComment['user_id'];
+
+          if (commentAuthorId != userId) {
+            // Notification now handled by database trigger (handle_new_comment)
+            // await _client.from('notifications').insert({
+            //   'user_id': commentAuthorId,
+            //   'actor_id': userId,
+            //   'type': 'comment',
+            //   'title': 'New Reply',
+            //   'body': 'Someone replied to your comment',
+            //   'entity_id': postId,
+            //   'metadata': {'post_id': postId, 'comment_id': response['id']},
+            // });
+          }
+        } else {
+          // Top-level comment - notify post author
+          final post = await _client
+              .from('posts')
+              .select('user_id')
+              .eq('id', postId)
+              .single();
+
+          final postAuthorId = post['user_id'];
+
+          if (postAuthorId != userId) {
+            // Notification now handled by database trigger (handle_new_comment)
+          }
+        }
+      } catch (e) {
+        print('⚠️ Failed to create comment notification: $e');
       }
 
       return {

@@ -13,6 +13,7 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:bitemates/features/shared/widgets/report_modal.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -36,11 +37,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
   String? _errorMessage;
+  bool _isFollowing = false;
 
   @override
   void initState() {
     super.initState();
     _loadUserProfile();
+    if (!widget.isOwnProfile) {
+      _checkFollowStatus();
+    }
   }
 
   Future<void> _loadUserProfile() async {
@@ -133,6 +138,85 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         });
       }
     }
+  }
+
+  Future<void> _checkFollowStatus() async {
+    try {
+      final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+      if (currentUserId == null) return;
+
+      final result = await SupabaseConfig.client
+          .from('follows')
+          .select('id')
+          .eq('follower_id', currentUserId)
+          .eq('following_id', widget.userId)
+          .maybeSingle();
+
+      if (mounted) {
+        setState(() {
+          _isFollowing = result != null;
+        });
+      }
+    } catch (e) {
+      print('Error checking follow status: $e');
+    }
+  }
+
+  Future<void> _toggleFollow() async {
+    try {
+      final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+      if (currentUserId == null) return;
+
+      if (_isFollowing) {
+        // Unfollow
+        await SupabaseConfig.client
+            .from('follows')
+            .delete()
+            .eq('follower_id', currentUserId)
+            .eq('following_id', widget.userId);
+
+        if (mounted) {
+          setState(() {
+            _isFollowing = false;
+          });
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Unfollowed')));
+        }
+      } else {
+        // Follow
+        await SupabaseConfig.client.from('follows').insert({
+          'follower_id': currentUserId,
+          'following_id': widget.userId,
+        });
+
+        if (mounted) {
+          setState(() {
+            _isFollowing = true;
+          });
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Following!')));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    }
+  }
+
+  void _openDirectMessage() {
+    // TODO: Implement direct messaging
+    // For now, show a coming soon message
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Direct messaging coming soon!'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   void _showSettingsMenu(BuildContext context) {
@@ -302,6 +386,49 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ),
                   ),
                   onPressed: () => _showSettingsMenu(context),
+                )
+              else
+                PopupMenuButton<String>(
+                  onSelected: (value) {
+                    if (value == 'report') {
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (context) => ReportModal(
+                          entityType: 'user',
+                          entityId: widget.userId,
+                        ),
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'report',
+                      child: Row(
+                        children: [
+                          Icon(Icons.flag, color: Colors.red),
+                          SizedBox(width: 8),
+                          Text(
+                            'Report User',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(
+                      color: Colors.black26,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.more_vert,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
                 ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -496,13 +623,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       children: [
                         Expanded(
                           child: ElevatedButton(
-                            onPressed: () {}, // Follow logic
-                            child: const Text('Follow'),
+                            onPressed: _toggleFollow,
+                            child: Text(_isFollowing ? 'Unfollow' : 'Follow'),
                           ),
                         ),
                         const SizedBox(width: 8),
                         OutlinedButton(
-                          onPressed: () {}, // Message logic
+                          onPressed: _openDirectMessage,
                           child: const Text('Message'),
                         ),
                       ],
@@ -710,6 +837,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       return Tooltip(
                         message: badge['name'],
                         child: Container(
+                          padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             color: isDark ? Colors.grey[900] : Colors.white,
                             borderRadius: BorderRadius.circular(12),
@@ -726,10 +854,27 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                               ),
                             ],
                           ),
-                          child: Icon(
-                            badge['icon'],
-                            color: badge['color'],
-                            size: 32,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                badge['icon'],
+                                color: badge['color'],
+                                size: 28,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                badge['name'],
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: badge['color'],
+                                ),
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
                         ),
                       );

@@ -7,8 +7,6 @@ import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
 import 'package:bitemates/features/activity/widgets/joined_tables_list.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/providers/auth_provider.dart';
-import 'package:provider/provider.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -22,13 +20,13 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   late int _selectedIndex;
 
+  final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
+
   @override
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
   }
-
-  final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
 
   List<Widget> get _screens {
     final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
@@ -37,21 +35,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       FeedScreen(
         onJoinTable: (tableId) {
           setState(() {
-            _selectedIndex = 1; // Switch to Map
+            _selectedIndex = 1;
           });
-          // Wait for rebuild then open details
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showTableDetails(tableId);
           });
         },
       ),
       MapScreen(key: _mapScreenKey),
-      const ActivityScreen(), // Tables + Trips
+      const ActivityScreen(),
       currentUserId != null
           ? UserProfileScreen(userId: currentUserId, isOwnProfile: true)
-          : const Center(
-              child: Text("Please log in to view profile"),
-            ), // Profile
+          : const Center(child: Text("Please log in")),
     ];
   }
 
@@ -62,7 +57,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _showCreateTableModal() {
-    // Get user's current location from map screen
     final position = _mapScreenKey.currentState?.getCurrentPosition();
 
     showModalBottomSheet(
@@ -73,11 +67,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         currentLat: position?.latitude,
         currentLng: position?.longitude,
         onTableCreated: () {
-          // Switch to map view and refresh
           setState(() {
             _selectedIndex = 1;
           });
-          // Trigger map refresh if possible
           _mapScreenKey.currentState?.refreshTables();
         },
       ),
@@ -114,9 +106,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                       height: MediaQuery.of(context).size.height * 0.7,
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          // Use OverflowBox to allow content to exceed constraint during flight
-                          // but keep it alive to avoid state loss/GlobalKey issues.
-                          // Opacity hides the mess when very small.
                           return OverflowBox(
                             minHeight: 0,
                             maxHeight: double.infinity,
@@ -131,7 +120,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                                 width: constraints.maxWidth,
                                 child: Column(
                                   children: [
-                                    // Handle
                                     Container(
                                       margin: const EdgeInsets.symmetric(
                                         vertical: 12,
@@ -143,7 +131,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                                         borderRadius: BorderRadius.circular(2),
                                       ),
                                     ),
-                                    // Title
                                     Padding(
                                       padding: const EdgeInsets.all(16.0),
                                       child: Text(
@@ -156,7 +143,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                                             ),
                                       ),
                                     ),
-                                    // List
                                     const Expanded(child: JoinedTablesList()),
                                   ],
                                 ),
@@ -181,16 +167,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
 
     return Scaffold(
-      extendBody: true, // Allow body to extend behind navbar/fab
+      extendBody: true,
       body: Stack(
         children: [
-          // Full screen content
           Positioned.fill(
             child: IndexedStack(index: _selectedIndex, children: _screens),
           ),
 
-          // Draggable Chat Bubble (visible except on Activity screen maybe?)
-          // Showing everywhere for consistency as requested
           if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
         ],
       ),
@@ -208,7 +191,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ],
         ),
         child: FloatingActionButton(
-          heroTag: 'main_fab', // Unique tag to prevent collisions
+          heroTag: 'main_fab',
           onPressed: _showCreateTableModal,
           backgroundColor: Theme.of(context).primaryColor,
           elevation: 0,
@@ -222,20 +205,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
         shape: const CircularNotchedRectangle(),
         notchMargin: 8.0,
-        height: 80, // Taller bar
+        height: 80,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
             _buildNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
             _buildNavItem(1, Icons.map_outlined, Icons.map, 'Map'),
-            const SizedBox(width: 48), // Spacer for FAB
+            const SizedBox(width: 48),
             _buildNavItem(
               2,
               Icons.grid_view_outlined,
               Icons.grid_view,
               'Activity',
-            ), // Activity Screen
+            ),
             _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
           ],
         ),
@@ -250,7 +233,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     String label,
   ) {
     final isSelected = _selectedIndex == index;
-    // Use primary color for selected item
     final activeColor = Theme.of(context).primaryColor;
 
     return InkWell(

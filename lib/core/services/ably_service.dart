@@ -7,6 +7,7 @@ class AblyService {
   AblyService._internal();
 
   ably.Realtime? _realtime;
+  bool _isConnected = false;
 
   Future<void> init() async {
     if (_realtime != null) return;
@@ -23,6 +24,13 @@ class AblyService {
 
       _realtime!.connection.on().listen((stateChange) {
         print('🔄 ABLY: Connection state changed: ${stateChange.current}');
+        _isConnected = stateChange.current == ably.ConnectionState.connected;
+
+        // Auto-reconnect on disconnect
+        if (stateChange.current == ably.ConnectionState.disconnected ||
+            stateChange.current == ably.ConnectionState.suspended) {
+          print('⚠️ ABLY: Connection lost, will auto-reconnect');
+        }
       });
 
       print('✅ ABLY: Initialized');
@@ -37,6 +45,11 @@ class AblyService {
     return channel.subscribe();
   }
 
+  ably.RealtimeChannel? getChannel(String channelName) {
+    if (_realtime == null) return null;
+    return _realtime!.channels.get(channelName);
+  }
+
   Future<void> publishMessage({
     required String channelName,
     required String content,
@@ -44,6 +57,7 @@ class AblyService {
     required String senderName,
     String? senderPhotoUrl,
     String contentType = 'text',
+    String? messageId, // Add message ID
   }) async {
     if (_realtime == null) await init();
 
@@ -52,6 +66,7 @@ class AblyService {
       await channel.publish(
         name: 'chat_message',
         data: {
+          'id': messageId, // Include message ID
           'content': content,
           'contentType': contentType,
           'senderId': senderId,
@@ -159,8 +174,30 @@ class AblyService {
     }
   }
 
+  /// Get connection status
+  bool get isConnected => _isConnected;
+
+  /// Get connection state stream
+  Stream<ably.ConnectionStateChange>? getConnectionStateStream() {
+    return _realtime?.connection.on();
+  }
+
+  /// Manual reconnect
+  Future<void> reconnect() async {
+    if (_realtime == null) return;
+    try {
+      await _realtime!.connection.close();
+      await Future.delayed(Duration(seconds: 1));
+      await _realtime!.connection.connect();
+      print('🔄 ABLY: Manual reconnect triggered');
+    } catch (e) {
+      print('❌ ABLY: Reconnect failed - $e');
+    }
+  }
+
   void dispose() {
     _realtime?.close();
     _realtime = null;
+    _isConnected = false;
   }
 }
