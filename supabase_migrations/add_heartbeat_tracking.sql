@@ -23,40 +23,39 @@ $$;
 -- Create RPC function to get list of active users with their primary photo
 -- Supports pagination (page_size, page_number)
 CREATE OR REPLACE FUNCTION get_active_users(
-  page_size int DEFAULT 20,
-  page_number int DEFAULT 0
+  page_size INT DEFAULT 20,
+  page_number INT DEFAULT 0
 )
 RETURNS TABLE (
-  id uuid,
-  display_name text,
-  avatar_url text,
-  user_photos json,
-  last_active_at timestamptz
-)
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
+  id UUID,
+  display_name TEXT,
+  avatar_url TEXT,
+  last_active_at TIMESTAMPTZ,
+  user_photos JSONB
+) AS $$
 BEGIN
   RETURN QUERY
   SELECT 
-    u.id, 
-    u.display_name, 
-    (
-      SELECT photo_url 
-      FROM user_photos up 
-      WHERE up.user_id = u.id AND up.is_primary = true 
-      LIMIT 1
-    ) as avatar_url,
-    (
-      SELECT json_agg(json_build_object('photo_url', up.photo_url)) 
-      FROM user_photos up 
-      WHERE up.user_id = u.id
-    ) as user_photos,
-    u.last_active_at
+    u.id,
+    u.display_name,
+    u.avatar_url,
+    u.last_active_at,
+    COALESCE(
+      (
+        SELECT jsonb_agg(jsonb_build_object('photo_url', p.photo_url))
+        FROM user_photos p
+        WHERE p.user_id = u.id
+        ORDER BY p.is_primary DESC, p.display_order
+        LIMIT 1
+      ),
+      '[]'::jsonb
+    ) as user_photos
   FROM users u
-  WHERE u.last_active_at > (now() - interval '10 minutes')
+  WHERE 
+    u.last_active_at > NOW() - INTERVAL '10 minutes'
+    AND (u.status = 'active' OR u.status IS NULL)
   ORDER BY u.last_active_at DESC
   LIMIT page_size
-  OFFSET page_number * page_size;
+  OFFSET (page_number * page_size);
 END;
-$$;
+$$ LANGUAGE plpgsql;

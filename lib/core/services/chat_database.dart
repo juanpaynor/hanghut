@@ -20,7 +20,7 @@ class ChatDatabase {
 
     _database = await openDatabase(
       path,
-      version: 2,
+      version: 3, // Bumped for sequence_number
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -37,6 +37,7 @@ class ChatDatabase {
         sender_name TEXT,
         content TEXT,
         timestamp INTEGER NOT NULL,
+        sequence_number INTEGER,
         reply_to_id TEXT,
         message_type TEXT DEFAULT 'text',
         gif_url TEXT,
@@ -47,7 +48,7 @@ class ChatDatabase {
 
     await db.execute('''
       CREATE INDEX idx_table_messages 
-      ON messages(table_id, timestamp ASC)
+      ON messages(table_id, sequence_number DESC)
     ''');
 
     print('✅ ChatDatabase schema created');
@@ -60,19 +61,56 @@ class ChatDatabase {
       );
       print('🆙 Upgraded ChatDatabase to v2 (added chat_type)');
     }
+
+    if (oldVersion < 3) {
+      await db.execute(
+        "ALTER TABLE messages ADD COLUMN sequence_number INTEGER",
+      );
+      // Recreate index to use sequence_number
+      await db.execute("DROP INDEX IF EXISTS idx_table_messages");
+      await db.execute('''
+        CREATE INDEX idx_table_messages 
+        ON messages(table_id, sequence_number DESC)
+      ''');
+      print('🆙 Upgraded ChatDatabase to v3 (added sequence_number)');
+    }
   }
 
-  Future<List<Map<String, dynamic>>> getMessages(String tableId) async {
+  /// Get messages with pagination support
+  /// [limit] - Number of messages to fetch (default: 50)
+  /// [offset] - Number of messages to skip (for pagination)
+  /// Orders by sequence_number (server-assigned) for guaranteed correct order
+  Future<List<Map<String, dynamic>>> getMessages(
+    String tableId, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
     await init();
 
     final messages = await _database!.query(
       'messages',
       where: 'table_id = ?',
       whereArgs: [tableId],
-      orderBy: 'timestamp ASC',
+      // Order by sequence_number (with fallback to timestamp for old messages)
+      orderBy: 'COALESCE(sequence_number, timestamp) DESC',
+      limit: limit,
+      offset: offset,
     );
 
+    // Reverse to show oldest first in UI
     return messages;
+  }
+
+  /// Get total message count for a table (for pagination UI)
+  Future<int> getMessageCount(String tableId) async {
+    await init();
+
+    final result = await _database!.rawQuery(
+      'SELECT COUNT(*) as count FROM messages WHERE table_id = ?',
+      [tableId],
+    );
+
+    return Sqflite.firstIntValue(result) ?? 0;
   }
 
   Future<List<Map<String, dynamic>>> getUnsyncedMessages(String tableId) async {
@@ -204,7 +242,10 @@ class ChatDatabase {
           .from(tableName)
           .select()
           .eq(idColumn, tableId)
-          .order(timeColumn, ascending: true);
+          .order(
+            'sequence_number',
+            ascending: true,
+          ); // Order by sequence number
 
       if (cloudMessages.isEmpty) return;
 
@@ -216,6 +257,7 @@ class ChatDatabase {
           'sender_name': msg['sender_name'], // Might be null depending on query
           'content': msg['content'],
           'timestamp': DateTime.parse(msg[timeColumn]).millisecondsSinceEpoch,
+          'sequence_number': msg['sequence_number'], // Include sequence number
           'reply_to_id': msg['reply_to_id'],
           'message_type': msg['message_type'] ?? msg['content_type'] ?? 'text',
           'gif_url': msg['gif_url'],
@@ -253,5 +295,23 @@ class ChatDatabase {
     );
 
     print('🗑️ Deleted all messages for table: $tableId');
+  }
+
+  /// Cleanup old messages (older than 30 days)
+  /// Keeps recent messages to prevent unlimited database growth
+  Future<void> cleanupOldMessages() async {
+    await init();
+
+    final cutoffTimestamp = DateTime.now()
+        .subtract(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+
+    final deletedCount = await _database!.delete(
+      'messages',
+      where: 'timestamp < ? AND synced = 1', // Only delete synced messages
+      whereArgs: [cutoffTimestamp],
+    );
+
+    print('🧹 Cleaned up $deletedCount old messages (>30 days)');
   }
 }

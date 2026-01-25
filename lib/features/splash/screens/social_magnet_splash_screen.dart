@@ -1,8 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
-import 'package:bitemates/features/auth/screens/login_screen.dart';
-import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/main.dart'; // Import for AuthGate
 import 'package:bitemates/core/config/supabase_config.dart';
 
 class SocialMagnetSplashScreen extends StatefulWidget {
@@ -100,13 +99,11 @@ class _SocialMagnetSplashScreenState extends State<SocialMagnetSplashScreen>
   }
 
   void _navigateToHome() {
-    final session = SupabaseConfig.client.auth.currentSession;
     Navigator.pushReplacement(
       context,
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => session != null
-            ? const MainNavigationScreen()
-            : const LoginScreen(),
+        pageBuilder: (_, __, ___) =>
+            const AuthGate(), // Use AuthGate for status checking
         transitionDuration: const Duration(milliseconds: 800),
         transitionsBuilder: (_, a, __, child) {
           return FadeTransition(opacity: a, child: child);
@@ -200,24 +197,11 @@ class _SocialMagnetSplashScreenState extends State<SocialMagnetSplashScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
-                                blurRadius: 20,
-                                spreadRadius: 5,
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.people, // Or App Logo Asset
-                            size: 60,
-                            color: AppTheme.primaryColor,
-                          ),
+                        Image.asset(
+                          'assets/images/Hanghut.png',
+                          width: 150,
+                          height: 150,
+                          fit: BoxFit.contain,
                         ),
                         if (snapProgress > 0.8)
                           // Reveal text on impact

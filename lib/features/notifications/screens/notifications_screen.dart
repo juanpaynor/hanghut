@@ -3,6 +3,10 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -174,21 +178,146 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             ],
           ),
         ),
-        subtitle: Text(
-          timeago.format(createdAt),
-          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (item['body'] != null && item['body'].toString().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 4),
+                child: Text(
+                  item['body'],
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                ),
+              ),
+            Text(
+              timeago.format(createdAt),
+              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            ),
+          ],
         ),
-        onTap: () async {
-          if (!isRead) {
-            await _service.markAsRead(item['id']);
-            setState(() {
-              item['is_read'] = true;
-            });
-          }
-        },
+        onTap: () => _handleNotificationTap(item),
       ),
     );
   }
+
+  Future<void> _handleNotificationTap(Map<String, dynamic> item) async {
+    final type = item['type'];
+    final entityId = item['entity_id'];
+    final metadata = item['metadata'] ?? {};
+    final isRead = item['is_read'] ?? false;
+
+    // 1. Mark as read immediately
+    if (!isRead) {
+      _service.markAsRead(item['id']);
+      setState(() {
+        item['is_read'] = true;
+      });
+    }
+
+    try {
+      if (type == 'chat') {
+        _navigateToChat(entityId, metadata);
+      } else if ([
+        'join_request',
+        'approved',
+        'invite',
+        'table',
+      ].contains(type)) {
+        await _navigateToTable(entityId);
+      } else {
+        // Navigate to Post Detail
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PostDetailScreen(postId: entityId),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ Error navigating from notification: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not open link: $e')));
+      }
+    }
+  }
+
+  Future<void> _navigateToChat(
+    String entityId,
+    Map<String, dynamic> metadata,
+  ) async {
+    final chatType = metadata['chat_type'] ?? 'table';
+    final channelId = '${chatType}_$entityId';
+
+    // Fetch table title for header
+    String tableTitle = 'Chat';
+    try {
+      final table = await SupabaseConfig.client
+          .from(chatType == 'trip' ? 'trips' : 'tables')
+          .select('title')
+          .eq('id', entityId)
+          .maybeSingle();
+      if (table != null) {
+        tableTitle = table['title'] ?? 'Chat';
+      }
+    } catch (e) {
+      print('⚠️ Converting chat title failed, using default');
+    }
+
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatScreen(
+            tableId: entityId,
+            channelId: channelId,
+            tableTitle: tableTitle,
+            chatType: chatType,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _navigateToTable(String tableId) async {
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select()
+          .eq('id', tableId)
+          .single();
+
+      if (mounted) {
+        Navigator.pop(context); // Close loader
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TableCompactModal(
+              table: table,
+              matchData: const {}, // No match data needed for direct navigation
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context); // Close loader
+      rethrow;
+    }
+  }
+
+  // ... [Existing build logic] ...
 
   @override
   Widget build(BuildContext context) {
@@ -205,17 +334,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
           // 2. The Anchored Bubble
           Positioned(
-            top:
-                MediaQuery.of(context).padding.top +
-                60, // approximate toolbar height anchor
+            top: MediaQuery.of(context).padding.top + 60,
             right: 16,
-            left: 16, // Fill width with padding
-            height: MediaQuery.of(context).size.height * 0.6, // 60% height
+            left: 16,
+            height: MediaQuery.of(context).size.height * 0.6,
             child: Hero(
               tag: 'notification_bell',
-              // Use a Material widget to handle the 'Circle -> Rect' morph cleanly
               child: Material(
-                color: Colors.white, // Background of the expanded bubble
+                color: Colors.white,
                 elevation: 8,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -223,13 +349,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    // Prevent layout/semantics crash during Hero flight by hiding content until large enough
                     if (constraints.maxWidth < 150) return const SizedBox();
 
                     return Column(
-                      mainAxisSize: MainAxisSize.min, // key
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Header inside the bubble
+                        // Header
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: const BoxDecoration(
@@ -247,7 +372,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   fontSize: 16,
                                 ),
                               ),
-                              // Close button (optional, but good UX)
                               InkWell(
                                 onTap: () => Navigator.pop(context),
                                 child: const Icon(

@@ -11,9 +11,12 @@ class SocialService {
 
   final SupabaseClient _client = SupabaseConfig.client;
 
-  Future<List<Map<String, dynamic>>> getFeed({
+  Future<Map<String, dynamic>> getFeed({
     int limit = 20,
     int offset = 0,
+    String? cursor, // Cursor timestamp for cursor-based pagination
+    String? cursorId, // Cursor ID for tie-breaking
+    bool useCursor = true, // Default to cursor mode
     double? userLat,
     double? userLng,
   }) async {
@@ -24,22 +27,65 @@ class SocialService {
         h3Cells = getH3CellsForLocation(userLat, userLng);
       }
 
-      final params = {
-        'p_limit': limit,
-        'p_offset': offset,
-        'p_user_lat': userLat,
-        'p_user_lng': userLng,
-        'p_h3_cells': h3Cells,
-      };
+      final Map<String, dynamic> params;
+      final String rpcName;
 
-      final response = await _client.rpc('get_main_feed', params: params);
+      if (useCursor) {
+        // Cursor-based pagination (recommended)
+        params = {
+          'p_limit': limit,
+          'p_cursor': cursor,
+          'p_cursor_id': cursorId,
+          'p_user_lat': userLat,
+          'p_user_lng': userLng,
+          'p_h3_cells': h3Cells,
+        };
+        rpcName = 'get_main_feed_cursor';
+      } else {
+        // Offset-based pagination (backwards compatibility)
+        params = {
+          'p_limit': limit,
+          'p_offset': offset,
+          'p_user_lat': userLat,
+          'p_user_lng': userLng,
+          'p_h3_cells': h3Cells,
+        };
+        rpcName = 'get_main_feed';
+      }
 
-      final List<Map<String, dynamic>> posts = List<Map<String, dynamic>>.from(
-        response,
-      );
+      final response = await _client.rpc(rpcName, params: params);
+
+      // Handle response - it might be null or empty
+      if (response == null) {
+        return {
+          'posts': [],
+          'hasMore': false,
+          'nextCursor': null,
+          'nextCursorId': null,
+        };
+      }
+
+      // Cast to List first
+      final responseList = response is List ? response : [response];
+
+      // Map each item to Map<String, dynamic>
+      final List<Map<String, dynamic>> posts = responseList
+          .map((item) {
+            if (item is Map<String, dynamic>) {
+              return item;
+            } else if (item is Map) {
+              // Convert Map to Map<String, dynamic>
+              return Map<String, dynamic>.from(item);
+            } else {
+              print('⚠️ Unexpected item type: ${item.runtimeType}');
+              return <String, dynamic>{};
+            }
+          })
+          .where((item) => item.isNotEmpty)
+          .toList();
 
       // Map RPC result back to expected format
-      return posts.map((post) {
+      final mappedPosts = posts.map((post) {
         // user_data comes as JSONB from RPC, ensure it's a Map
         final userData = post['user_data'] as Map<String, dynamic>? ?? {};
 
@@ -49,9 +95,31 @@ class SocialService {
           // Counts and is_liked are already calculated by RPC
         };
       }).toList();
+
+      // Extract metadata for cursor mode
+      bool hasMore = false;
+      String? nextCursor;
+      String? nextCursorId;
+
+      if (responseList.length > limit) {
+        hasMore = true;
+        final lastItem = mappedPosts[limit - 1];
+        nextCursor = lastItem['created_at'];
+        nextCursorId = lastItem['id'];
+
+        // Remove the extra item fetched for pagination check
+        mappedPosts.removeLast();
+      }
+
+      return {
+        'posts': mappedPosts,
+        'hasMore': hasMore,
+        'nextCursor': nextCursor,
+        'nextCursorId': nextCursorId,
+      };
     } catch (e) {
-      print('❌ Error fetching feed (RPC): $e');
-      return [];
+      print('Error fetching feed: $e');
+      rethrow;
     }
   }
 
@@ -59,6 +127,7 @@ class SocialService {
   Future<Map<String, dynamic>?> createPost({
     required String content,
     List<File>? imageFiles,
+    String? gifUrl,
     double? latitude,
     double? longitude,
   }) async {
@@ -122,6 +191,7 @@ class SocialService {
             'image_url': imageUrls?.isNotEmpty == true
                 ? imageUrls!.first
                 : null,
+            'gif_url': gifUrl,
           })
           .select('''
             *,
@@ -135,10 +205,7 @@ class SocialService {
 
       // Publish to Ably for real-time updates (use H3 cell as channel)
       if (h3Cell != null && h3Cell.isNotEmpty) {
-        AblyService().publishPostCreated(
-          city: h3Cell, // Using H3 cell as channel name
-          postData: response,
-        );
+        AblyService().publishPostCreated(city: h3Cell, postData: response);
       }
 
       return response;
@@ -465,10 +532,12 @@ class SocialService {
     try {
       final response = await _client
           .from('follows')
-          .select()
+          .select('follower:users!follower_id(*)')
           .eq('following_id', userId);
 
-      return List<Map<String, dynamic>>.from(response);
+      return List<Map<String, dynamic>>.from(
+        response.map((e) => e['follower'] as Map<String, dynamic>),
+      );
     } catch (e) {
       print('Error getting followers: $e');
       return [];
@@ -479,10 +548,12 @@ class SocialService {
     try {
       final response = await _client
           .from('follows')
-          .select()
+          .select('following:users!following_id(*)')
           .eq('follower_id', userId);
 
-      return List<Map<String, dynamic>>.from(response);
+      return List<Map<String, dynamic>>.from(
+        response.map((e) => e['following'] as Map<String, dynamic>),
+      );
     } catch (e) {
       print('Error getting following: $e');
       return [];

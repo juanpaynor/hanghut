@@ -78,84 +78,142 @@ class _MyTripsListState extends State<MyTripsList> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'trips_fab',
-        onPressed: _showAddTripModal,
-        backgroundColor: Theme.of(context).primaryColor,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
-      body: Column(
-        children: [
-          // Filter tabs
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              children: [
-                _buildFilterChip('Upcoming', 'upcoming'),
-                const SizedBox(width: 8),
-                _buildFilterChip('Past', 'past'),
-                const SizedBox(width: 8),
-                _buildFilterChip('All', 'all'),
-              ],
-            ),
-          ),
-
-          // Trip content
-          Expanded(
-            child: _isLoading
-                ? Center(
-                    child: CircularProgressIndicator(
-                      color: Theme.of(context).primaryColor,
+    return Column(
+      children: [
+        // Filter tabs & Create Button
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _buildFilterChip('Upcoming', 'upcoming'),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Past', 'past'),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('All', 'all'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Mini Create Button
+              Material(
+                color: Theme.of(context).primaryColor,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: _showAddTripModal,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
                     ),
-                  )
-                : _filteredTrips.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.flight_takeoff,
-                          size: 64,
-                          color: Colors.black12,
-                        ),
-                        const SizedBox(height: 16),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.add, color: Colors.white, size: 20),
+                        SizedBox(width: 4),
                         Text(
-                          'No trips yet',
+                          'New',
                           style: TextStyle(
-                            fontSize: 18,
-                            color: Theme.of(
-                              context,
-                            ).textTheme.bodyMedium?.color,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Plan your next adventure!',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
                           ),
                         ),
                       ],
                     ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _loadMyTrips,
-                    color: Theme.of(context).primaryColor,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: _filteredTrips.length,
-                      itemBuilder: (context, index) {
-                        final trip = _filteredTrips[index];
-                        return _buildTripCard(trip);
-                      },
-                    ),
                   ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+
+        // Trip content
+        Expanded(
+          child: _isLoading
+              ? Center(
+                  child: CircularProgressIndicator(
+                    color: Theme.of(context).primaryColor,
+                  ),
+                )
+              : _filteredTrips.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).primaryColor.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.flight_takeoff,
+                          size: 48,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Text(
+                        'No trips found',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Ready to plan your next adventure?',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Theme.of(context).textTheme.bodySmall?.color,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: _showAddTripModal,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(context).primaryColor,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Plan a Trip'),
+                      ),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _loadMyTrips,
+                  color: Theme.of(context).primaryColor,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 8,
+                    ),
+                    itemCount: _filteredTrips.length,
+                    itemBuilder: (context, index) {
+                      final trip = _filteredTrips[index];
+                      return _buildTripCard(trip);
+                    },
+                  ),
+                ),
+        ),
+      ],
     );
   }
 

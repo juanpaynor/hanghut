@@ -9,9 +9,67 @@ import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/splash/screens/social_magnet_splash_screen.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/providers/theme_provider.dart';
+import 'package:bitemates/core/services/account_status_service.dart';
+import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
+import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
+
+import 'package:workmanager/workmanager.dart';
+import 'package:bitemates/features/location/logic/geofence_engine.dart';
+import 'package:bitemates/core/services/location_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:bitemates/core/services/app_location_service.dart';
+
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    print("📍 BACKGROUND TASK: $task started");
+
+    try {
+      // 1. Initialize Engine (Loads cache)
+      final engine = GeofenceEngine();
+      await engine.init();
+
+      // 2. Get Location (One-shot)
+      final locationService = LocationService();
+      final pos = await locationService.getCurrentLocation();
+
+      if (pos != null) {
+        print(
+          "📍 BACKGROUND TASK: Got location ${pos.latitude}, ${pos.longitude}",
+        );
+        // 3. Run Check
+        engine.checkProximity(pos.latitude, pos.longitude);
+      } else {
+        print("⚠️ BACKGROUND TASK: Could not get location");
+      }
+    } catch (e) {
+      print("❌ BACKGROUND TASK ERROR: $e");
+    }
+
+    return Future.value(true);
+  });
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Workmanager
+  Workmanager().initialize(
+    callbackDispatcher,
+    isInDebugMode: true, // TODO: Set to false in production
+  );
+
+  // Register Periodic Task (15 min interval)
+  Workmanager().registerPeriodicTask(
+    "geofence-check",
+    "geofenceTask",
+    frequency: const Duration(minutes: 15),
+    constraints: Constraints(
+      networkType: NetworkType.connected, // Optional, but good for sync
+    ),
+  );
 
   // Load environment variables (optional for release builds)
   try {
@@ -24,6 +82,26 @@ Future<void> main() async {
 
   // Initialize Supabase
   await SupabaseConfig.initialize();
+
+  // Initialize Firebase & Push Notifications
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    await PushNotificationService().init();
+  } catch (e) {
+    print("❌ FIREBASE INIT ERROR: $e");
+  }
+
+  // Initialize Foreground Geofence Engine
+  await GeofenceEngine().init();
+  // Attempt sync (if network available)
+  GeofenceEngine().syncGeofences(); // Fire and forget
+
+  // Update user location once per 24h (non-blocking)
+  AppLocationService().updateLocationIfNeeded().catchError((e) {
+    print("⚠️ Location update failed (non-critical): $e");
+  });
 
   runApp(const MyApp());
 }
@@ -47,6 +125,10 @@ class MyApp extends StatelessWidget {
             darkTheme: AppTheme.darkTheme,
             themeMode: themeProvider.themeMode,
             home: const SocialMagnetSplashScreen(),
+            routes: {
+              '/my-tickets': (context) => const MyTicketsScreen(),
+              '/map': (context) => const MainNavigationScreen(),
+            },
           );
         },
       ),
@@ -76,25 +158,54 @@ class _AuthGateState extends State<AuthGate> {
         final session = snapshot.hasData ? snapshot.data!.session : null;
 
         if (session != null) {
-          // Check if profile exists before showing main screen
+          // Check account status FIRST before anything else
           return FutureBuilder(
-            future: _checkProfileExists(session.user.id),
-            builder: (context, profileSnapshot) {
-              if (profileSnapshot.connectionState == ConnectionState.waiting) {
+            future: AccountStatusService.checkStatus(),
+            builder: (context, statusSnapshot) {
+              if (statusSnapshot.connectionState == ConnectionState.waiting) {
                 return const Scaffold(
-                  body: Center(
-                    child: CircularProgressIndicator(color: Colors.black),
-                  ),
+                  body: Center(child: CircularProgressIndicator()),
                 );
               }
 
-              if (profileSnapshot.hasError || profileSnapshot.data != true) {
-                // Profile doesn't exist - redirect to profile setup
-                print('⚠️ AUTH_GATE: No profile found, redirecting to setup');
-                return const ProfileSetupScreen();
+              final statusData = statusSnapshot.data as Map<String, dynamic>?;
+              final status = statusData?['status'] ?? 'active';
+
+              // If suspended, banned, or deleted, show account suspended screen
+              if (status == 'suspended' ||
+                  status == 'banned' ||
+                  status == 'deleted') {
+                return AccountSuspendedScreen(
+                  status: status,
+                  reason: statusData?['reason'],
+                );
               }
 
-              return const MainNavigationScreen();
+              // If active, check if profile exists before showing main screen
+              return FutureBuilder(
+                future: _checkProfileExists(session.user.id),
+                builder: (context, profileSnapshot) {
+                  if (profileSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Scaffold(
+                      body: Center(
+                        child: CircularProgressIndicator(color: Colors.black),
+                      ),
+                    );
+                  }
+
+                  if (profileSnapshot.hasError ||
+                      profileSnapshot.data != true) {
+                    // Profile doesn't exist - redirect to profile setup
+                    print(
+                      '⚠️ AUTH_GATE: No profile found, redirecting to setup',
+                    );
+                    return const ProfileSetupScreen();
+                  }
+
+                  return const MainNavigationScreen();
+                },
+              );
             },
           );
         } else {

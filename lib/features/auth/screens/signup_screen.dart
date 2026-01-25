@@ -144,10 +144,12 @@ class _SignupScreenState extends State<SignupScreen> {
                                   ),
                                 ],
                               ),
-                              child: const Icon(
-                                Icons.local_dining, // Placeholder logo
-                                color: Colors.white,
-                                size: 40,
+                              child: Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Image.asset(
+                                  'assets/images/Hanghut.png',
+                                  fit: BoxFit.contain,
+                                ),
                               ),
                             ),
                           )

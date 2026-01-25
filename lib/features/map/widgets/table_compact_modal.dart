@@ -607,7 +607,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
       onPressed: _joinTable,
       style: buttonStyle,
       child: const Text(
-        'Join Table',
+        'Join',
         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
       ),
     );

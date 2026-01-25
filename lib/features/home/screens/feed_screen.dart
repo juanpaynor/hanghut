@@ -35,7 +35,12 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   List<Map<String, dynamic>> _trendingTables = []; // New: Trending Tables
   bool _isLoading = true;
   bool _isLoadingMore = false;
-  int _socialPostsOffset = 0;
+
+  // Cursor pagination (Phase 2)
+  String? _nextCursor;
+  String? _nextCursorId;
+  bool _hasMore = true;
+
   final int _postsPageSize = 10;
 
   // Category Filtering
@@ -181,17 +186,22 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
     setState(() => _errorMessage = null);
 
     try {
-      final posts = await _socialService.getFeed(
+      final result = await _socialService.getFeed(
         limit: _postsPageSize,
-        offset: 0,
+        cursor: null, // Initial load, no cursor
+        cursorId: null,
+        useCursor: true, // Use cursor pagination
         userLat: _userPosition?.latitude,
         userLng: _userPosition?.longitude,
       );
 
       if (mounted) {
+        final posts = result['posts'] as List<Map<String, dynamic>>;
         setState(() {
           _socialPosts = posts;
-          _socialPostsOffset = posts.length;
+          _hasMore = result['hasMore'] as bool? ?? false;
+          _nextCursor = result['nextCursor'] as String?;
+          _nextCursorId = result['nextCursorId'] as String?;
         });
       }
     } catch (e) {
@@ -207,26 +217,36 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _loadMorePosts() async {
-    if (_isLoadingMore) return;
+    if (_isLoadingMore || !_hasMore) return; // Don't load if no more posts
 
     setState(() => _isLoadingMore = true);
 
     try {
-      final newPosts = await _socialService.getFeed(
+      final result = await _socialService.getFeed(
         limit: _postsPageSize,
-        offset: _socialPostsOffset,
+        cursor: _nextCursor,
+        cursorId: _nextCursorId,
+        useCursor: true,
         userLat: _userPosition?.latitude,
         userLng: _userPosition?.longitude,
       );
 
-      if (mounted && newPosts.isNotEmpty) {
-        setState(() {
-          _socialPosts.addAll(newPosts);
-          _socialPostsOffset += newPosts.length;
-          _isLoadingMore = false;
-        });
-      } else {
-        setState(() => _isLoadingMore = false);
+      if (mounted) {
+        final newPosts = result['posts'] as List<Map<String, dynamic>>;
+        if (newPosts.isNotEmpty) {
+          setState(() {
+            _socialPosts.addAll(newPosts);
+            _hasMore = result['hasMore'] as bool? ?? false;
+            _nextCursor = result['nextCursor'] as String?;
+            _nextCursorId = result['nextCursorId'] as String?;
+            _isLoadingMore = false;
+          });
+        } else {
+          setState(() {
+            _hasMore = false;
+            _isLoadingMore = false;
+          });
+        }
       }
     } catch (e) {
       print('❌ Error loading more posts: $e');
@@ -235,11 +255,36 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   }
 
   void _showCreatePost() async {
-    final result = await showModalBottomSheet<Map<String, dynamic>?>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => const CreatePostModal(),
+    final result = await Navigator.of(context).push<Map<String, dynamic>?>(
+      PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: true,
+        barrierColor: Colors.black54,
+        transitionDuration: const Duration(milliseconds: 500),
+        reverseTransitionDuration: const Duration(milliseconds: 400),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return const CreatePostModal();
+        },
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          // Buttery smooth liquid morph effect
+          final scaleCurve = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutQuint,
+            reverseCurve: Curves.easeInQuint,
+          );
+
+          final fadeCurve = CurvedAnimation(
+            parent: animation,
+            curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
+            reverseCurve: Curves.easeIn,
+          );
+
+          return ScaleTransition(
+            scale: Tween<double>(begin: 0.8, end: 1.0).animate(scaleCurve),
+            child: FadeTransition(opacity: fadeCurve, child: child),
+          );
+        },
+      ),
     );
 
     // Optimistic update: Add post immediately to UI

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:math';
 
@@ -11,9 +10,11 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:http/http.dart' as http;
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/matching_service.dart';
+import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'dart:convert';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+
 import '../widgets/liquid_morph_route.dart';
 import '../widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/active_users_bottom_sheet.dart';
@@ -21,8 +22,11 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/theme_provider.dart';
-import 'package:bitemates/core/constants/model_registry.dart';
 import 'package:bitemates/features/splash/screens/cloud_opening_screen.dart';
+import 'package:bitemates/features/map/widgets/event_cluster_sheet.dart';
+
+// Filter enum for toggling between tables and events
+enum MapFilter { all, tables, events }
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -38,16 +42,25 @@ class MapScreenState extends State<MapScreen>
   PointAnnotationManager? _tableMarkerManager;
   final _tableService = TableService();
   final _matchingService = MatchingService();
+  final _eventService = EventService();
+
   List<Map<String, dynamic>> _tables = [];
+  List<Event> _events = [];
   Map<String, dynamic>? _currentUserData;
   Timer? _debounceTimer;
   CameraState? _lastFetchCameraState;
 
   Timer? _heartbeatTimer;
   int _activeUserCount = 0;
-  bool _isFetching = false; // Added loading state
-  Set<String> _last3DTableIds = {}; // Cache to prevent unnecessary 3D rebuilds
-  bool _showCloudIntro = true; // For cloud transition
+  bool _isFetching = false;
+  bool _showCloudIntro = true;
+
+  // Filter toggle
+  MapFilter _currentFilter = MapFilter.all;
+
+  // Optimization: Track added images to avoid re-uploading
+  final Set<String> _addedImages = {};
+  static const int _maxCachedImages = 200; // Prevent memory leak
 
   @override
   bool get wantKeepAlive => true;
@@ -264,16 +277,6 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
-  Future<String> _copyAssetToTemp(String assetName, String fileName) async {
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$fileName');
-    // Always overwrite to ensure latest version
-    final data = await rootBundle.load(assetName);
-    final bytes = data.buffer.asUint8List();
-    await file.writeAsBytes(bytes, flush: true);
-    return file.path;
-  }
-
   _onMapCreated(MapboxMap mapboxMap) async {
     print('🗺️ Map created callback triggered');
     _mapboxMap = mapboxMap;
@@ -285,8 +288,8 @@ class MapScreenState extends State<MapScreen>
     // Enable location puck
     await _enableLocationPuck();
 
-    // Initialize 3D Models
-    await _setup3DModels();
+    // 3D Models removed - using 2D markers only
+    // await _setup3DModels(); // REMOVED
 
     _fetchTablesInViewport(); // Initial fetch
     // Wait for user data to be ready before adding markers
@@ -307,145 +310,6 @@ class MapScreenState extends State<MapScreen>
       ),
       MapAnimationOptions(duration: 3000), // Match cloud flight
     );
-  }
-
-  Future<void> _setup3DModels() async {
-    if (_mapboxMap == null) return;
-
-    try {
-      final style = _mapboxMap?.style;
-
-      // 1. Load ALL Models from Registry
-      // We iterate through our known assets and load them into the style
-      // This is efficient because we only load unique models once
-      final modelsToLoad = {
-        'tennis_racket.glb': 'tennis-racket-model',
-        'basketball.glb': 'basketball-model',
-        'soccer_ball.glb': 'soccer-ball-model',
-        'burger.glb': 'burger-model',
-        'pizza.glb': 'pizza-model',
-        'chinese_food_box.glb': 'chinese-food-model',
-        'creamed_coffee.glb': 'creamed-coffee-model',
-        'coffee_shop_cup.glb': 'coffee-shop-model',
-        'arrow.glb': 'arrow-model',
-      };
-
-      for (final entry in modelsToLoad.entries) {
-        final assetName = entry.key;
-        final modelId = entry.value;
-
-        try {
-          // Check if model already exists (optional optimization, but addStyleModel handles duplicates gracefully usually)
-          // Actually, Mapbox style API throws if you add duplicate ID.
-          // There isn't a direct 'hasModel' check exposed easily in this SDK wrapper typically,
-          // avoiding complex checks by wrapping in try-catch or just adding.
-          // Let's use the temp file approach for robustness
-
-          final modelPath = await _copyAssetToTemp(
-            'assets/models/$assetName',
-            assetName,
-          );
-          print('📦 Loaded 3D Model: $assetName -> $modelId');
-          await style?.addStyleModel(modelId, 'file://$modelPath');
-        } catch (e) {
-          // Ignore "already exists" errors or similar
-          print('⚠️ Note loading $assetName: $e');
-        }
-      }
-
-      // 2. Add GeoJSON Source for 3D markers
-      if (await style?.styleSourceExists('tables-3d-source') == false) {
-        await style?.addSource(
-          GeoJsonSource(
-            id: 'tables-3d-source',
-            data: jsonEncode({'type': 'FeatureCollection', 'features': []}),
-          ),
-        );
-      }
-
-      // 3. Add Model Layer
-      if (await style?.styleLayerExists('tables-3d-layer') == false) {
-        await style?.addLayer(
-          ModelLayer(
-            id: 'tables-3d-layer',
-            sourceId: 'tables-3d-source',
-            minZoom: 5.5, // Hide at country level
-            maxZoom: 22.0,
-            modelId:
-                'coffee-shop-model', // Default; overridden by property below
-            // Massive scale increase
-            modelScale: [1500.0, 1500.0, 1500.0],
-            // Lift it up significantly + slight tilt
-            modelRotation: [0.0, 0.0, 0.0],
-            // Lift significantly higher to account for massive scale pushing geometry down
-            // Reduced height since we are reducing the scale
-            // Lift significantly higher (50m vertical offset)
-            modelTranslation: [0.0, 0.0, 50.0],
-            // Using model-scale as main visibility driver first.
-            modelOpacity: 1.0,
-            modelEmissiveStrength: 1.0,
-          ),
-        );
-
-        // 5. Update 'model-id' with expression for dynamic switching
-        await style?.setStyleLayerProperty(
-          'tables-3d-layer',
-          'model-id',
-          jsonEncode(['get', 'modelId']),
-        );
-      }
-
-      // 4. Update 'model-scale' with Fixed Scaling.
-      // NOTE: Mapbox does NOT support zoom interpolation for model-scale with GeoJSON sources!
-      // Using fixed scale values instead.
-
-      final fixedScales = {
-        'tennis-racket-model': [
-          1.0,
-          1.0,
-          1.0,
-        ], // No scaling - using base model size
-        'basketball-model': [500.0, 500.0, 500.0],
-        'soccer-ball-model': [500.0, 500.0, 500.0],
-        'arrow-model': [4000.0, 4000.0, 4000.0],
-        'burger-model': [800.0, 800.0, 800.0],
-        'pizza-model': [800.0, 800.0, 800.0],
-        'chinese-food-model': [800.0, 800.0, 800.0],
-        'creamed-coffee-model': [800.0, 800.0, 800.0],
-        'coffee-shop-model': [800.0, 800.0, 800.0],
-      };
-
-      final matchCases = <Object>[];
-      fixedScales.forEach((id, scale) {
-        matchCases.add(id);
-        matchCases.add(scale);
-      });
-
-      // Default Fallback
-      matchCases.add([1000.0, 1000.0, 1000.0]);
-
-      try {
-        await style?.setStyleLayerProperty(
-          'tables-3d-layer',
-          'model-scale',
-          jsonEncode([
-            "match",
-            ["get", "modelId"],
-            ...matchCases,
-          ]),
-        );
-      } catch (e) {
-        print('⚠️ Failed to set model-scale expression: $e');
-      }
-
-      print('✅ 3D Model Layer initialized');
-
-      // Manual listener removed in favor of MapWidget.onTapListener
-    } catch (e) {
-      print('❌ Error setting up 3D models: $e');
-      print('   Stack: ${StackTrace.current}');
-      rethrow;
-    }
   }
 
   Future<void> _enableLocationPuck() async {
@@ -542,12 +406,31 @@ class MapScreenState extends State<MapScreen>
               right: 0,
               child: Center(
                 child: GestureDetector(
-                  onTap: () {
+                  onTap: () async {
+                    // Get current viewport bounds
+                    final cameraState = await _mapboxMap?.getCameraState();
+                    if (cameraState == null) return;
+
+                    final bounds = await _mapboxMap
+                        ?.coordinateBoundsForCameraUnwrapped(
+                          CameraOptions(
+                            center: cameraState.center,
+                            zoom: cameraState.zoom,
+                            bearing: cameraState.bearing,
+                            pitch: cameraState.pitch,
+                          ),
+                        );
+
                     showModalBottomSheet(
                       context: context,
                       backgroundColor: Colors.transparent,
                       isScrollControlled: true,
-                      builder: (context) => const ActiveUsersBottomSheet(),
+                      builder: (context) => ActiveUsersBottomSheet(
+                        minLat: bounds?.southwest.coordinates.lat.toDouble(),
+                        maxLat: bounds?.northeast.coordinates.lat.toDouble(),
+                        minLng: bounds?.southwest.coordinates.lng.toDouble(),
+                        maxLng: bounds?.northeast.coordinates.lng.toDouble(),
+                      ),
                     );
                   },
                   child: Container(
@@ -598,6 +481,36 @@ class MapScreenState extends State<MapScreen>
               ),
             ),
 
+          // Map Controls (upper-right)
+          Positioned(
+            right: 16,
+            top: 110, // Below the "active users" pill (which is at top: 60)
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Refresh Button
+                FloatingActionButton(
+                  heroTag: 'map_refresh_btn',
+                  mini: true,
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black87,
+                  onPressed: _onRefreshTapped,
+                  child: const Icon(Icons.refresh, size: 20),
+                ),
+                const SizedBox(height: 12),
+
+                // Focus Location Button
+                FloatingActionButton(
+                  heroTag: 'map_focus_btn',
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  onPressed: _onFocusLocationTapped,
+                  child: const Icon(Icons.my_location),
+                ),
+              ],
+            ),
+          ),
+
           // Cloud Transition (Map Only)
           if (_showCloudIntro)
             Positioned.fill(
@@ -617,24 +530,73 @@ class MapScreenState extends State<MapScreen>
     );
   }
 
+  // --- Map Controls ---
+
+  void _onRefreshTapped() {
+    print('🔄 Manual map refresh triggered');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing map data...'),
+        duration: Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    // Reset state to force fetch even if camera hasn't moved
+    _lastFetchCameraState = null;
+    refreshTables();
+  }
+
+  Future<void> _onFocusLocationTapped() async {
+    print('📍 Focus location tapped');
+
+    // If we have a cached position, fly there immediately
+    if (_currentPosition != null) {
+      _mapboxMap?.flyTo(
+        CameraOptions(
+          center: Point(
+            coordinates: Position(
+              _currentPosition!.longitude,
+              _currentPosition!.latitude,
+            ),
+          ),
+          zoom: 15.0, // Closer street view
+          pitch: 45.0,
+        ),
+        MapAnimationOptions(duration: 1000),
+      );
+    }
+
+    // Always request a fresh location update to be sure
+    await _getUserLocation();
+  }
+
   // Handle map taps
   Future<void> _onMapTap(TapUpDetails details) async {
     print('👆 Map tapped at ${details.localPosition}');
     if (_mapboxMap == null) return;
 
     try {
-      // Use local position from GestureDetector
       final screenCoordinate = ScreenCoordinate(
         x: details.localPosition.dx,
         y: details.localPosition.dy,
       );
 
-      // Query rendered features for both clusters and points
+      // PHASE 1: Check for cluster tap first
+      final clusterFeatures = await _mapboxMap?.queryRenderedFeatures(
+        RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+        RenderedQueryOptions(layerIds: ['clusters']),
+      );
+
+      if (clusterFeatures != null && clusterFeatures.isNotEmpty) {
+        await _handleClusterTap(clusterFeatures.first, screenCoordinate);
+        return;
+      }
+
+      // Check if tap is on unclustered point or 3D layer
       final features = await _mapboxMap?.queryRenderedFeatures(
         RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
-        RenderedQueryOptions(
-          layerIds: ['unclustered-points', 'clusters', 'tables-3d-layer'],
-        ),
+        RenderedQueryOptions(layerIds: ['unclustered-points']),
       );
 
       print('🔎 Query features found: ${features?.length ?? 0}');
@@ -670,9 +632,25 @@ class MapScreenState extends State<MapScreen>
           final properties =
               feature?.queriedFeature.feature['properties'] as Map?;
           final index = properties?['index'];
-          // ... rest of existing marker logic falls through naturally if I structure it right
-          // actually, better to separate the blocks to be clean
-          if (index != null && index is int && index < _tables.length) {
+          final markerType =
+              properties?['type']; // Check if it's an event marker
+
+          if (markerType == 'event' &&
+              index != null &&
+              index is int &&
+              index < _events.length) {
+            // Event marker tapped
+            final event = _events[index];
+            if (mounted) {
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (context) => EventDetailModal(event: event),
+              );
+            }
+          } else if (index != null && index is int && index < _tables.length) {
+            // Table marker tapped
             final table = _tables[index];
             final matchData = _matchingService.calculateMatch(
               currentUser: _currentUserData!,
@@ -692,8 +670,30 @@ class MapScreenState extends State<MapScreen>
         final properties =
             feature?.queriedFeature.feature['properties'] as Map?;
         final index = properties?['index'];
+        final markerType = properties?['type'];
 
-        if (index != null && index is int && index < _tables.length) {
+        print('🔍 Marker properties: index=$index, type=$markerType');
+        print(
+          '📊 _events.length=${_events.length}, _tables.length=${_tables.length}',
+        );
+
+        if (markerType == 'event' &&
+            index != null &&
+            index is int &&
+            index < _events.length) {
+          // Event marker tapped
+          print('🎟️ EVENT MARKER TAPPED! Index: $index');
+          final event = _events[index];
+          if (mounted) {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (context) => EventDetailModal(event: event),
+            );
+          }
+        } else if (index != null && index is int && index < _tables.length) {
+          // Table marker tapped
           final table = _tables[index]; // Use index to get full table data
           final matchData = _matchingService.calculateMatch(
             currentUser: _currentUserData!,
@@ -727,6 +727,81 @@ class MapScreenState extends State<MapScreen>
       ),
     );
   }
+
+  // PHASE 1: Handle cluster tap
+  Future<void> _handleClusterTap(
+    QueriedRenderedFeature? feature,
+    ScreenCoordinate screenCoordinate,
+  ) async {
+    if (feature == null || _mapboxMap == null) return;
+
+    try {
+      final properties = feature.queriedFeature.feature['properties'] as Map?;
+      final clusterId = properties?['cluster_id'];
+      final pointCount = properties?['point_count'] ?? 0;
+
+      print('📍 Cluster tapped: $clusterId with $pointCount events');
+
+      // Get geometry to find cluster location
+      final geometry = feature.queriedFeature.feature['geometry'] as Map?;
+      final coordinates = geometry?['coordinates'] as List?;
+
+      if (coordinates == null) return;
+
+      final lng = (coordinates[0] as num).toDouble();
+      final lat = (coordinates[1] as num).toDouble();
+
+      // Find all tables at this cluster location (within 50m)
+      final eventsInCluster = _tables.where((table) {
+        final tableLat = table['latitude'] as double;
+        final tableLng = table['longitude'] as double;
+
+        final distance = _calculateDistance(lat, lng, tableLat, tableLng);
+        return distance < 50; // 50m threshold for clustering
+      }).toList();
+
+      if (eventsInCluster.isEmpty) {
+        print('⚠️ No events found in cluster');
+        return;
+      }
+
+      // Show bottom sheet with events
+      if (mounted) {
+        showModalBottomSheet(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          builder: (context) => EventClusterSheet(events: eventsInCluster),
+        );
+      }
+    } catch (e) {
+      print('❌ Error handling cluster tap: $e');
+    }
+  }
+
+  // Helper: Calculate distance between two coordinates (Haversine)
+  double _calculateDistance(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    const double earthRadius = 6371000; // meters
+    final dLat = _toRadians(lat2 - lat1);
+    final dLng = _toRadians(lng2 - lng1);
+
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_toRadians(lat1)) *
+            cos(_toRadians(lat2)) *
+            sin(dLng / 2) *
+            sin(dLng / 2);
+
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degrees) => degrees * pi / 180;
 
   Future<void> _fetchTablesInViewport() async {
     if (_mapboxMap == null || _currentUserData == null) return;
@@ -825,7 +900,16 @@ class MapScreenState extends State<MapScreen>
         limit: 100, // Smart server-side limit
       );
 
+      // Fetch events in the same viewport
+      final fetchedEvents = await _eventService.getEventsInViewport(
+        minLat: minLat,
+        maxLat: maxLat,
+        minLng: minLng,
+        maxLng: maxLng,
+      );
+
       print('📍 Found ${fetchedTables.length} tables in viewport');
+      print('📅 Found ${fetchedEvents.length} events in viewport');
 
       // 4. Relevance Filtering: Sort by Match Score and Cap
       if (_currentUserData != null) {
@@ -865,6 +949,7 @@ class MapScreenState extends State<MapScreen>
 
       setState(() {
         _tables = fetchedTables;
+        _events = fetchedEvents;
       });
       // Ghosts cleared, replaced by Pop Animation later
 
@@ -948,8 +1033,62 @@ class MapScreenState extends State<MapScreen>
           },
         });
         print(
-          '✅ Added feature ${i + 1}/${fetchedTables.length}: icon_id=$imageId',
+          '✅ Added table feature ${i + 1}/${fetchedTables.length}: icon_id=$imageId',
         );
+      }
+
+      // Add event markers
+      for (var i = 0; i < _events.length; i++) {
+        try {
+          final event = _events[i];
+          final imageId = 'event_img_${event.id}';
+
+          print(
+            '🎟️ Processing event ${i + 1}/${_events.length}: ${event.title}',
+          );
+
+          // Generate event marker image (calendar/ticket icon)
+          if (!_addedImages.contains(imageId)) {
+            print('🖼️ Creating marker image for event: ${event.id}');
+            final markerImage = await _createEventMarkerImage(event: event);
+
+            // Add to style
+            await style.addStyleImage(
+              imageId,
+              2.0, // Scale factor
+              MbxImage(width: 120, height: 120, data: markerImage),
+              false,
+              [],
+              [],
+              null,
+            );
+            _addedImages.add(imageId);
+            print('✅ Event marker image added: $imageId');
+          }
+
+          features.add({
+            'type': 'Feature',
+            'id':
+                'event_${event.id}', // Prefix with 'event_' to distinguish from tables
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [event.longitude, event.latitude],
+            },
+            'properties': {
+              'icon_id': imageId,
+              'description': event.title,
+              'index': i,
+              'type': 'event', // Mark as event for tap handling
+            },
+          });
+          print(
+            '✅ Added event feature ${i + 1}/${_events.length}: ${event.title}',
+          );
+        } catch (e, stackTrace) {
+          print('❌ Error adding event marker $i: $e');
+          print('Stack trace: $stackTrace');
+          // Continue with next event instead of breaking entire loop
+        }
       }
 
       // B. Update/Create Source
@@ -1001,17 +1140,14 @@ class MapScreenState extends State<MapScreen>
       // Trigger "Spring Pop" Animation now that data is on map
       _startPopAnimation();
 
-      // Update 3D Layer Data
-      _update3DLayerData(fetchedTables);
+      // 3D Models removed - no longer updating 3D layer
+      // await _update3DLayerData(fetchedTables); // REMOVED
     } catch (e) {
       print('❌ Error updating map clusters: $e');
     } finally {
       if (mounted) setState(() => _isFetching = false);
     }
   }
-
-  // Track added images to avoid re-adding to style
-  final Set<String> _addedImages = {};
 
   Future<void> _addClusterLayers(StyleManager style, String sourceId) async {
     try {
@@ -1072,7 +1208,7 @@ class MapScreenState extends State<MapScreen>
           iconSize: 1.0, // Base size
           iconAllowOverlap: true,
           iconAnchor: IconAnchor.BOTTOM,
-          iconOffset: [0.0, -70.0], // Float above 3D model
+          iconOffset: [0.0, -20.0], // Centered on table location
         ),
       );
       print('✅ Unclustered-points layer added');
@@ -1081,148 +1217,6 @@ class MapScreenState extends State<MapScreen>
       print('   Stack: ${StackTrace.current}');
       rethrow;
     }
-
-    // Add tap interaction is handled via Global map click if desired
-  }
-
-  Future<void> _update3DLayerData(List<Map<String, dynamic>> tables) async {
-    if (_mapboxMap == null) return;
-
-    // Skip rebuild if table IDs haven't changed (prevents flicker on pan)
-    final currentTableIds = tables.map((t) => t['id'].toString()).toSet();
-    if (_last3DTableIds.isNotEmpty && currentTableIds == _last3DTableIds) {
-      return; // Data unchanged, skip rebuild
-    }
-    _last3DTableIds = currentTableIds;
-
-    try {
-      final style = _mapboxMap?.style;
-      final sourceExists =
-          await style?.styleSourceExists('tables-3d-source') ?? false;
-
-      if (!sourceExists) {
-        print('⚠️ 3D Source missing, attempting to re-initialize...');
-        await _setup3DModels();
-        // Check again
-        if (!(await style?.styleSourceExists('tables-3d-source') ?? false)) {
-          print('❌ Failed to re-initialize 3D source. Aborting update.');
-          return;
-        }
-      }
-
-      // Group tables by location to detect overlaps
-      // Round to ~1 meter precision (5 decimal places ≈ 1.1m)
-      Map<String, List<MapEntry<int, Map<String, dynamic>>>> locationGroups =
-          {};
-
-      for (var entry in tables.asMap().entries) {
-        final table = entry.value;
-        final lat = table['location_lat'] as double;
-        final lng = table['location_lng'] as double;
-
-        // Create location key with 5 decimal precision
-        String locationKey =
-            '${lat.toStringAsFixed(5)}_${lng.toStringAsFixed(5)}';
-        locationGroups.putIfAbsent(locationKey, () => []).add(entry);
-      }
-
-      // Build features with radial expansion for overlapping tables
-      final features = <Map<String, dynamic>>[];
-
-      for (var group in locationGroups.values) {
-        if (group.length == 1) {
-          // Single table at this location - use exact coordinates
-          final entry = group.first;
-          final table = entry.value;
-          features.add({
-            'type': 'Feature',
-            'id': table['id'],
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [table['location_lng'], table['location_lat']],
-            },
-            'properties': {
-              'title': table['title'],
-              'index': entry.key,
-              'modelId': _getModelIdForAsset(table['marker_model']),
-              'modelScale': ModelRegistry.getScaleFactor(
-                table['marker_model'] ?? '',
-              ),
-              'rotation': [0.0, 0.0, 0.0],
-            },
-          });
-        } else {
-          // Multiple tables at same location - apply radial expansion
-          final baseLat = group.first.value['location_lat'] as double;
-          final baseLng = group.first.value['location_lng'] as double;
-          const double radiusMeters = 15.0; // 15 meter radius
-
-          for (int i = 0; i < group.length; i++) {
-            final entry = group[i];
-            final table = entry.value;
-
-            // Calculate angle for this table in the circle
-            double angle = (2 * pi * i) / group.length;
-
-            // Convert meters to degrees
-            // 1 degree latitude ≈ 111,320 meters
-            double offsetLat = radiusMeters / 111320;
-            // Longitude degrees vary by latitude
-            double offsetLng =
-                radiusMeters / (111320 * cos(baseLat * pi / 180));
-
-            // Calculate new position
-            double newLat = baseLat + (offsetLat * cos(angle));
-            double newLng = baseLng + (offsetLng * sin(angle));
-
-            features.add({
-              'type': 'Feature',
-              'id': table['id'],
-              'geometry': {
-                'type': 'Point',
-                'coordinates': [newLng, newLat],
-              },
-              'properties': {
-                'title': table['title'],
-                'index': entry.key,
-                'modelId': _getModelIdForAsset(table['marker_model']),
-                'modelScale': ModelRegistry.getScaleFactor(
-                  table['marker_model'] ?? '',
-                ),
-                'rotation': [0.0, 0.0, 0.0],
-              },
-            });
-          }
-        }
-      }
-
-      final geoJson = {'type': 'FeatureCollection', 'features': features};
-
-      await style?.setStyleSourceProperty(
-        'tables-3d-source',
-        'data',
-        jsonEncode(geoJson),
-      );
-    } catch (e) {
-      print('⚠️ Error updating 3D layer source: $e');
-    }
-  }
-
-  // Helper to map DB asset path to Mapbox Style Model ID
-  String _getModelIdForAsset(String? assetPath) {
-    if (assetPath == null) return 'arrow-model'; // Default
-
-    // Map asset filenames to our internal IDs
-    if (assetPath.contains('tennis')) return 'tennis-racket-model';
-    if (assetPath.contains('basketball')) return 'basketball-model';
-    if (assetPath.contains('soccer')) return 'soccer-ball-model';
-    if (assetPath.contains('burger')) return 'burger-model';
-    if (assetPath.contains('pizza')) return 'pizza-model';
-    if (assetPath.contains('chinese')) return 'chinese-food-model';
-    if (assetPath.contains('creamed')) return 'creamed-coffee-model';
-    if (assetPath.contains('coffee_shop')) return 'coffee-shop-model';
-
-    return 'arrow-model'; // Fallback
   }
 
   Future<Uint8List> _createCustomMarkerImage({
@@ -1518,6 +1512,90 @@ class MapScreenState extends State<MapScreen>
     return byteData!.buffer.asUint8List();
   }
 
+  Future<Uint8List> _createEventMarkerImage({required Event event}) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    final int size = 120;
+
+    // Event markers use orange border (distinctive from blue table markers)
+    final Paint borderPaint = Paint()
+      ..color =
+          const Color(0xFFFF6B35) // Orange for events
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 3, borderPaint);
+
+    // Draw white background
+    final Paint bgPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 8, bgPaint);
+
+    // Try to load event cover image
+    if (event.coverImageUrl != null && event.coverImageUrl!.isNotEmpty) {
+      try {
+        final response = await http.get(Uri.parse(event.coverImageUrl!));
+        final Uint8List bytes = response.bodyBytes;
+        final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+        final ui.FrameInfo frameInfo = await codec.getNextFrame();
+        final ui.Image coverImage = frameInfo.image;
+
+        // Draw circular clipped cover photo
+        canvas.save();
+        final Path clipPath = Path()
+          ..addOval(
+            Rect.fromCircle(
+              center: Offset(size / 2, size / 2),
+              radius: size / 2 - 12,
+            ),
+          );
+        canvas.clipPath(clipPath);
+
+        paintImage(
+          canvas: canvas,
+          rect: Rect.fromLTWH(12, 12, size - 24, size - 24),
+          image: coverImage,
+          fit: BoxFit.cover,
+        );
+        canvas.restore();
+      } catch (e) {
+        print('⚠️ Failed to load event cover image, using fallback: $e');
+        // Fallback to ticket emoji if image fails
+        _drawTicketIconFallback(canvas, size);
+      }
+    } else {
+      // No cover image, use ticket emoji
+      _drawTicketIconFallback(canvas, size);
+    }
+
+    // Convert to image
+    final ui.Image image = await pictureRecorder.endRecording().toImage(
+      size,
+      size,
+    );
+    final ByteData? byteData = await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+    return byteData!.buffer.asUint8List();
+  }
+
+  void _drawTicketIconFallback(Canvas canvas, int size) {
+    // Draw ticket/event icon (🎟️) as fallback
+    final textPainter = TextPainter(
+      text: const TextSpan(text: '🎟️', style: TextStyle(fontSize: 50)),
+      textAlign: TextAlign.center,
+      textDirection: ui.TextDirection.ltr,
+    );
+    textPainter.layout();
+
+    textPainter.paint(
+      canvas,
+      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+    );
+  }
+
   void _drawPlaceholder(Canvas canvas, int size, String? activityType) {
     // White background
     final Paint bgPaint = Paint()
@@ -1620,9 +1698,26 @@ class MapScreenState extends State<MapScreen>
           }
         } else {
           final index = properties?['index'];
-          print('🔖 Marker tapped with index: $index');
+          final markerType = properties?['type'];
+          print('🔖 Marker tapped with index: $index, type: $markerType');
 
-          if (index != null && index is int && index < _tables.length) {
+          if (markerType == 'event' &&
+              index != null &&
+              index is int &&
+              index < _events.length) {
+            // Event marker tapped
+            final event = _events[index];
+            print('🎟️ Opening event: ${event.title}');
+
+            if (mounted) {
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (context) => EventDetailModal(event: event),
+              );
+            }
+          } else if (index != null && index is int && index < _tables.length) {
             final table = _tables[index];
             print('🍽️ Opening table: ${table['title']}');
 

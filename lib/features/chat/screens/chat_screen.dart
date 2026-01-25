@@ -12,6 +12,8 @@ import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import 'package:bitemates/features/chat/widgets/chat_participant_header.dart';
+import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -52,6 +54,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _showConnectionBanner = false; // Show disconnected banner
   Timer? _reconnectTimer; // Automatic reconnection timer
 
+  // Pagination
+  int _messageLimit = 50; // Load 50 messages at a time
+  int _messageOffset = 0;
+  bool _hasMoreMessages = true;
+  bool _isLoadingMore = false;
+
   // Typing indicators
   bool _otherUserTyping = false;
   Timer? _typingTimer;
@@ -64,6 +72,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _initializeChat();
     _messageController.addListener(_onTypingChanged);
+    _scrollController.addListener(_onScroll); // Listen for scroll to load more
+
+    // Cleanup old messages on init (runs in background)
+    _chatDatabase.cleanupOldMessages().catchError((e) {
+      print('⚠️ Cleanup failed: $e');
+    });
   }
 
   Future<void> _initializeChat() async {
@@ -73,6 +87,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await _loadMessageHistory();
     _subscribeToAbly();
     _subscribeToReactions();
+    _subscribeToParticipants();
   }
 
   @override
@@ -109,6 +124,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _isHost = false;
         _useTelegramMode = true;
+      });
+      return;
+    }
+
+    if (widget.chatType == 'dm') {
+      setState(() {
+        _isHost = false;
+        _useTelegramMode = false; // DMs use legacy mode
       });
       return;
     }
@@ -198,31 +221,139 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _subscribeToParticipants() {
+    if (widget.chatType == 'trip') return;
+
+    if (widget.chatType == 'dm') {
+      SupabaseConfig.client
+          .channel('direct_chat_participants:${widget.tableId}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'direct_chat_participants',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'chat_id',
+              value: widget.tableId,
+            ),
+            callback: (payload) {
+              _loadParticipants();
+            },
+          )
+          .subscribe();
+      return;
+    }
+
+    SupabaseConfig.client
+        .channel('table_participants:${widget.tableId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'table_members', // Listening to the TABLE we query
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'table_id',
+            value: widget.tableId,
+          ),
+          callback: (payload) {
+            _loadParticipants(); // Reload list on any change
+          },
+        )
+        .subscribe();
+  }
+
+  Future<void> _verifyParticipant(String participantId) async {
+    // 1. Find my own status
+    final myStatus = _participants.firstWhere(
+      (p) => p['userId'] == _currentUserId,
+      orElse: () => {},
+    )['arrival_status'];
+
+    final isMe = participantId == _currentUserId;
+    final isHost = await _checkIfHostBoolean(); // Helper to check quickly
+
+    // 2. Logic Gate
+    if (!isMe) {
+      // Trying to verify someone else
+      // Rule: Only Verified users or Host can verify others
+      // "Host is automatically verified" via triggers/logic usually,
+      // but let's check explicit status or implicit host power.
+      final amIVerified = myStatus == 'verified' || isHost;
+
+      if (!amIVerified) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You must be verified yourself before verifying others!',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    }
+
+    // 3. Open Sheet
+    if (mounted) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => VerificationSheet(
+          currentUserId: _currentUserId!,
+          targetUserId: participantId,
+          tableId: widget.tableId,
+          isMe: isMe,
+        ),
+      );
+    }
+  }
+
+  // Quick helper for synchronous-like check if needed, or reuse _checkIfHost
+  Future<bool> _checkIfHostBoolean() async {
+    try {
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select('host_id')
+          .eq('id', widget.tableId)
+          .single();
+      return table['host_id'] == _currentUserId;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _loadParticipants() async {
     try {
       final query = widget.chatType == 'trip'
           ? SupabaseConfig.client
                 .from('trip_chat_participants')
                 .select('user_id')
-                .eq(
-                  'chat_id',
-                  widget.tableId,
-                ) // tableId holds chat_id for trips
+                .eq('chat_id', widget.tableId)
+          : widget.chatType == 'dm'
+          ? SupabaseConfig.client
+                .from('direct_chat_participants')
+                .select('user_id')
+                .eq('chat_id', widget.tableId)
           : SupabaseConfig.client
                 .from('table_members')
-                .select('user_id')
+                .select('user_id, arrival_status')
                 .eq('table_id', widget.tableId)
-                .inFilter('status', [
-                  'approved',
-                  'joined',
-                  'attended',
-                ]); // Only show active members
+                .inFilter('status', ['approved', 'joined', 'attended']);
 
       final response = await query;
 
-      final userIds = List<Map<String, dynamic>>.from(
-        response,
-      ).map((p) => p['user_id'] as String).toList();
+      // Create a map of userId -> status
+      final statusMap = <String, String>{};
+      final userIds = <String>[];
+
+      for (var p in response) {
+        final uid = p['user_id'] as String;
+        userIds.add(uid);
+        if (widget.chatType != 'trip' && widget.chatType != 'dm') {
+          statusMap[uid] = p['arrival_status'] ?? 'joined';
+        }
+      }
 
       if (userIds.isEmpty) {
         if (mounted) setState(() => _participants = []);
@@ -251,6 +382,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'userId': u['id'],
               'displayName': u['display_name'],
               'photoUrl': photoMap[u['id']],
+              'arrival_status': statusMap[u['id']] ?? 'joined',
             };
           }).toList();
         });
@@ -290,21 +422,32 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadMessageHistory() async {
-    if (_useTelegramMode) {
+    if (_useTelegramMode && widget.chatType != 'dm') {
       await _loadMessageHistory_Telegram();
     } else {
       await _loadMessageHistory_Legacy();
     }
   }
 
-  /// Telegram mode: Load from local SQLite first
+  /// Telegram mode: Load from local SQLite first with pagination
   Future<void> _loadMessageHistory_Telegram() async {
     try {
-      final localMessages = await _chatDatabase.getMessages(widget.tableId);
+      // Load initial batch of messages
+      final localMessages = await _chatDatabase.getMessages(
+        widget.tableId,
+        limit: _messageLimit,
+        offset: _messageOffset,
+      );
 
       if (localMessages.isNotEmpty) {
         await _enrichAndDisplayMessages(localMessages);
       }
+
+      // Check if there are more messages
+      final totalCount = await _chatDatabase.getMessageCount(widget.tableId);
+      setState(() {
+        _hasMoreMessages = (_messageOffset + _messageLimit) < totalCount;
+      });
 
       // ALWAYS sync from cloud to catch missed messages
       print('📥 Syncing latest messages from cloud...');
@@ -313,8 +456,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         chatType: widget.chatType,
       );
 
-      // Refresh with latest data
-      final syncedMessages = await _chatDatabase.getMessages(widget.tableId);
+      // Refresh with latest data (only first batch)
+      final syncedMessages = await _chatDatabase.getMessages(
+        widget.tableId,
+        limit: _messageLimit,
+        offset: 0,
+      );
       await _enrichAndDisplayMessages(syncedMessages);
 
       if (mounted) {
@@ -332,13 +479,107 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Load more messages when scrolling up
+  Future<void> _loadMoreMessages() async {
+    if (_isLoadingMore || !_hasMoreMessages || !_useTelegramMode) return;
+
+    setState(() => _isLoadingMore = true);
+
+    try {
+      _messageOffset += _messageLimit;
+
+      final olderMessages = await _chatDatabase.getMessages(
+        widget.tableId,
+        limit: _messageLimit,
+        offset: _messageOffset,
+      );
+
+      if (olderMessages.isNotEmpty) {
+        // Append older messages to the END of the list (since we are Newest -> Oldest)
+        final enrichedOlder = await _enrichMessages(olderMessages);
+        setState(() {
+          _messages = [..._messages, ...enrichedOlder];
+        });
+      }
+
+      // Check if there are even more messages
+      final totalCount = await _chatDatabase.getMessageCount(widget.tableId);
+      setState(() {
+        // Offset is how many we've loaded. Has more if offset + limit < total
+        _hasMoreMessages = (_messageOffset + _messageLimit) < totalCount;
+        _isLoadingMore = false;
+      });
+    } catch (e) {
+      print('❌ Error loading more messages: $e');
+      setState(() => _isLoadingMore = false);
+    }
+  }
+
+  /// Scroll listener for pagination
+  void _onScroll() {
+    // With reverse: true, maxScrollExtent is the "Top" (Older messages).
+    // So we load more when we approach the max extent.
+    if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200 &&
+        !_isLoadingMore) {
+      _loadMoreMessages();
+    }
+  }
+
+  /// Helper to enrich messages without setting state
+  Future<List<Map<String, dynamic>>> _enrichMessages(
+    List<Map<String, dynamic>> messages,
+  ) async {
+    final userIds = messages
+        .map((m) => m['sender_id'] as String?)
+        .where((id) => id != null)
+        .toSet()
+        .toList();
+
+    if (userIds.isEmpty) return messages;
+
+    try {
+      final users = await SupabaseConfig.client
+          .from('users')
+          .select('id, display_name, avatar_url')
+          .inFilter('id', userIds);
+
+      final userMap = {for (var u in users) u['id']: u};
+
+      return messages.map((msg) {
+        final user = userMap[msg['sender_id']];
+        return {
+          ...msg,
+          'sender_name': user?['display_name'] ?? 'Unknown',
+          'sender_photo': user?['avatar_url'],
+        };
+      }).toList();
+    } catch (e) {
+      print('❌ Error enriching messages: $e');
+      return messages;
+    }
+  }
+
   /// Legacy mode: Load from Supabase
   Future<void> _loadMessageHistory_Legacy() async {
     try {
-      final tableName = widget.chatType == 'trip'
-          ? 'trip_messages'
-          : 'messages';
-      final idColumn = widget.chatType == 'trip' ? 'chat_id' : 'table_id';
+      String tableName;
+      String idColumn;
+      String timestampColumn;
+
+      if (widget.chatType == 'trip') {
+        tableName = 'trip_messages';
+        idColumn = 'chat_id';
+        timestampColumn = 'sent_at';
+      } else if (widget.chatType == 'dm') {
+        tableName = 'direct_messages';
+        idColumn = 'chat_id';
+        timestampColumn = 'created_at';
+      } else {
+        tableName = 'messages';
+        idColumn = 'table_id';
+        timestampColumn = 'timestamp';
+      }
 
       // Note: trip_messages has 'message_type', messages has 'content_type'.
       // We handle this mismatch in the map below.
@@ -347,10 +588,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           .from(tableName)
           .select('*')
           .eq(idColumn, widget.tableId)
-          .order(
-            widget.chatType == 'trip' ? 'sent_at' : 'timestamp',
-            ascending: true,
-          )
+          .eq(idColumn, widget.tableId)
+          .order(timestampColumn, ascending: false) // Newest first
           .limit(50);
 
       final messageList = List<Map<String, dynamic>>.from(messages);
@@ -505,12 +744,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
 
         // Attempt reconnection on disconnect
-        if (stateChange.current == ably.ConnectionState.disconnected) {
-          _reconnectTimer?.cancel();
-          _reconnectTimer = Timer(Duration(seconds: 3), () {
-            _ablyService.reconnect();
-          });
-        }
+        // REMOVED: Auto-connect is handled by the SDK. Manual overrides cause loops.
+        // if (stateChange.current == ably.ConnectionState.disconnected) {
+        //   _reconnectTimer?.cancel();
+        //   _reconnectTimer = Timer(Duration(seconds: 3), () {
+        //     _ablyService.reconnect();
+        //   });
+        // }
 
         // Clear timer on successful connection
         if (isConnected) {
@@ -570,7 +810,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
         if (mounted) {
           setState(() {
-            _messages.add({
+            // Insert new message at Top (Index 0) because list is Newest -> Oldest
+            _messages.insert(0, {
               'content': data['content'],
               'contentType': data['contentType'] ?? 'text',
               'senderId': data['senderId'],
@@ -714,7 +955,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'sender_id': _currentUserId,
           'content': content,
           'message_type': contentType,
-          // 'reply_to_id': replyToId, // Schema update needed if we want replies in trips
+        });
+      } else if (widget.chatType == 'dm') {
+        await SupabaseConfig.client.from('direct_messages').insert({
+          'chat_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': content,
+          'message_type': contentType,
         });
       } else {
         await SupabaseConfig.client.from('messages').insert({
@@ -1086,11 +1333,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Set a fixed height for the sheet (e.g., 90% of screen)
-    // or let it adapt if we prefer. Given it's a chat, taking most of the screen is good.
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Container(
+    // Set a fixed height for the sheet (75% of screen for better UX)
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        height: screenHeight * 0.75,
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -1126,36 +1375,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        GestureDetector(
-                          onTap: () => _showParticipantsSheet(),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Colors.green,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                '${_participants.length} Active',
-                                style: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const Icon(
-                                Icons.chevron_right,
-                                size: 16,
-                                color: Colors.grey,
-                              ),
-                            ],
-                          ),
                         ),
                       ],
                     ),
@@ -1223,6 +1442,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
+
+            // --- EVENT COORDINATION HEADER ---
+            if (widget.chatType != 'trip')
+              ChatParticipantHeader(
+                participants: _participants,
+                onVerifyPressed: _verifyParticipant,
+                onReadyPressed: () {
+                  if (_currentUserId != null) {
+                    _verifyParticipant(_currentUserId!);
+                  }
+                },
+              ),
+
             const Divider(height: 1, color: Colors.black12),
 
             // Connection Status Banner
@@ -1266,28 +1498,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            Icons.chat_bubble_outline,
-                            color: Colors.grey[300],
+                            Icons.forum_outlined, // More conversational icon
                             size: 64,
+                            color: Colors.grey[300],
                           ),
                           const SizedBox(height: 16),
                           Text(
                             'No messages yet',
                             style: TextStyle(
-                              color: Colors.grey[400],
+                              color: Colors.grey[500],
                               fontSize: 18,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Start the conversation!',
+                            'Say Hi! 👋',
                             style: TextStyle(color: Colors.grey[400]),
                           ),
                         ],
                       ),
                     )
                   : ListView.builder(
+                      reverse: true, // Standard Chat UI: Bottom is start
                       keyboardDismissBehavior:
                           ScrollViewKeyboardDismissBehavior.onDrag,
                       controller: _scrollController,
@@ -1296,9 +1529,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       itemBuilder: (context, index) {
                         final msg = _messages[index];
                         final isMe = msg['isMe'] as bool;
-                        final showHeader =
-                            index == 0 ||
-                            _messages[index - 1]['senderId'] != msg['senderId'];
+
+                        // Header Logic: Show if this message is the First (Oldest) of a block.
+                        // In Newest->Oldest list:
+                        // Next item (index + 1) is OLDER.
+                        // If Next item has different sender, then THIS item is the start of a new block (going up/chronologically down).
+                        // Visual Stack: [Next/Older] -> [This/Newer].
+                        // Header goes above [Next/Older] usually?
+                        // Wait. Header goes above the GROUP.
+                        // Group: [Older, ..., Newer].
+                        // Visual Top: Older.
+                        // Visual Bottom: Newer.
+                        // We iterate 0 (Newer) ... N (Older).
+                        // Header should appear on the OLDER message if the EVEN OLDER message is different.
+                        // So checking strict Index logic:
+                        // We want header on `msg` if `msg` is the "Top" of its group.
+                        // "Top" means Oldest in group.
+                        // So `msg` must be Older than `msg-1` (Newer). (Always true).
+                        // `msg` must be Newer than `msg+1` (Even Older).
+                        // If `msg+1` sender != `msg` sender. Then `msg` is the start of this group (from top).
+                        // So Check: index == last || messages[index+1].sender != msg.sender.
+
+                        final bool showHeader =
+                            index == _messages.length - 1 ||
+                            _messages[index + 1]['senderId'] != msg['senderId'];
 
                         return Padding(
                           padding: EdgeInsets.only(
@@ -1459,8 +1713,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                                 'gif'
                                                             ? EdgeInsets.zero
                                                             : const EdgeInsets.symmetric(
-                                                                horizontal: 16,
-                                                                vertical: 12,
+                                                                horizontal: 12,
+                                                                vertical: 8,
                                                               ),
                                                         decoration: BoxDecoration(
                                                           color:
@@ -1488,19 +1742,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                           borderRadius: BorderRadius.only(
                                                             topLeft:
                                                                 const Radius.circular(
-                                                                  20,
+                                                                  16, // Slightly reduced radius
                                                                 ),
                                                             topRight:
                                                                 const Radius.circular(
-                                                                  20,
+                                                                  16,
                                                                 ),
                                                             bottomLeft:
                                                                 Radius.circular(
-                                                                  isMe ? 20 : 4,
+                                                                  isMe ? 16 : 4,
                                                                 ),
                                                             bottomRight:
                                                                 Radius.circular(
-                                                                  isMe ? 4 : 20,
+                                                                  isMe ? 4 : 16,
                                                                 ),
                                                           ),
                                                           // Add shadow to mine for pop
@@ -1671,7 +1925,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                                             .white
                                                                       : Colors
                                                                             .black87,
-                                                                  fontSize: 16,
+                                                                  fontSize: 15,
                                                                   fontStyle:
                                                                       (msg['deletedAt'] !=
                                                                               null &&
@@ -1777,7 +2031,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
             // Input Area
             Container(
-              padding: const EdgeInsets.only(left: 16, right: 16, top: 12),
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 12,
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
               decoration: BoxDecoration(
                 color: Theme.of(context).brightness == Brightness.dark
                     ? Colors.grey[900]
@@ -1791,6 +2050,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ],
               ),
               child: SafeArea(
+                bottom: false,
                 child: Column(
                   children: [
                     if (_replyingTo != null)
@@ -1940,103 +2200,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   // --- Helper Methods (Updated for Light Theme) ---
-
-  void _showParticipantsSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  const Icon(Icons.people_outline, color: Colors.black87),
-                  const SizedBox(width: 12),
-                  Text(
-                    '${_participants.length} Participants',
-                    style: const TextStyle(
-                      color: Colors.black87,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: _participants.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final participant = _participants[index];
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    onTap: () {
-                      Navigator.pop(context); // Close member sheet
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              UserProfileScreen(userId: participant['userId']),
-                        ),
-                      );
-                    },
-                    leading: CircleAvatar(
-                      backgroundColor: Colors.grey[200],
-                      backgroundImage: participant['photoUrl'] != null
-                          ? NetworkImage(participant['photoUrl'])
-                          : null,
-                      child: participant['photoUrl'] == null
-                          ? Text(
-                              participant['displayName'][0].toUpperCase(),
-                              style: const TextStyle(
-                                color: Colors.black87,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            )
-                          : null,
-                    ),
-                    title: Text(
-                      participant['displayName'],
-                      style: const TextStyle(
-                        color: Colors.black87,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    subtitle: Text(
-                      participant['userId'] == _currentUserId
-                          ? 'You'
-                          : 'Member',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 13),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 30),
-          ],
-        ),
-      ),
-    );
-  }
 
   void _showMessageActions(Map<String, dynamic> message) {
     HapticFeedback.mediumImpact();

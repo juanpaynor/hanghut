@@ -1,6 +1,9 @@
 -- Fix get_main_feed RPC to show posts without H3 cells
 -- This allows posts created without location to appear in everyone's feed
 
+-- Drop existing function to allow return type change
+DROP FUNCTION IF EXISTS get_main_feed(integer, integer, double precision, double precision, text[]);
+
 CREATE OR REPLACE FUNCTION get_main_feed(
     p_limit INT DEFAULT 20,
     p_offset INT DEFAULT 0,
@@ -13,6 +16,7 @@ RETURNS TABLE (
     content TEXT,
     image_url TEXT,
     image_urls TEXT[],
+    gif_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE,
     user_id UUID,
     post_type TEXT,
@@ -47,6 +51,7 @@ BEGIN
         p.content,
         p.image_url,
         p.image_urls::TEXT[],
+        p.gif_url,
         p.created_at,
         p.user_id,
         p.post_type,

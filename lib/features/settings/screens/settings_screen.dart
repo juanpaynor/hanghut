@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/features/location/logic/geofence_engine.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/features/settings/widgets/settings_section.dart';
@@ -9,6 +10,7 @@ import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/legal/screens/terms_of_service_screen.dart';
+import 'package:bitemates/features/verification/screens/user_verification_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -18,13 +20,77 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  // Local State (Mocking backend preferences for now)
-  bool _notifyNearby = true;
-  int _notificationDistance = 20; // km
-  int _minAge = 18;
-  int _maxAge = 80; // "80+"
-  bool _snoozeMode = false;
+  // Local State
   bool _hideDistance = false;
+
+  // Notification Preferences
+  bool _notifEventJoins = true;
+  bool _notifChatMessages = true;
+  bool _notifPostLikes = true;
+  bool _notifPostComments = true;
+  bool _isLoadingPrefs = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotificationPreferences();
+  }
+
+  Future<void> _loadNotificationPreferences() async {
+    try {
+      final userId = SupabaseConfig.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final response = await SupabaseConfig.client
+          .from('users')
+          .select('notification_preferences')
+          .eq('id', userId)
+          .single();
+
+      final prefs =
+          response['notification_preferences'] as Map<String, dynamic>? ?? {};
+
+      if (mounted) {
+        setState(() {
+          _notifEventJoins = prefs['event_joins'] as bool? ?? true;
+          _notifChatMessages = prefs['chat_messages'] as bool? ?? true;
+          _notifPostLikes = prefs['post_likes'] as bool? ?? true;
+          _notifPostComments = prefs['post_comments'] as bool? ?? true;
+          _isLoadingPrefs = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading notification preferences: $e');
+      if (mounted) {
+        setState(() => _isLoadingPrefs = false);
+      }
+    }
+  }
+
+  Future<void> _updateNotificationPreference(String key, bool value) async {
+    try {
+      final userId = SupabaseConfig.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      await SupabaseConfig.client
+          .from('users')
+          .update({
+            'notification_preferences': {
+              'event_joins': key == 'event_joins' ? value : _notifEventJoins,
+              'chat_messages': key == 'chat_messages'
+                  ? value
+                  : _notifChatMessages,
+              'post_likes': key == 'post_likes' ? value : _notifPostLikes,
+              'post_comments': key == 'post_comments'
+                  ? value
+                  : _notifPostComments,
+            },
+          })
+          .eq('id', userId);
+    } catch (e) {
+      print('Error updating notification preference: $e');
+    }
+  }
 
   Future<void> _launchUrl(String urlString) async {
     final uri = Uri.parse(urlString);
@@ -33,80 +99,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _incrementDistance() {
-    setState(
-      () => _notificationDistance = (_notificationDistance + 5).clamp(5, 100),
-    );
-  }
-
-  void _decrementDistance() {
-    setState(
-      () => _notificationDistance = (_notificationDistance - 5).clamp(5, 100),
-    );
-  }
-
-  // --- Widgets ---
-
-  Widget _buildStepper(
-    String label,
-    int value,
-    VoidCallback onMinus,
-    VoidCallback onPlus, {
-    String suffix = '',
-  }) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.grey[600],
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildCircleButton(Icons.remove, onMinus),
-            const SizedBox(width: 16),
-            Text(
-              '$value$suffix',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).textTheme.bodyLarge?.color,
-              ),
-            ),
-            const SizedBox(width: 16),
-            _buildCircleButton(Icons.add, onPlus),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCircleButton(IconData icon, VoidCallback onTap) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey[300]!),
-          color: isDark ? Colors.grey[800] : Colors.white,
-        ),
-        child: Icon(
-          icon,
-          size: 20,
-          color: isDark ? Colors.white : Colors.grey[600],
-        ),
-      ),
-    );
-  }
+  // --- Removed placeholder settings widgets (stepper, circle button) ---
+  // These were for non-functional features: notification distance, age range
 
   @override
   Widget build(BuildContext context) {
@@ -121,163 +115,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
-          // 1. Notification Settings
-          SettingsSwitchTile(
-            icon: Icons.notifications_none,
-            title: 'Notify me about activities nearby',
-            value: _notifyNearby,
-            onChanged: (val) => setState(() => _notifyNearby = val),
-          ),
-
-          if (_notifyNearby) ...[
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const SizedBox(width: 56), // Align with text above
-                Expanded(
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.my_location,
-                        size: 20,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      const SizedBox(width: 16),
-                      // Flexible text to prevent overflow
-                      const Expanded(
-                        child: Text(
-                          'Notification distance',
-                          style: TextStyle(fontSize: 16),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Custom mini stepper for distance
-                      IconButton(
-                        icon: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Colors.red[50], // Light red bg
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.remove,
-                            size: 16,
-                            color: Colors.red,
-                          ),
-                        ),
-                        onPressed: _decrementDistance,
-                      ),
-                      Text(
-                        '$_notificationDistance km',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      IconButton(
-                        icon: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Colors.red[50],
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.add,
-                            size: 16,
-                            color: Colors.red,
-                          ),
-                        ),
-                        onPressed: _incrementDistance,
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                  ),
+          // Account Section
+          SettingsSection(
+            title: 'ACCOUNT',
+            children: [
+              ListTile(
+                leading: Icon(
+                  Icons.verified_user,
+                  color: Theme.of(context).primaryColor,
                 ),
-              ],
-            ),
-
-            ListTile(
-              leading: const SizedBox(width: 24), // Indent
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.category_outlined,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      const SizedBox(width: 16),
-                      const Text('Activity types'),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      Text(
-                        'All types',
-                        style: TextStyle(color: Colors.grey[600]),
-                      ),
-                      const Icon(Icons.keyboard_arrow_down, color: Colors.grey),
-                    ],
-                  ),
-                ],
+                title: const Text('Identity Verification'),
+                subtitle: const Text('Get verified badge'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const UserVerificationScreen(),
+                    ),
+                  );
+                },
               ),
-              onTap: () {}, // Future: Show multi-select dialog
-            ),
-          ],
-
+            ],
+          ),
           const Divider(),
 
-          // 2. Creator Age Range
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.people_outline,
-                      color: Theme.of(context).iconTheme.color,
-                    ),
-                    const SizedBox(width: 16),
-                    Text(
-                      'Creator age range',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Theme.of(context).textTheme.bodyLarge?.color,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _buildStepper(
-                      'Min Age',
-                      _minAge,
-                      () => setState(() {
-                        if (_minAge > 18) _minAge--;
-                      }),
-                      () => setState(() {
-                        if (_minAge < _maxAge) _minAge++;
-                      }),
-                    ),
-                    _buildStepper(
-                      'Max Age',
-                      _maxAge,
-                      () => setState(() {
-                        if (_maxAge > _minAge) _maxAge--;
-                      }),
-                      () => setState(() {
-                        if (_maxAge < 100) _maxAge++;
-                      }),
-                      suffix: '+',
-                    ),
-                  ],
-                ),
-              ],
-            ),
+          // Notification Preferences Section
+          SettingsSection(
+            title: 'NOTIFICATIONS',
+            children: [
+              SettingsSwitchTile(
+                icon: Icons.event,
+                title: 'Event joins',
+                subtitle: 'When someone joins your event',
+                value: _notifEventJoins,
+                onChanged: (val) async {
+                  setState(() => _notifEventJoins = val);
+                  await _updateNotificationPreference('event_joins', val);
+                },
+              ),
+              SettingsSwitchTile(
+                icon: Icons.chat_bubble_outline,
+                title: 'Chat messages',
+                subtitle: 'New messages in your events',
+                value: _notifChatMessages,
+                onChanged: (val) async {
+                  setState(() => _notifChatMessages = val);
+                  await _updateNotificationPreference('chat_messages', val);
+                },
+              ),
+              SettingsSwitchTile(
+                icon: Icons.favorite_border,
+                title: 'Post likes',
+                subtitle: 'When someone likes your post',
+                value: _notifPostLikes,
+                onChanged: (val) async {
+                  setState(() => _notifPostLikes = val);
+                  await _updateNotificationPreference('post_likes', val);
+                },
+              ),
+              SettingsSwitchTile(
+                icon: Icons.comment_outlined,
+                title: 'Comments',
+                subtitle: 'When someone comments on your post',
+                value: _notifPostComments,
+                onChanged: (val) async {
+                  setState(() => _notifPostComments = val);
+                  await _updateNotificationPreference('post_comments', val);
+                },
+              ),
+            ],
           ),
 
           const Divider(),
@@ -287,8 +194,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SettingsSwitchTile(
                 icon: Icons.visibility_off_outlined,
                 title: 'Snooze mode (hide me from nearby list)',
-                value: _snoozeMode,
-                onChanged: (val) => setState(() => _snoozeMode = val),
+                value: GeofenceEngine().isGhostMode,
+                onChanged: (val) async {
+                  await GeofenceEngine().setGhostMode(val);
+                  setState(() {}); // Rebuild to show new state
+                },
               ),
               SettingsSwitchTile(
                 icon: Icons.straighten,

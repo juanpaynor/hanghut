@@ -7,6 +7,10 @@ import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
 import 'package:bitemates/features/activity/widgets/joined_tables_list.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/features/location/logic/geofence_engine.dart';
+import 'package:bitemates/features/location/widgets/geofence_modal.dart';
+import 'package:bitemates/core/services/account_status_service.dart';
+import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -17,7 +21,8 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen>
+    with WidgetsBindingObserver {
   late int _selectedIndex;
 
   final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
@@ -26,6 +31,63 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
+    _setupGeofenceListener();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Check account status when app resumes
+      _checkAccountStatus();
+    }
+  }
+
+  Future<void> _checkAccountStatus() async {
+    final statusData = await AccountStatusService.checkStatus();
+    final status = statusData['status'] ?? 'active';
+
+    if (status == 'suspended' || status == 'banned' || status == 'deleted') {
+      if (mounted) {
+        // Navigate to suspended screen
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => AccountSuspendedScreen(
+              status: status,
+              reason: statusData['reason'],
+            ),
+          ),
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  void _setupGeofenceListener() {
+    GeofenceEngine().eventStream.listen((event) {
+      if (mounted) {
+        GeofenceModal.show(
+          context,
+          tableId: event['id']!,
+          tableName: event['title']!,
+          onCheckIn: () {
+            setState(() {
+              _selectedIndex = 1; // Switch to Map Tab
+            });
+            // Small delay to ensure tab switch
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _mapScreenKey.currentState?.showTableDetails(event['id']!);
+            });
+          },
+        );
+      }
+    });
   }
 
   List<Widget> get _screens {

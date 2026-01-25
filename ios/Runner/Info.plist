@@ -13,7 +13,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Bitemates</string>
+	<string>HangHut</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -21,7 +21,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>bitemates</string>
+	<string>HangHut</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -39,19 +39,20 @@
 	<key>MBXAccessToken</key>
 	<string>sk.eyJ1Ijoiam9obmlub3BhdGluIiwiYSI6ImNtaWoyeDJ0bzBvYWIzZXIxZ3NuNGVtY2cifQ.klu_T_fIF06R96z5MGDsMw</string>
 	<key>NSCameraUsageDescription</key>
-	<string>BiteMates needs camera access to take profile photos and capture moments.</string>
+	<string>HangHut needs camera access to take profile photos and capture moments.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>BiteMates needs your location to show nearby dining tables and validate venue distances.</string>
+	<string>HangHut needs your location to show nearby dining tables and validate venue distances.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>BiteMates needs your location to show nearby dining tables and validate venue distances.</string>
+	<string>HangHut needs your location to show nearby dining tables and validate venue distances.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>BiteMates needs access to your photos to upload profile pictures and share moments.</string>
+	<string>HangHut needs access to your photos to upload profile pictures and share moments.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
 		<string>processing</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

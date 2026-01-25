@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 
 /// Service to handle device location
@@ -73,6 +74,42 @@ class LocationService {
       print('❌ Error getting location: $e');
       return null;
     }
+  }
+
+  /// Stream controller for location updates
+  final StreamController<Position> _locationController =
+      StreamController<Position>.broadcast();
+
+  Stream<Position> get locationStream => _locationController.stream;
+
+  /// Start Foreground Stream
+  void startTracking() {
+    print('📍 Location Tracking Started');
+    const settings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 10, // Update every 10 meters
+    );
+
+    Geolocator.getPositionStream(locationSettings: settings).listen(
+      (Position position) {
+        _cachedPosition = position;
+        _lastUpdate = DateTime.now();
+        _locationController.add(position);
+      },
+      onError: (e) {
+        print('❌ LOCATION: Stream error - $e');
+      },
+    );
+  }
+
+  /// Calculate distance between two points (in meters)
+  double distanceBetween(
+    double startLat,
+    double startLng,
+    double endLat,
+    double endLng,
+  ) {
+    return Geolocator.distanceBetween(startLat, startLng, endLat, endLng);
   }
 
   /// Clear cached location

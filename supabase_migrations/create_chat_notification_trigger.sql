@@ -1,79 +1,78 @@
--- 1. Update Check Constraint to include 'chat'
-ALTER TABLE public.notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
-ALTER TABLE public.notifications ADD CONSTRAINT notifications_type_check 
-    CHECK (type IN ('like', 'comment', 'join_request', 'approved', 'system', 'invite', 'chat'));
-
--- 2. Create Trigger Function
-CREATE OR REPLACE FUNCTION handle_new_message()
+-- Optimized function to send push notification when someone sends a chat message
+-- OPTIMIZATIONS:
+-- 1. Batched query (no N+1 problem) - fetches all participants + prefs in ONE query
+-- 2. Rate limiting - max 1 notification per conversation per 5 minutes
+-- 3. Bulk notification sending (loops once with all data pre-fetched)
+CREATE OR REPLACE FUNCTION notify_chat_message()
 RETURNS TRIGGER AS $$
 DECLARE
-    recipient_id UUID;
-    sender_name TEXT;
-    entity_id UUID;
-    chat_sub_type TEXT;
+  participant_record RECORD;
+  sender_name TEXT;
+  rate_limit_interval INTERVAL := '5 minutes';
 BEGIN
-    -- Get Sender Name
-    SELECT display_name INTO sender_name FROM public.users WHERE id = NEW.sender_id;
-    IF sender_name IS NULL THEN
-        sender_name := 'Someone';
-    END IF;
+  -- Get sender's display name
+  SELECT display_name INTO sender_name
+  FROM users
+  WHERE id = NEW.sender_id;
 
-    -- Logic for Trip Messages
-    IF TG_TABLE_NAME = 'trip_messages' THEN
-        entity_id := NEW.chat_id;
-        chat_sub_type := 'trip';
+  -- OPTIMIZED: Fetch all eligible participants in ONE batched query
+  -- This eliminates the N+1 query problem
+  FOR participant_record IN
+    SELECT 
+      u.id as user_id,
+      u.fcm_token,
+      u.last_chat_notification_at
+    FROM table_participants p
+    INNER JOIN users u ON u.id = p.user_id
+    WHERE p.table_id = NEW.table_id
+      AND p.user_id != NEW.sender_id
+      AND p.status = 'approved'
+      -- Check notification preference in JOIN (faster than separate query)
+      AND (u.notification_preferences->>'chat_messages')::boolean = true
+      AND u.fcm_token IS NOT NULL
+      -- RATE LIMITING: Skip if notified within last 5 minutes for this conversation
+      AND (
+        u.last_chat_notification_at->>NEW.table_id::text IS NULL 
+        OR (u.last_chat_notification_at->>NEW.table_id::text)::timestamp + rate_limit_interval < NOW()
+      )
+  LOOP
+    -- Send notification via Edge Function
+    PERFORM net.http_post(
+      url := 'https://rahhezqtkpvkialnduft.supabase.co/functions/v1/send-push',
+      body := jsonb_build_object(
+        'user_id', participant_record.user_id,
+        'title', sender_name,
+        'body', CASE 
+          WHEN LENGTH(NEW.content) > 100 THEN SUBSTRING(NEW.content, 1, 100) || '...'
+          ELSE NEW.content
+        END,
+        'data', jsonb_build_object(
+          'type', 'chat_message',
+          'table_id', NEW.table_id::TEXT,
+          'message_id', NEW.id::TEXT,
+          'sender_id', NEW.sender_id::TEXT
+        )
+      )
+    );
 
-        FOR recipient_id IN 
-            SELECT user_id FROM public.trip_chat_participants 
-            WHERE chat_id = entity_id AND user_id != NEW.sender_id
-        LOOP
-            INSERT INTO public.notifications (
-                user_id, actor_id, type, title, body, entity_id, metadata
-            ) VALUES (
-                recipient_id, NEW.sender_id, 'chat',
-                sender_name, 
-                substring(NEW.content from 1 for 100), 
-                entity_id,
-                jsonb_build_object('chat_type', 'trip')
-            );
-        END LOOP;
+    -- Update rate limiting timestamp for this conversation
+    UPDATE users
+    SET last_chat_notification_at = 
+      jsonb_set(
+        COALESCE(last_chat_notification_at, '{}'::jsonb),
+        ARRAY[NEW.table_id::text],
+        to_jsonb(NOW())
+      )
+    WHERE id = participant_record.user_id;
+  END LOOP;
 
-    -- Logic for Table Messages
-    ELSE
-        entity_id := NEW.table_id;
-        chat_sub_type := 'table';
-
-        FOR recipient_id IN 
-            SELECT user_id FROM public.table_members 
-            WHERE table_id = entity_id 
-              AND status IN ('approved', 'joined', 'attended') 
-              AND user_id != NEW.sender_id
-        LOOP
-            INSERT INTO public.notifications (
-                user_id, actor_id, type, title, body, entity_id, metadata
-            ) VALUES (
-                recipient_id, NEW.sender_id, 'chat',
-                sender_name, 
-                substring(NEW.content from 1 for 100), 
-                entity_id,
-                jsonb_build_object('chat_type', 'table')
-            );
-        END LOOP;
-    END IF;
-
-    RETURN NEW;
+  RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 3. Create Triggers
-DROP TRIGGER IF EXISTS on_new_table_message ON public.messages;
-CREATE TRIGGER on_new_table_message
-    AFTER INSERT ON public.messages
-    FOR EACH ROW
-    EXECUTE FUNCTION handle_new_message();
-
-DROP TRIGGER IF EXISTS on_new_trip_message ON public.trip_messages;
-CREATE TRIGGER on_new_trip_message
-    AFTER INSERT ON public.trip_messages
-    FOR EACH ROW
-    EXECUTE FUNCTION handle_new_message();
+-- Create trigger that fires after a new message is sent
+DROP TRIGGER IF EXISTS on_chat_message_sent ON messages;
+CREATE TRIGGER on_chat_message_sent
+  AFTER INSERT ON messages
+  FOR EACH ROW
+  EXECUTE FUNCTION notify_chat_message();

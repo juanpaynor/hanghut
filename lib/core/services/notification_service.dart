@@ -131,6 +131,9 @@ class NotificationService {
         .from('notifications')
         .update({'is_read': true})
         .eq('id', notificationId);
+
+    // Refresh count after marking as read
+    _refreshUnreadCount();
   }
 
   // --- Realtime Updates (Smart Ping) ---

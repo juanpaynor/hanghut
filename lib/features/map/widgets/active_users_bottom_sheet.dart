@@ -4,7 +4,18 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
 class ActiveUsersBottomSheet extends StatefulWidget {
-  const ActiveUsersBottomSheet({Key? key}) : super(key: key);
+  final double? minLat;
+  final double? maxLat;
+  final double? minLng;
+  final double? maxLng;
+
+  const ActiveUsersBottomSheet({
+    Key? key,
+    this.minLat,
+    this.maxLat,
+    this.minLng,
+    this.maxLng,
+  }) : super(key: key);
 
   @override
   State<ActiveUsersBottomSheet> createState() => _ActiveUsersBottomSheetState();
@@ -43,16 +54,44 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
 
   Future<void> _fetchActiveUsers() async {
     try {
-      final response = await SupabaseConfig.client.rpc(
-        'get_active_users',
-        params: {'page_size': _pageSize, 'page_number': 0},
-      );
-      if (mounted) {
-        setState(() {
-          _users = List<Map<String, dynamic>>.from(response);
-          _hasMore = _users.length >= _pageSize;
-          _isLoading = false;
-        });
+      // Use viewport filtering if bounds available
+      if (widget.minLat != null &&
+          widget.maxLat != null &&
+          widget.minLng != null &&
+          widget.maxLng != null) {
+        final response = await SupabaseConfig.client.rpc(
+          'get_active_users_in_viewport',
+          params: {
+            'min_lat': widget.minLat,
+            'max_lat': widget.maxLat,
+            'min_lng': widget.minLng,
+            'max_lng': widget.maxLng,
+            'page_size': _pageSize,
+            'page_number': 0,
+          },
+        );
+
+        if (mounted) {
+          setState(() {
+            _users = List<Map<String, dynamic>>.from(response);
+            _hasMore = _users.length >= _pageSize;
+            _isLoading = false;
+          });
+        }
+      } else {
+        // Fallback to global active users
+        final response = await SupabaseConfig.client.rpc(
+          'get_active_users',
+          params: {'page_size': _pageSize, 'page_number': 0},
+        );
+
+        if (mounted) {
+          setState(() {
+            _users = List<Map<String, dynamic>>.from(response);
+            _hasMore = _users.length >= _pageSize;
+            _isLoading = false;
+          });
+        }
       }
     } catch (e) {
       print('Error fetching active users: $e');
@@ -71,19 +110,49 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
 
     try {
       final nextPage = _page + 1;
-      final response = await SupabaseConfig.client.rpc(
-        'get_active_users',
-        params: {'page_size': _pageSize, 'page_number': nextPage},
-      );
 
-      if (mounted) {
-        final newUsers = List<Map<String, dynamic>>.from(response);
-        setState(() {
-          _users.addAll(newUsers);
-          _page = nextPage;
-          _hasMore = newUsers.length >= _pageSize;
-          _isLoadingMore = false;
-        });
+      // Use viewport filtering if bounds available
+      if (widget.minLat != null &&
+          widget.maxLat != null &&
+          widget.minLng != null &&
+          widget.maxLng != null) {
+        final response = await SupabaseConfig.client.rpc(
+          'get_active_users_in_viewport',
+          params: {
+            'min_lat': widget.minLat,
+            'max_lat': widget.maxLat,
+            'min_lng': widget.minLng,
+            'max_lng': widget.maxLng,
+            'page_size': _pageSize,
+            'page_number': nextPage,
+          },
+        );
+
+        if (mounted) {
+          final newUsers = List<Map<String, dynamic>>.from(response);
+          setState(() {
+            _users.addAll(newUsers);
+            _page = nextPage;
+            _hasMore = newUsers.length >= _pageSize;
+            _isLoadingMore = false;
+          });
+        }
+      } else {
+        // Fallback
+        final response = await SupabaseConfig.client.rpc(
+          'get_active_users',
+          params: {'page_size': _pageSize, 'page_number': nextPage},
+        );
+
+        if (mounted) {
+          final newUsers = List<Map<String, dynamic>>.from(response);
+          setState(() {
+            _users.addAll(newUsers);
+            _page = nextPage;
+            _hasMore = newUsers.length >= _pageSize;
+            _isLoadingMore = false;
+          });
+        }
       }
     } catch (e) {
       print('Error loading more users: $e');
@@ -139,7 +208,7 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  '${_users.length} online',
+                  '${_users.length} ${widget.minLat != null ? "nearby" : "online"}',
                   style: const TextStyle(
                     color: Colors.green,
                     fontSize: 12,
@@ -164,11 +233,14 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
               ),
             )
           else if (_users.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(32.0),
+            Padding(
+              padding: const EdgeInsets.all(32.0),
               child: Text(
-                "It's quiet... for now. 🦗",
-                style: TextStyle(color: Colors.grey),
+                widget.minLat != null
+                    ? "No one active in this area.\nTry zooming out or check back later. 🗺️"
+                    : "It's quiet... for now. 🦗",
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.grey),
               ),
             )
           else

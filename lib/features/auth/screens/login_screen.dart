@@ -200,7 +200,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                             // HERO SECTION
                             Center(
                               child: Image.asset(
-                                'assets/images/logo.png',
+                                'assets/images/Hanghut.png',
                                 height: 220, // Increased a bit as requested
                                 width: 220,
                                 fit: BoxFit.contain,

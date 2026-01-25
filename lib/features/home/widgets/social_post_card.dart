@@ -50,17 +50,21 @@ class _SocialPostCardState extends State<SocialPostCard> {
     final content = widget.post['content'] as String? ?? '';
     final imageUrl = widget.post['image_url'] as String?;
     final imageUrls = widget.post['image_urls'] as List?;
+    final gifUrl = widget.post['gif_url'] as String?;
     final createdAt = widget.post['created_at'] as String?;
     final user = widget.post['user'] as Map<String, dynamic>?;
     final displayName = user?['display_name'] ?? 'User';
     final avatarUrl = user?['avatar_url'] as String?;
 
     // Convert image_urls to List<String> if present, otherwise use single image_url
+    // Only show images if there's no GIF (mutually exclusive)
     final List<String> images = [];
-    if (imageUrls != null && imageUrls.isNotEmpty) {
-      images.addAll(imageUrls.map((url) => url.toString()));
-    } else if (imageUrl != null && imageUrl.isNotEmpty) {
-      images.add(imageUrl);
+    if (gifUrl == null || gifUrl.isEmpty) {
+      if (imageUrls != null && imageUrls.isNotEmpty) {
+        images.addAll(imageUrls.map((url) => url.toString()));
+      } else if (imageUrl != null && imageUrl.isNotEmpty) {
+        images.add(imageUrl);
+      }
     }
 
     // Parse timestamp
@@ -230,11 +234,49 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     ),
                   ),
 
-                // Post Images (Carousel if multiple)
+                // Post Images (Grid Collage for multiple, single for one)
                 if (images.isNotEmpty) ...[
-                  images.length == 1
-                      ? _buildSingleImage(images.first)
-                      : _buildImageCarousel(images),
+                  _buildImageCollage(images),
+                  const SizedBox(height: 12),
+                ],
+
+                // GIF Display (mutually exclusive with images)
+                if (gifUrl != null && gifUrl.isNotEmpty) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Image.network(
+                      gifUrl,
+                      width: double.infinity,
+                      height: 250,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Container(
+                          height: 250,
+                          color: Colors.grey[200],
+                          child: const Center(
+                            child: CircularProgressIndicator(),
+                          ),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          height: 250,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Center(
+                            child: Icon(
+                              Icons.gif_box_outlined,
+                              color: Colors.grey[400],
+                              size: 40,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 12),
                 ],
 
@@ -283,92 +325,222 @@ class _SocialPostCardState extends State<SocialPostCard> {
     );
   }
 
-  Widget _buildSingleImage(String url) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => FullScreenImageViewer(imageUrl: url),
-          ),
-        );
-      },
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: CachedNetworkImage(
-          imageUrl: url,
-          width: double.infinity,
-          height: 250,
-          fit: BoxFit.cover,
-          placeholder: (context, url) => Container(
-            color: Colors.grey[200],
-            child: const Center(child: CircularProgressIndicator()),
-          ),
-          errorWidget: (context, url, error) => _buildErrorImage(),
-        ),
-      ),
-    );
-  }
+  /// Build collage grid for images (Instagram/Facebook style)
+  Widget _buildImageCollage(List<String> imageUrls) {
+    if (imageUrls.isEmpty) return const SizedBox.shrink();
 
-  Widget _buildImageCarousel(List<String> imageUrls) {
-    return SizedBox(
-      height: 250,
-      child: PageView.builder(
-        itemCount: imageUrls.length,
-        itemBuilder: (context, index) {
-          return Stack(
+    // Single image - full width
+    if (imageUrls.length == 1) {
+      return GestureDetector(
+        onTap: () => _openImageViewer(imageUrls, 0),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: CachedNetworkImage(
+            imageUrl: imageUrls[0],
+            width: double.infinity,
+            height: 250,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(
+              color: Colors.grey[200],
+              child: const Center(child: CircularProgressIndicator()),
+            ),
+            errorWidget: (context, url, error) => _buildErrorImage(),
+          ),
+        ),
+      );
+    }
+
+    // Two images - side by side
+    if (imageUrls.length == 2) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 250,
+          child: Row(
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(16),
+              Expanded(
                 child: GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            FullScreenImageViewer(imageUrl: imageUrls[index]),
-                      ),
-                    );
-                  },
+                  onTap: () => _openImageViewer(imageUrls, 0),
                   child: CachedNetworkImage(
-                    imageUrl: imageUrls[index],
-                    width: double.infinity,
+                    imageUrl: imageUrls[0],
                     height: 250,
                     fit: BoxFit.cover,
                     placeholder: (context, url) => Container(
                       color: Colors.grey[200],
                       child: const Center(child: CircularProgressIndicator()),
                     ),
-                    errorWidget: (context, url, error) => _buildErrorImage(),
                   ),
                 ),
               ),
-              // Page indicator
-              Positioned(
-                bottom: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).textTheme.bodyMedium?.color,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${index + 1}/${imageUrls.length}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+              const SizedBox(width: 2),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => _openImageViewer(imageUrls, 1),
+                  child: CachedNetworkImage(
+                    imageUrl: imageUrls[1],
+                    height: 250,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Container(
+                      color: Colors.grey[200],
+                      child: const Center(child: CircularProgressIndicator()),
                     ),
                   ),
                 ),
               ),
             ],
-          );
-        },
+          ),
+        ),
+      );
+    }
+
+    // Three images - 1 large on left, 2 stacked on right
+    if (imageUrls.length == 3) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 250,
+          child: Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: GestureDetector(
+                  onTap: () => _openImageViewer(imageUrls, 0),
+                  child: CachedNetworkImage(
+                    imageUrl: imageUrls[0],
+                    height: 250,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 2),
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => _openImageViewer(imageUrls, 1),
+                        child: CachedNetworkImage(
+                          imageUrl: imageUrls[1],
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => _openImageViewer(imageUrls, 2),
+                        child: CachedNetworkImage(
+                          imageUrl: imageUrls[2],
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Four+ images - 2x2 grid, with "+X" overlay for more
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        height: 250,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _openImageViewer(imageUrls, 0),
+                      child: CachedNetworkImage(
+                        imageUrl: imageUrls[0],
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _openImageViewer(imageUrls, 2),
+                      child: CachedNetworkImage(
+                        imageUrl: imageUrls[2],
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: Column(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _openImageViewer(imageUrls, 1),
+                      child: CachedNetworkImage(
+                        imageUrl: imageUrls[1],
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _openImageViewer(imageUrls, 3),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          CachedNetworkImage(
+                            imageUrl: imageUrls[3],
+                            fit: BoxFit.cover,
+                          ),
+                          if (imageUrls.length > 4)
+                            Container(
+                              color: Colors.black.withOpacity(0.6),
+                              child: Center(
+                                child: Text(
+                                  '+${imageUrls.length - 4}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openImageViewer(List<String> images, int initialIndex) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FullScreenImageViewer(
+          imageUrl: images[initialIndex],
+          imageUrls: images,
+          initialIndex: initialIndex,
+        ),
       ),
     );
   }

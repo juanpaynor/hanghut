@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:bitemates/features/activity/widgets/joined_tables_list.dart';
+import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 import 'package:bitemates/features/activity/widgets/my_trips_list.dart';
+import 'package:bitemates/features/activity/widgets/my_hangouts_list.dart';
 
 class ActivityScreen extends StatefulWidget {
   const ActivityScreen({super.key});
@@ -13,7 +14,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
@@ -35,12 +36,15 @@ class _ActivityScreenState extends State<ActivityScreen> {
             indicatorColor: Theme.of(context).primaryColor,
             labelStyle: const TextStyle(fontWeight: FontWeight.bold),
             tabs: const [
+              Tab(text: 'Tickets'),
               Tab(text: 'Hangouts'),
               Tab(text: 'Trips'),
             ],
           ),
         ),
-        body: const TabBarView(children: [JoinedTablesList(), MyTripsList()]),
+        body: const TabBarView(
+          children: [MyTicketsScreen(), MyHangoutsList(), MyTripsList()],
+        ),
       ),
     );
   }

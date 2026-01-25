@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1066997622719",
+    "project_id": "hanghut-28e04",
+    "storage_bucket": "hanghut-28e04.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1066997622719:android:107b31066b5fe3cf17a30a",
+        "android_client_info": {
+          "package_name": "com.hanghut.hanghut"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDsdUxlZwhSkUG2k4hTArv4D3Hd37BThac"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
