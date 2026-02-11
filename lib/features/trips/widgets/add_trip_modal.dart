@@ -232,371 +232,379 @@ class _AddTripModalState extends State<AddTripModal> {
 
           // Form
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Destination (Google Places)
-                    const Text(
-                      'Where are you going?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: surfaceColor,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: GooglePlaceAutoCompleteTextField(
-                        textEditingController: _cityController,
-                        googleAPIKey: _googleApiKey,
-                        inputDecoration: InputDecoration(
-                          hintText: 'Search for a city...',
-                          hintStyle: const TextStyle(color: Colors.black38),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.location_on,
-                            color: Colors.black54,
-                          ),
-                          filled: true,
-                          fillColor: Colors.transparent, // Handled by Container
+            child: GestureDetector(
+              onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Destination (Google Places)
+                      const Text(
+                        'Where are you going?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
                         ),
-                        debounceTime: 800, // Debounce 800ms
-                        isLatLngRequired: false,
-                        getPlaceDetailWithLatLng: (Prediction prediction) {
-                          // Not needed for simple city/country
-                        },
-                        itemClick: (Prediction prediction) {
-                          _cityController.text = prediction.description ?? '';
-                          _cityController
-                              .selection = TextSelection.fromPosition(
-                            TextPosition(offset: _cityController.text.length),
-                          );
-
-                          // Simple Parsing: "City, Country"
-                          final parts = (prediction.description ?? '').split(
-                            ',',
-                          );
-                          if (parts.length > 1) {
-                            _countryController.text = parts.last.trim();
-                          } else {
-                            _countryController.text = parts.first.trim();
-                          }
-                          setState(() {}); // Refresh UI if needed
-                        },
-                        // Customizing the list item
-                        itemBuilder: (context, index, Prediction prediction) {
-                          return Container(
-                            padding: const EdgeInsets.all(10),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.location_city,
-                                  color: Colors.grey,
-                                ),
-                                const SizedBox(width: 7),
-                                Expanded(
-                                  child: Text(prediction.description ?? ''),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
                       ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Dates
-                    const Text(
-                      'When?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    InkWell(
-                      onTap: _selectDateRange,
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
+                      const SizedBox(height: 8),
+                      Container(
                         decoration: BoxDecoration(
                           color: surfaceColor,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.calendar_today,
+                        child: GooglePlaceAutoCompleteTextField(
+                          textEditingController: _cityController,
+                          googleAPIKey: _googleApiKey,
+                          inputDecoration: InputDecoration(
+                            hintText: 'Search for a city...',
+                            hintStyle: const TextStyle(color: Colors.black38),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                            prefixIcon: const Icon(
+                              Icons.location_on,
                               color: Colors.black54,
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _startDate == null || _endDate == null
-                                    ? 'Select dates'
-                                    : '${DateFormat('MMM d').format(_startDate!)} - ${DateFormat('MMM d, yyyy').format(_endDate!)}',
-                                style: TextStyle(
-                                  color: _startDate == null
-                                      ? Colors.black38
-                                      : Colors.black,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                            if (_startDate != null && _endDate != null)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: accentColor,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  '${_endDate!.difference(_startDate!).inDays + 1} days',
-                                  style: const TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
+                            filled: true,
+                            fillColor:
+                                Colors.transparent, // Handled by Container
+                          ),
+                          debounceTime: 800, // Debounce 800ms
+                          isLatLngRequired: false,
+                          getPlaceDetailWithLatLng: (Prediction prediction) {
+                            // Not needed for simple city/country
+                          },
+                          itemClick: (Prediction prediction) {
+                            _cityController.text = prediction.description ?? '';
+                            _cityController
+                                .selection = TextSelection.fromPosition(
+                              TextPosition(offset: _cityController.text.length),
+                            );
+
+                            // Simple Parsing: "City, Country"
+                            final parts = (prediction.description ?? '').split(
+                              ',',
+                            );
+                            if (parts.length > 1) {
+                              _countryController.text = parts.last.trim();
+                            } else {
+                              _countryController.text = parts.first.trim();
+                            }
+
+                            // Dismiss keyboard after selection
+                            FocusScope.of(context).unfocus();
+
+                            setState(() {}); // Refresh UI if needed
+                          },
+                          // Customizing the list item
+                          itemBuilder: (context, index, Prediction prediction) {
+                            return Container(
+                              padding: const EdgeInsets.all(10),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.location_city,
+                                    color: Colors.grey,
                                   ),
-                                ),
+                                  const SizedBox(width: 7),
+                                  Expanded(
+                                    child: Text(prediction.description ?? ''),
+                                  ),
+                                ],
                               ),
-                          ],
+                            );
+                          },
                         ),
                       ),
-                    ),
 
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                    // Travel Style
-                    const Text(
-                      'Travel style',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ..._travelStyles.map((style) {
-                      final isSelected = _travelStyle == style['value'];
-                      return GestureDetector(
-                        onTap: () => setState(
-                          () => _travelStyle = style['value'] as String,
+                      // Dates
+                      const Text(
+                        'When?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
                         ),
+                      ),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: _selectDateRange,
                         child: Container(
-                          margin: const EdgeInsets.only(bottom: 8),
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: isSelected
-                                ? accentColor.withOpacity(0.2)
-                                : surfaceColor,
+                            color: surfaceColor,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isSelected
-                                  ? accentColor
-                                  : Colors.transparent,
-                              width: 2,
-                            ),
                           ),
                           child: Row(
                             children: [
-                              Text(
-                                style['label'] as String,
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontWeight: isSelected
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  fontSize: 16,
+                              const Icon(
+                                Icons.calendar_today,
+                                color: Colors.black54,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _startDate == null || _endDate == null
+                                      ? 'Select dates'
+                                      : '${DateFormat('MMM d').format(_startDate!)} - ${DateFormat('MMM d, yyyy').format(_endDate!)}',
+                                  style: TextStyle(
+                                    color: _startDate == null
+                                        ? Colors.black38
+                                        : Colors.black,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Text(
-                                style['description'] as String,
-                                style: const TextStyle(
-                                  color: Colors.black54,
-                                  fontSize: 12,
+                              if (_startDate != null && _endDate != null)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: accentColor,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${_endDate!.difference(_startDate!).inDays + 1} days',
+                                    style: const TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),
-                      );
-                    }),
-
-                    const SizedBox(height: 24),
-
-                    // Interests
-                    const Text(
-                      'What are you interested in?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: _interests.map((interest) {
-                        final isSelected = _selectedInterests.contains(
-                          interest['value'],
-                        );
-                        return ChoiceChip(
-                          label: Text(interest['label']!),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            setState(() {
-                              if (selected) {
-                                _selectedInterests.add(interest['value']!);
-                              } else {
-                                _selectedInterests.remove(interest['value']);
-                              }
-                            });
-                          },
-                          backgroundColor: surfaceColor,
-                          selectedColor: accentColor,
-                          labelStyle: TextStyle(
-                            color: Colors.black,
-                            fontWeight: isSelected
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide.none,
-                          ),
-                        );
-                      }).toList(),
-                    ),
 
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                    // Goals
-                    const Text(
-                      'What are you looking for?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: _goals.map((goal) {
-                        final isSelected = _selectedGoals.contains(
-                          goal['value'],
-                        );
-                        return ChoiceChip(
-                          label: Text(goal['label']!),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            setState(() {
-                              if (selected) {
-                                _selectedGoals.add(goal['value']!);
-                              } else {
-                                _selectedGoals.remove(goal['value']);
-                              }
-                            });
-                          },
-                          backgroundColor: surfaceColor,
-                          selectedColor: accentColor,
-                          labelStyle: TextStyle(
-                            color: Colors.black,
-                            fontWeight: isSelected
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide.none,
-                          ),
-                        );
-                      }).toList(),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Description
-                    const Text(
-                      'Tell us about your trip (optional)',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextFormField(
-                      controller: _descriptionController,
-                      maxLines: 3,
-                      style: const TextStyle(color: Colors.black),
-                      decoration: InputDecoration(
-                        hintText:
-                            'What are you planning to do? Any specific goals?',
-                        hintStyle: const TextStyle(color: Colors.black38),
-                        filled: true,
-                        fillColor: surfaceColor,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                      // Travel Style
+                      const Text(
+                        'Travel style',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
                         ),
                       ),
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // Create button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : _createTrip,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryColor,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                      const SizedBox(height: 8),
+                      ..._travelStyles.map((style) {
+                        final isSelected = _travelStyle == style['value'];
+                        return GestureDetector(
+                          onTap: () => setState(
+                            () => _travelStyle = style['value'] as String,
                           ),
-                        ),
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? accentColor.withOpacity(0.2)
+                                  : surfaceColor,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected
+                                    ? accentColor
+                                    : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Text(
+                                  style['label'] as String,
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    fontSize: 16,
                                   ),
                                 ),
-                              )
-                            : const Text(
-                                'Add Trip',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                                const SizedBox(width: 8),
+                                Text(
+                                  style['description'] as String,
+                                  style: const TextStyle(
+                                    color: Colors.black54,
+                                    fontSize: 12,
+                                  ),
                                 ),
-                              ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+
+                      const SizedBox(height: 24),
+
+                      // Interests
+                      const Text(
+                        'What are you interested in?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _interests.map((interest) {
+                          final isSelected = _selectedInterests.contains(
+                            interest['value'],
+                          );
+                          return ChoiceChip(
+                            label: Text(interest['label']!),
+                            selected: isSelected,
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  _selectedInterests.add(interest['value']!);
+                                } else {
+                                  _selectedInterests.remove(interest['value']);
+                                }
+                              });
+                            },
+                            backgroundColor: surfaceColor,
+                            selectedColor: accentColor,
+                            labelStyle: TextStyle(
+                              color: Colors.black,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              side: BorderSide.none,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Goals
+                      const Text(
+                        'What are you looking for?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _goals.map((goal) {
+                          final isSelected = _selectedGoals.contains(
+                            goal['value'],
+                          );
+                          return ChoiceChip(
+                            label: Text(goal['label']!),
+                            selected: isSelected,
+                            onSelected: (selected) {
+                              setState(() {
+                                if (selected) {
+                                  _selectedGoals.add(goal['value']!);
+                                } else {
+                                  _selectedGoals.remove(goal['value']);
+                                }
+                              });
+                            },
+                            backgroundColor: surfaceColor,
+                            selectedColor: accentColor,
+                            labelStyle: TextStyle(
+                              color: Colors.black,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              side: BorderSide.none,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Description
+                      const Text(
+                        'Tell us about your trip (optional)',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _descriptionController,
+                        maxLines: 3,
+                        style: const TextStyle(color: Colors.black),
+                        decoration: InputDecoration(
+                          hintText:
+                              'What are you planning to do? Any specific goals?',
+                          hintStyle: const TextStyle(color: Colors.black38),
+                          filled: true,
+                          fillColor: surfaceColor,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 32),
+
+                      // Create button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isLoading ? null : _createTrip,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : const Text(
+                                  'Add Trip',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

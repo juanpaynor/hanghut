@@ -20,6 +20,7 @@ class ProfileService {
   // Save full profile
   Future<void> createProfile({
     required String userId,
+    required String displayName,
     required String bio,
     required DateTime dob,
     required String gender,
@@ -37,7 +38,7 @@ class ProfileService {
       await SupabaseConfig.client.from('users').upsert({
         'id': userId,
         'email': user.email,
-        'display_name': user.userMetadata?['display_name'],
+        'display_name': displayName,
         'bio': bio,
         'date_of_birth': dob.toIso8601String().split('T')[0],
         'gender_identity': gender,

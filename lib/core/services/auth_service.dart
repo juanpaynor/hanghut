@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   final SupabaseClient _supabase = SupabaseConfig.client;
@@ -60,16 +61,61 @@ class AuthService {
     }
   }
 
-  // Sign in with Google (for future implementation)
+  // Sign in with Google - using native SDK + Supabase signInWithIdToken
   Future<bool> signInWithGoogle() async {
-    // TODO: Implement Google OAuth flow
-    throw UnimplementedError('Google sign-in not yet implemented');
+    try {
+      // Initialize Google Sign-In
+      final GoogleSignIn googleSignIn = GoogleSignIn(
+        serverClientId:
+            '558582827268-h51orqbvau38tb39ld303lcals5f2bqp.apps.googleusercontent.com',
+        clientId:
+            '558582827268-renm42f0ecl1tmfrhou1tuk2pergpghg.apps.googleusercontent.com',
+      );
+
+      // Trigger Google Sign-In flow
+      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+      if (googleUser == null) {
+        return false; // User canceled
+      }
+
+      // Get authentication details
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
+      final String? idToken = googleAuth.idToken;
+
+      if (idToken == null) {
+        throw 'No ID Token found';
+      }
+
+      // Sign in to Supabase using the ID token
+      final AuthResponse response = await _supabase.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+      );
+
+      return response.user != null;
+    } catch (e) {
+      print('Google Sign-In Error: $e');
+      rethrow;
+    }
   }
 
   // Sign in with Apple (for future implementation)
   Future<bool> signInWithApple() async {
     // TODO: Implement Apple OAuth flow
     throw UnimplementedError('Apple sign-in not yet implemented');
+  }
+
+  // Reset password via email (Web Flow)
+  Future<void> resetPasswordForEmail(String email) async {
+    try {
+      await _supabase.auth.resetPasswordForEmail(
+        email,
+        redirectTo: 'https://hanghut.com/auth/reset', // Points to Web App
+      );
+    } catch (e) {
+      rethrow;
+    }
   }
 
   // Get auth state stream

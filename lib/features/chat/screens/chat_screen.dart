@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_linkify/flutter_linkify.dart';
+import 'package:any_link_preview/any_link_preview.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/core/services/user_cache.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -37,6 +41,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _ablyService = AblyService();
   final _chatDatabase = ChatDatabase();
   final _memberService = TableMemberService();
+  final _userCache = UserCache();
   final _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -73,11 +78,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _initializeChat();
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll); // Listen for scroll to load more
-
-    // Cleanup old messages on init (runs in background)
-    _chatDatabase.cleanupOldMessages().catchError((e) {
-      print('⚠️ Cleanup failed: $e');
-    });
   }
 
   Future<void> _initializeChat() async {
@@ -103,35 +103,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _useTelegramMode) {
-      print('📱 App resumed: Syncing chat...');
-      Future.wait([
-        _chatDatabase.initialSyncFromCloud(
-          widget.tableId,
-          chatType: widget.chatType,
-        ),
-        _syncPendingMessages(),
-      ]).then((_) {
-        // Refresh local view after sync
-        _loadMessageHistory_Telegram();
-      });
+    if (state == AppLifecycleState.resumed) {
+      print('📱 App resumed: Reloading chat history...');
+      // Just reload history to catch up (Legacy Mode)
+      _loadMessageHistory();
     }
   }
 
   Future<void> _checkIfHost() async {
-    if (widget.chatType == 'trip') {
-      // Trip chats now also use Telegram mode (Local First) 🚀
-      setState(() {
-        _isHost = false;
-        _useTelegramMode = true;
-      });
-      return;
-    }
+    // FORCE LEGACY MODE for stability (fixes sync issues)
+    setState(() {
+      _useTelegramMode = false;
+    });
 
-    if (widget.chatType == 'dm') {
+    if (widget.chatType == 'trip' || widget.chatType == 'dm') {
       setState(() {
         _isHost = false;
-        _useTelegramMode = false; // DMs use legacy mode
       });
       return;
     }
@@ -139,20 +126,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('host_id, chat_storage_type')
+          .select('host_id') // No longer need chat_storage_type
           .eq('id', widget.tableId)
           .single();
 
       setState(() {
         _isHost = table['host_id'] == _currentUserId;
-        _useTelegramMode = table['chat_storage_type'] == 'telegram';
       });
-
-      if (_useTelegramMode) {
-        print('📱 Using Telegram mode (local-first) for this table');
-      } else {
-        print('💾 Using legacy mode (database-first) for this table');
-      }
     } catch (e) {
       print('❌ CHAT: Error checking host status - $e');
     }
@@ -176,7 +156,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _loadReactions() async {
     try {
-      final messageIds = _messages
+      // OPTIMIZATION: Only load reactions for visible messages (first 50)
+      // This reduces database load for long chats
+      final visibleMessages = _messages.take(50).toList();
+
+      final messageIds = visibleMessages
           .map((m) => m['id'])
           .where((id) => id != null)
           .toList();
@@ -187,19 +171,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           .select('*')
           .inFilter('message_id', messageIds);
 
-      // Fetch user display names for reactions
+      // Fetch user display names for reactions using UserCache
       final userIds = List<Map<String, dynamic>>.from(
         reactions,
       ).map((r) => r['user_id'] as String).toSet().toList();
 
-      final users = userIds.isEmpty
-          ? []
-          : await SupabaseConfig.client
-                .from('users')
-                .select('id, display_name')
-                .inFilter('id', userIds);
-
-      final userMap = {for (var u in users) u['id']: u['display_name']};
+      // Use UserCache for better performance
+      final users = await _userCache.getMany(userIds);
 
       final reactionMap = <String, List<Map<String, dynamic>>>{};
       for (var reaction in reactions) {
@@ -207,7 +185,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         reactionMap.putIfAbsent(msgId, () => []);
         reactionMap[msgId]!.add({
           ...reaction,
-          'displayName': userMap[reaction['user_id']] ?? 'Unknown',
+          'displayName':
+              users[reaction['user_id']]?['displayName'] ?? 'Unknown',
         });
       }
 
@@ -422,7 +401,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadMessageHistory() async {
-    if (_useTelegramMode && widget.chatType != 'dm') {
+    if (_useTelegramMode) {
+      // ✅ Now includes DMs, Trips, and Tables with Telegram mode enabled
       await _loadMessageHistory_Telegram();
     } else {
       await _loadMessageHistory_Legacy();
@@ -481,37 +461,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   /// Load more messages when scrolling up
   Future<void> _loadMoreMessages() async {
-    if (_isLoadingMore || !_hasMoreMessages || !_useTelegramMode) return;
+    if (_isLoadingMore || !_hasMoreMessages) return;
 
     setState(() => _isLoadingMore = true);
 
     try {
       _messageOffset += _messageLimit;
 
-      final olderMessages = await _chatDatabase.getMessages(
-        widget.tableId,
-        limit: _messageLimit,
-        offset: _messageOffset,
-      );
+      // Call legacy mode with pagination offset
+      await _loadMessageHistory_Legacy();
 
-      if (olderMessages.isNotEmpty) {
-        // Append older messages to the END of the list (since we are Newest -> Oldest)
-        final enrichedOlder = await _enrichMessages(olderMessages);
-        setState(() {
-          _messages = [..._messages, ...enrichedOlder];
-        });
-      }
-
-      // Check if there are even more messages
-      final totalCount = await _chatDatabase.getMessageCount(widget.tableId);
-      setState(() {
-        // Offset is how many we've loaded. Has more if offset + limit < total
-        _hasMoreMessages = (_messageOffset + _messageLimit) < totalCount;
-        _isLoadingMore = false;
-      });
+      setState(() => _isLoadingMore = false);
     } catch (e) {
       print('❌ Error loading more messages: $e');
-      setState(() => _isLoadingMore = false);
+      setState(() {
+        _isLoadingMore = false;
+        _messageOffset -= _messageLimit; // Revert offset on error
+      });
     }
   }
 
@@ -526,127 +492,118 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Helper to enrich messages without setting state
-  Future<List<Map<String, dynamic>>> _enrichMessages(
-    List<Map<String, dynamic>> messages,
-  ) async {
-    final userIds = messages
-        .map((m) => m['sender_id'] as String?)
-        .where((id) => id != null)
-        .toSet()
-        .toList();
-
-    if (userIds.isEmpty) return messages;
-
-    try {
-      final users = await SupabaseConfig.client
-          .from('users')
-          .select('id, display_name, avatar_url')
-          .inFilter('id', userIds);
-
-      final userMap = {for (var u in users) u['id']: u};
-
-      return messages.map((msg) {
-        final user = userMap[msg['sender_id']];
-        return {
-          ...msg,
-          'sender_name': user?['display_name'] ?? 'Unknown',
-          'sender_photo': user?['avatar_url'],
-        };
-      }).toList();
-    } catch (e) {
-      print('❌ Error enriching messages: $e');
-      return messages;
-    }
-  }
-
-  /// Legacy mode: Load from Supabase
+  /// Legacy mode: Load from Supabase with optimized single query
   Future<void> _loadMessageHistory_Legacy() async {
     try {
       String tableName;
       String idColumn;
-      String timestampColumn;
+      String sequenceColumn = 'sequence_number';
 
       if (widget.chatType == 'trip') {
         tableName = 'trip_messages';
         idColumn = 'chat_id';
-        timestampColumn = 'sent_at';
       } else if (widget.chatType == 'dm') {
         tableName = 'direct_messages';
         idColumn = 'chat_id';
-        timestampColumn = 'created_at';
       } else {
         tableName = 'messages';
         idColumn = 'table_id';
-        timestampColumn = 'timestamp';
       }
 
-      // Note: trip_messages has 'message_type', messages has 'content_type'.
-      // We handle this mismatch in the map below.
+      // OPTIMIZED: Single query with joins for user data
+      // This replaces 3-4 separate queries with 1 query
+      final selectClause =
+          '''
+        *,
+        sender:users!${tableName}_sender_id_fkey(id, display_name, avatar_url)
+      ''';
 
-      final messages = await SupabaseConfig.client
+      var query = SupabaseConfig.client
           .from(tableName)
-          .select('*')
+          .select(selectClause)
           .eq(idColumn, widget.tableId)
-          .eq(idColumn, widget.tableId)
-          .order(timestampColumn, ascending: false) // Newest first
-          .limit(50);
+          .order(sequenceColumn, ascending: false)
+          .limit(_messageLimit);
 
+      // Cursor-based pagination: load messages older than current offset
+      if (_messageOffset > 0) {
+        query = query.range(_messageOffset, _messageOffset + _messageLimit - 1);
+      }
+
+      final messages = await query;
       final messageList = List<Map<String, dynamic>>.from(messages);
 
-      // Collect all sender IDs and reply_to IDs
+      if (messageList.isEmpty && _messageOffset == 0) {
+        if (mounted) {
+          setState(() {
+            _messages = [];
+            _isLoading = false;
+            _hasMoreMessages = false;
+          });
+        }
+        return;
+      }
+
+      // Extract user IDs for caching
       final senderIds = messageList
           .map((m) => m['sender_id'] as String)
-          .toSet();
+          .toSet()
+          .toList();
+
+      // Preload users into cache for future use
+      await _userCache.preloadUsers(senderIds);
+      final cachedUsers = await _userCache.getUsers(
+        senderIds,
+      ); // Get fresh data
+
+      // Handle reply messages if needed (still separate query for now)
       final replyToIds = messageList
           .where((m) => m['reply_to_id'] != null)
           .map((m) => m['reply_to_id'] as String)
           .toSet();
 
-      // Fetch users data
-      final users = senderIds.isEmpty
-          ? []
-          : await SupabaseConfig.client
-                .from('users')
-                .select('id, display_name')
-                .inFilter('id', senderIds.toList());
+      Map<String, Map<String, dynamic>> replyMap = {};
+      if (replyToIds.isNotEmpty) {
+        final replyMessages = await SupabaseConfig.client
+            .from('messages')
+            .select('id, content, sender_id')
+            .inFilter('id', replyToIds.toList());
 
-      final photos = senderIds.isEmpty
-          ? []
-          : await SupabaseConfig.client
-                .from('user_photos')
-                .select('user_id, photo_url')
-                .inFilter('user_id', senderIds.toList())
-                .eq('is_primary', true);
+        // Get reply sender names from cache
+        final replySenderIds = replyMessages
+            .map((r) => r['sender_id'] as String)
+            .toSet()
+            .toList();
+        final replyUsers = await _userCache.getUsers(replySenderIds);
 
-      // Fetch reply messages if any
-      final replyMessages = replyToIds.isEmpty
-          ? []
-          : await SupabaseConfig.client
-                .from('messages')
-                .select('id, content, sender_id')
-                .inFilter('id', replyToIds.toList());
-
-      final userMap = {for (var u in users) u['id']: u['display_name']};
-      final photoMap = {for (var p in photos) p['user_id']: p['photo_url']};
-      final replyMap = {
-        for (var r in replyMessages)
-          r['id']: {
-            'id': r['id'],
-            'content': r['content'],
-            'sender_id': r['sender_id'],
-            'senderName': userMap[r['sender_id']] ?? 'Unknown',
-          },
-      };
+        replyMap = {
+          for (var r in replyMessages)
+            r['id']: {
+              'id': r['id'],
+              'content': r['content'],
+              'sender_id': r['sender_id'],
+              'senderName':
+                  replyUsers[r['sender_id']]?.displayName ?? 'Unknown',
+            },
+        };
+      }
 
       if (mounted) {
         setState(() {
-          _messages = messageList.map((msg) {
-            final senderId = msg['sender_id'];
-            final replyToId =
-                msg['reply_to_id']; // Likely null for trips initially
+          final newMessages = messageList.map((msg) {
+            final senderId = msg['sender_id'] as String;
+            final replyToId = msg['reply_to_id'];
             final timestamp =
-                msg['sent_at'] ?? msg['timestamp']; // Handle col name diff
+                msg['sent_at'] ?? msg['created_at'] ?? msg['timestamp'];
+
+            // Use CACHE for valid photo URLs
+            final cachedProfile = cachedUsers[senderId];
+
+            // Extract user data from join (Fallback)
+            final senderData =
+                msg['sender'] is List && (msg['sender'] as List).isNotEmpty
+                ? (msg['sender'] as List).first
+                : msg['sender'];
 
             return {
               'id': msg['id'],
@@ -654,18 +611,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'contentType':
                   msg['message_type'] ?? msg['content_type'] ?? 'text',
               'senderId': senderId,
-              'senderName': userMap[senderId] ?? 'Unknown',
-              'senderPhotoUrl': photoMap[senderId],
+              'senderName':
+                  cachedProfile?.displayName ??
+                  senderData?['display_name'] ??
+                  'Unknown',
+              'senderPhotoUrl':
+                  cachedProfile?.photoUrl ?? senderData?['avatar_url'],
               'timestamp': timestamp,
               'isMe': senderId == _currentUserId,
               'deletedAt': msg['deleted_at'],
               'deletedForEveryone': msg['deleted_for_everyone'] ?? false,
               'replyTo': replyToId != null ? replyMap[replyToId] : null,
+              'sequenceNumber': msg['sequence_number'],
             };
           }).toList();
+
+          // Pagination: Append or replace messages
+          if (_messageOffset == 0) {
+            _messages = newMessages;
+          } else {
+            _messages.addAll(newMessages);
+          }
+
+          _hasMoreMessages = newMessages.length >= _messageLimit;
           _isLoading = false;
         });
-        _scrollToBottom();
+
+        if (_messageOffset == 0) {
+          _scrollToBottom();
+        }
         _loadReactions();
       }
     } catch (e) {
@@ -831,7 +805,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+          0.0, // In reverse ListView, 0.0 is the bottom
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -885,7 +859,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       // Update UI immediately
       if (mounted) {
         setState(() {
-          _messages.add({
+          // Insert at 0 (Bottom) for reversed list
+          _messages.insert(0, {
             ...message,
             'timestamp': DateTime.fromMillisecondsSinceEpoch(
               timestamp,
@@ -1185,15 +1160,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _onTypingChanged() {
     if (_ablyChannel == null) return;
 
-    if (!_isTyping) {
+    // Debounce: Only send typing status every 500ms instead of every keystroke
+    final isCurrentlyTyping = _messageController.text.isNotEmpty;
+
+    if (isCurrentlyTyping && !_isTyping) {
+      // User just started typing
       _isTyping = true;
       _sendTypingStatus(true);
     }
 
+    // Reset the timer on every keystroke
     _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(seconds: 2), () {
-      _isTyping = false;
-      _sendTypingStatus(false);
+    _typingTimer = Timer(const Duration(milliseconds: 500), () {
+      // If text is empty, user stopped typing
+      if (_messageController.text.isEmpty && _isTyping) {
+        _isTyping = false;
+        _sendTypingStatus(false);
+      }
     });
   }
 
@@ -1279,8 +1262,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Leave Chat?'),
-        content: const Text(
-          'You will be removed from this activity and its chat.',
+        content: Text(
+          widget.chatType == 'trip'
+              ? 'You will leave this trip group chat.'
+              : widget.chatType == 'dm'
+              ? 'This conversation will be hidden.'
+              : 'You will be removed from this activity and its chat.',
         ),
         actions: [
           TextButton(
@@ -1299,35 +1286,45 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (mounted) setState(() => _isLoading = true);
 
-    await _memberService.leaveTable(widget.tableId);
-
-    if (mounted) {
-      Navigator.pop(context, true); // Close chat with change signal
-    }
-  }
-
-  /// Sync all unsynced messages to cloud
-  Future<void> _syncPendingMessages() async {
-    if (!_useTelegramMode) return;
-
     try {
-      final unsyncedMessages = await _chatDatabase.getUnsyncedMessages(
-        widget.tableId,
-      );
-
-      if (unsyncedMessages.isEmpty) {
-        return;
+      if (widget.chatType == 'trip') {
+        // Leave Trip Chat
+        final user = SupabaseConfig.client.auth.currentUser;
+        if (user != null) {
+          // Note: tableId is passed as the chatId for trips in ActiveChatsList
+          await SupabaseConfig.client
+              .from('trip_chat_participants')
+              .delete()
+              .eq('chat_id', widget.tableId)
+              .eq('user_id', user.id);
+        }
+      } else if (widget.chatType == 'dm') {
+        // Hide DM (Delete participant entry or mark hidden)
+        // For now, let's delete the participant entry to "leave"
+        final user = SupabaseConfig.client.auth.currentUser;
+        if (user != null) {
+          await SupabaseConfig.client
+              .from('direct_chat_participants')
+              .delete()
+              .eq('chat_id', widget.tableId)
+              .eq('user_id', user.id);
+        }
+      } else {
+        // Legacy/Table Leave
+        await _memberService.leaveTable(widget.tableId);
       }
 
-      print('📤 Syncing ${unsyncedMessages.length} pending messages...');
-
-      for (var msg in unsyncedMessages) {
-        await _chatDatabase.syncToCloud(msg);
+      if (mounted) {
+        Navigator.pop(context, true); // Close chat with change signal
       }
-
-      print('✅ Batch sync complete');
     } catch (e) {
-      print('⚠️ Batch sync failed: $e');
+      print('Error leaving chat: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Failed to leave chat')));
+      }
     }
   }
 
@@ -1912,7 +1909,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                                         (msg['deletedForEveryone'] ||
                                                                             !isMe)
                                                                     ? '[Message deleted]'
-                                                                    : msg['content'],
+                                                                    : '', // Handled below for non-deleted
                                                                 style: TextStyle(
                                                                   color: isMe
                                                                       ? Colors
@@ -1927,16 +1924,143 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                                             .black87,
                                                                   fontSize: 15,
                                                                   fontStyle:
-                                                                      (msg['deletedAt'] !=
-                                                                              null &&
-                                                                          (msg['deletedForEveryone'] ||
-                                                                              !isMe))
-                                                                      ? FontStyle
-                                                                            .italic
-                                                                      : FontStyle
-                                                                            .normal,
+                                                                      FontStyle
+                                                                          .italic,
                                                                 ),
                                                               ),
+                                                            if (msg['deletedAt'] ==
+                                                                null)
+                                                              Linkify(
+                                                                onOpen:
+                                                                    _onOpenLink,
+                                                                text:
+                                                                    msg['content'],
+                                                                style: TextStyle(
+                                                                  color: isMe
+                                                                      ? Colors
+                                                                            .white
+                                                                      : Theme.of(
+                                                                              context,
+                                                                            ).brightness ==
+                                                                            Brightness.dark
+                                                                      ? Colors
+                                                                            .white
+                                                                      : Colors
+                                                                            .black87,
+                                                                  fontSize: 15,
+                                                                ),
+                                                                linkStyle: TextStyle(
+                                                                  color: isMe
+                                                                      ? Colors
+                                                                            .white
+                                                                      : Colors
+                                                                            .blue,
+                                                                  decoration:
+                                                                      TextDecoration
+                                                                          .underline,
+                                                                  decorationColor:
+                                                                      isMe
+                                                                      ? Colors
+                                                                            .white
+                                                                      : Colors
+                                                                            .blue,
+                                                                ),
+                                                              ),
+                                                            Builder(
+                                                              builder: (context) {
+                                                                final urlRegExp = RegExp(
+                                                                  r'https?://[^\s/$.?#].[^\s]*',
+                                                                  caseSensitive:
+                                                                      false,
+                                                                );
+                                                                final match = urlRegExp
+                                                                    .firstMatch(
+                                                                      msg['content'],
+                                                                    );
+                                                                if (match !=
+                                                                    null) {
+                                                                  final url = msg['content']
+                                                                      .substring(
+                                                                        match
+                                                                            .start,
+                                                                        match
+                                                                            .end,
+                                                                      );
+                                                                  return Padding(
+                                                                    padding:
+                                                                        const EdgeInsets.only(
+                                                                          top:
+                                                                              8.0,
+                                                                        ),
+                                                                    child: AnyLinkPreview(
+                                                                      link: url,
+                                                                      displayDirection:
+                                                                          UIDirection
+                                                                              .uiDirectionVertical,
+                                                                      showMultimedia:
+                                                                          true,
+                                                                      bodyMaxLines:
+                                                                          3,
+                                                                      bodyTextOverflow:
+                                                                          TextOverflow
+                                                                              .ellipsis,
+                                                                      titleStyle: TextStyle(
+                                                                        color:
+                                                                            isMe
+                                                                            ? Colors.black87
+                                                                            : Theme.of(
+                                                                                    context,
+                                                                                  ).brightness ==
+                                                                                  Brightness.dark
+                                                                            ? Colors.white
+                                                                            : Colors.black87,
+                                                                        fontWeight:
+                                                                            FontWeight.bold,
+                                                                        fontSize:
+                                                                            15,
+                                                                      ),
+                                                                      bodyStyle: TextStyle(
+                                                                        color:
+                                                                            isMe
+                                                                            ? Colors.black54
+                                                                            : Theme.of(
+                                                                                    context,
+                                                                                  ).brightness ==
+                                                                                  Brightness.dark
+                                                                            ? Colors.grey[300]
+                                                                            : Colors.grey,
+                                                                        fontSize:
+                                                                            12,
+                                                                      ),
+                                                                      backgroundColor:
+                                                                          isMe
+                                                                          ? Colors.white.withOpacity(
+                                                                              0.9,
+                                                                            )
+                                                                          : Theme.of(
+                                                                                  context,
+                                                                                ).brightness ==
+                                                                                Brightness.dark
+                                                                          ? Colors.grey[800]
+                                                                          : Colors.grey[200],
+                                                                      placeholderWidget:
+                                                                          const SizedBox.shrink(),
+                                                                      errorWidget:
+                                                                          const SizedBox.shrink(),
+                                                                      onTap: () {
+                                                                        _onOpenLink(
+                                                                          LinkableElement(
+                                                                            url,
+                                                                            url,
+                                                                          ),
+                                                                        );
+                                                                      },
+                                                                    ),
+                                                                  );
+                                                                }
+                                                                return const SizedBox.shrink();
+                                                              },
+                                                            ),
                                                           ],
                                                         ),
                                                       ),
@@ -2035,7 +2159,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 left: 16,
                 right: 16,
                 top: 12,
-                bottom: MediaQuery.of(context).viewInsets.bottom,
+                bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
               ),
               decoration: BoxDecoration(
                 color: Theme.of(context).brightness == Brightness.dark
@@ -2200,6 +2324,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   // --- Helper Methods (Updated for Light Theme) ---
+
+  Future<void> _onOpenLink(LinkableElement link) async {
+    final Uri uri = Uri.parse(link.url);
+    // Basic validation or just try to launch
+    // checking canLaunchUrl helps avoiding dead links or bad schemes
+    if (await canLaunchUrl(uri)) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('External Link Warning'),
+          content: Text(
+            'You are about to leave the app and open an external link:\n\n${link.url}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                launchUrl(uri, mode: LaunchMode.externalApplication);
+              },
+              child: const Text('Open'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Could not open link')));
+      }
+    }
+  }
 
   void _showMessageActions(Map<String, dynamic> message) {
     HapticFeedback.mediumImpact();

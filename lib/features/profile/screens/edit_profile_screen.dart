@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/core/services/image_crop_service.dart';
 import 'package:image_picker/image_picker.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -87,10 +88,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
       if (image == null) return;
 
+      final croppedFile = await ImageCropService.cropImage(
+        sourcePath: image.path,
+        context: context,
+      );
+
+      if (croppedFile == null) return;
+
       setState(() => _isLoading = true);
 
-      final file = File(image.path);
-      final fileExt = image.path.split('.').last;
+      final file = File(croppedFile.path);
+      final fileExt = croppedFile.path.split('.').last;
       final fileName = '${DateTime.now().toIso8601String()}.$fileExt';
       final userId = widget.userProfile['id'];
       final filePath = '$userId/$fileName';

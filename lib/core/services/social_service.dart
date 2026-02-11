@@ -21,30 +21,29 @@ class SocialService {
     double? userLng,
   }) async {
     try {
-      // Calculate H3 cells client-side to pass to RPC
-      List<String>? h3Cells;
-      if (userLat != null && userLng != null) {
-        h3Cells = getH3CellsForLocation(userLat, userLng);
-      }
-
       final Map<String, dynamic> params;
       final String rpcName;
 
       if (useCursor) {
-        // Cursor-based pagination (recommended)
+        // ✅ Use Philippines-wide RPC (no H3 filtering)
         params = {
-          'p_limit': limit,
+          'p_limit': limit + 1,
           'p_cursor': cursor,
           'p_cursor_id': cursorId,
           'p_user_lat': userLat,
           'p_user_lng': userLng,
-          'p_h3_cells': h3Cells,
+          // No H3 filter - Philippines-wide!
         };
-        rpcName = 'get_main_feed_cursor';
+        rpcName = 'get_philippines_feed'; // ✅ Nationwide coverage
       } else {
-        // Offset-based pagination (backwards compatibility)
+        // Offset-based pagination (backwards compatibility with H3)
+        List<String>? h3Cells;
+        if (userLat != null && userLng != null) {
+          h3Cells = getH3CellsForLocation(userLat, userLng);
+        }
+
         params = {
-          'p_limit': limit,
+          'p_limit': limit + 1,
           'p_offset': offset,
           'p_user_lat': userLat,
           'p_user_lng': userLng,
@@ -53,7 +52,11 @@ class SocialService {
         rpcName = 'get_main_feed';
       }
 
+      print('🔍 Calling RPC: $rpcName with params: $params');
       final response = await _client.rpc(rpcName, params: params);
+      print(
+        '📦 Response received: ${response?.toString().substring(0, 100)}...',
+      );
 
       // Handle response - it might be null or empty
       if (response == null) {
@@ -203,10 +206,11 @@ class SocialService {
           ''')
           .single();
 
-      // Publish to Ably for real-time updates (use H3 cell as channel)
-      if (h3Cell != null && h3Cell.isNotEmpty) {
-        AblyService().publishPostCreated(city: h3Cell, postData: response);
-      }
+      // ✅ Publish to Ably philippines channel for real-time updates
+      AblyService().publishPostCreated(
+        city: 'philippines', // ✅ Changed from h3Cell
+        postData: response,
+      );
 
       return response;
     } catch (e) {
@@ -256,10 +260,12 @@ class SocialService {
           ''')
           .single();
 
-      // Publish to Ably (only if public for now, or handle visibility in Ably later)
-      // For now, only public posts go to the public feed channel
-      if (h3Cell != null && h3Cell.isNotEmpty && visibility == 'public') {
-        AblyService().publishPostCreated(city: h3Cell, postData: response);
+      // ✅ Publish to Ably philippines channel (only public posts)
+      if (visibility == 'public') {
+        AblyService().publishPostCreated(
+          city: 'philippines', // ✅ Changed from h3Cell
+          postData: response,
+        );
       }
 
       return response;
@@ -532,11 +538,27 @@ class SocialService {
     try {
       final response = await _client
           .from('follows')
-          .select('follower:users!follower_id(*)')
+          .select(
+            'follower:users!follower_id(*, user_photos(photo_url, is_primary))',
+          )
           .eq('following_id', userId);
 
       return List<Map<String, dynamic>>.from(
-        response.map((e) => e['follower'] as Map<String, dynamic>),
+        response.map((e) {
+          final user = e['follower'] as Map<String, dynamic>;
+          // Enrich avatar_url if missing
+          if (user['avatar_url'] == null && user['user_photos'] != null) {
+            final photos = user['user_photos'] as List;
+            if (photos.isNotEmpty) {
+              final primary = photos.firstWhere(
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              );
+              user['avatar_url'] = primary['photo_url'];
+            }
+          }
+          return user;
+        }),
       );
     } catch (e) {
       print('Error getting followers: $e');
@@ -548,11 +570,27 @@ class SocialService {
     try {
       final response = await _client
           .from('follows')
-          .select('following:users!following_id(*)')
+          .select(
+            'following:users!following_id(*, user_photos(photo_url, is_primary))',
+          )
           .eq('follower_id', userId);
 
       return List<Map<String, dynamic>>.from(
-        response.map((e) => e['following'] as Map<String, dynamic>),
+        response.map((e) {
+          final user = e['following'] as Map<String, dynamic>;
+          // Enrich avatar_url if missing
+          if (user['avatar_url'] == null && user['user_photos'] != null) {
+            final photos = user['user_photos'] as List;
+            if (photos.isNotEmpty) {
+              final primary = photos.firstWhere(
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              );
+              user['avatar_url'] = primary['photo_url'];
+            }
+          }
+          return user;
+        }),
       );
     } catch (e) {
       print('Error getting following: $e');
@@ -587,23 +625,17 @@ class SocialService {
       final userId = _client.auth.currentUser?.id;
       if (userId == null) return false;
 
-      // Get post h3_cell before deleting for Ably
-      final post = await _client
-          .from('posts')
-          .select('h3_cell')
-          .eq('id', postId)
-          .eq('user_id', userId)
-          .maybeSingle();
-
+      // Delete the post
       await _client.from('posts').delete().match({
         'id': postId,
         'user_id': userId,
       });
 
-      // Publish to Ably
-      if (post != null && post['h3_cell'] != null) {
-        AblyService().publishPostDeleted(city: post['h3_cell'], postId: postId);
-      }
+      // ✅ Publish deletion to Ably philippines channel
+      AblyService().publishPostDeleted(
+        city: 'philippines', // ✅ Changed from h3Cell
+        postId: postId,
+      );
 
       return true;
     } catch (e) {

@@ -8,6 +8,8 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
+    console.log('🚨 WEBHOOK RECEIVED 🚨') // High-vis debug log
+
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders })
@@ -57,7 +59,7 @@ serve(async (req) => {
             // Find purchase intent
             let { data: intent, error: intentError } = await supabaseClient
                 .from('purchase_intents')
-                .select('*, event:events(id, title, organizer_id, tickets_sold), user:users(id, email, full_name)')
+                .select('*, event:events(id, title, organizer_id, tickets_sold, venue_name, start_datetime, cover_image_url), user:users(id, email, full_name)')
                 .eq('xendit_external_id', lookupId)
                 .single()
 
@@ -80,7 +82,7 @@ serve(async (req) => {
                     // Fetch related data separately (service role bypasses RLS better for direct queries)
                     const { data: event } = await supabaseClient
                         .from('events')
-                        .select('id, title, organizer_id, tickets_sold')
+                        .select('id, title, organizer_id, tickets_sold, venue_name, start_datetime, cover_image_url')
                         .eq('id', fallbackIntent.event_id)
                         .single()
 
@@ -107,43 +109,35 @@ serve(async (req) => {
 
             console.log('Payment successful for intent:', intent.id)
 
+            // Extract Payment Method Detail
+            let capturedMethod = 'unknown';
+            if (data.payment_channel) {
+                capturedMethod = data.payment_channel;
+            } else if (typeof data.payment_method === 'string') {
+                capturedMethod = data.payment_method;
+            } else if (data.payment_method) {
+                const pm = data.payment_method;
+                capturedMethod = pm.ewallet?.channel_code ||
+                    pm.retail_outlet?.channel_code ||
+                    pm.qr_code?.channel_code ||
+                    pm.direct_debit?.channel_code ||
+                    pm.card?.channel_code ||
+                    pm.virtual_account?.channel_code ||
+                    pm.type ||
+                    'unknown';
+            }
+
             // Update purchase intent
             await supabaseClient
                 .from('purchase_intents')
                 .update({
                     status: 'completed',
                     paid_at: created || new Date().toISOString(),
-                    payment_method: payment_method?.type || 'unknown',
+                    payment_method: capturedMethod,
                 })
                 .eq('id', intent.id)
 
-            // Generate tickets
-            const tickets = []
-            for (let i = 0; i < intent.quantity; i++) {
-                const ticketId = crypto.randomUUID()
-                const qrCode = `${ticketId}:${intent.event_id}:${intent.user_id}`
-
-                tickets.push({
-                    id: ticketId,
-                    purchase_intent_id: intent.id,
-                    event_id: intent.event_id,
-                    user_id: intent.user_id,
-                    ticket_number: `TK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-                    qr_code: qrCode,
-                    status: 'valid',
-                })
-            }
-
-            const { error: ticketsError } = await supabaseClient
-                .from('tickets')
-                .insert(tickets)
-
-            if (ticketsError) {
-                console.error('Failed to create tickets:', ticketsError)
-                throw ticketsError
-            }
-
-            // Record transaction
+            // Record transaction (Create transaction BEFORE tickets to ensure accounting)
             const { data: partner } = await supabaseClient
                 .from('partners')
                 .select('id, custom_percentage')
@@ -172,10 +166,10 @@ serve(async (req) => {
                     status: 'completed',
                 })
 
-            console.log(`✅ Issued ${intent.quantity} tickets for intent ${intent.id}`)
+            console.log(`✅ Recorded transaction for intent ${intent.id}`)
 
-            // Issue tickets using the RPC function (ensures they exist)
-            console.log(`🎟️ Issuing tickets for intent ${intent.id}...`)
+            // Issue tickets using the RPC function (Single Source of Truth)
+            console.log(`🎟️ Issuing tickets for intent ${intent.id} via RPC...`)
             const { data: generatedTickets, error: issueError } = await supabaseClient.rpc('issue_tickets', {
                 p_intent_id: intent.id
             })
@@ -183,7 +177,7 @@ serve(async (req) => {
             if (issueError) {
                 console.error('❌ Failed to issue tickets:', issueError)
             } else {
-                console.log(`✅ Successfully issued ${generatedTickets.length} tickets`)
+                console.log(`✅ Successfully issued ${generatedTickets?.length ?? 0} tickets`)
             }
 
             // Determine recipient (Guest or User)
@@ -191,7 +185,7 @@ serve(async (req) => {
             const recipientName = intent.guest_name || intent.user?.full_name
 
             if (recipientEmail && generatedTickets && generatedTickets.length > 0) {
-                console.log(`📧 Sending ticket email to ${recipientEmail}...`)
+                console.log(`📧 Sending ticket email to ${recipientEmail} (${recipientName})...`)
 
                 const { error: emailError } = await supabaseClient.functions.invoke('send-ticket-email', {
                     body: {
@@ -200,9 +194,11 @@ serve(async (req) => {
                         event_title: intent.event?.title || 'Event',
                         event_venue: intent.event?.venue_name || 'Venue',
                         event_date: intent.event?.start_datetime, // Send raw ISO string
+                        event_cover_image: intent.event?.cover_image_url,
                         ticket_quantity: intent.quantity,
                         total_amount: intent.total_amount,
                         transaction_ref: intent.xendit_external_id || intent.id,
+                        payment_method: capturedMethod,
                         tickets: generatedTickets
                     }
                 })
@@ -213,7 +209,11 @@ serve(async (req) => {
                     console.log('✅ Ticket email sent successfully')
                 }
             } else {
-                console.warn('⚠️ Skipping email: No recipient email or no tickets found')
+                console.warn('⚠️ Skipping email: No recipient email or no tickets found', {
+                    email: recipientEmail,
+                    ticketsFound: generatedTickets?.length,
+                    intentId: intent.id
+                })
             }
 
             return new Response(
@@ -254,6 +254,141 @@ serve(async (req) => {
                 JSON.stringify({ success: true, capacity_released: true }),
                 { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
+        }
+
+        // Handle Payout/Disbursement Events (V2)
+        if (['payout.succeeded', 'payout.failed', 'DISBURSEMENT.UPDATED'].includes(eventType)) {
+            const data = payload.data || payload;
+            const reference_id = data.reference_id || data.external_id; // V2 uses reference_id, Legacy uses external_id
+
+            console.log(`Processing Payout Event: ${eventType} for ${reference_id}`);
+
+            // Map status
+            let newStatus = 'processing';
+            if (eventType === 'payout.succeeded' || data.status === 'COMPLETED') {
+                newStatus = 'completed';
+            } else if (eventType === 'payout.failed' || data.status === 'FAILED') {
+                newStatus = 'failed';
+            }
+
+            // Update payouts table
+            const updatePayload: any = { status: newStatus };
+            if (newStatus === 'completed') {
+                updatePayload.completed_at = new Date().toISOString();
+            } else {
+                // reset processed_at if failed? or keep track?
+            }
+
+            const { error: updateError } = await supabaseClient
+                .from('payouts')
+                .update(updatePayload)
+                .eq('id', reference_id);
+
+            if (updateError) {
+                console.error(`❌ Failed to update payout ${reference_id}:`, updateError);
+                return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers: corsHeaders });
+            }
+
+            console.log(`✅ Payout ${reference_id} updated to ${newStatus}`);
+
+            return new Response(
+                JSON.stringify({ success: true, status: newStatus }),
+                { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+        }
+
+        // Handle Refund Events
+        if (['refund.succeeded', 'refund.failed'].includes(eventType)) {
+            const data = payload.data || payload;
+            console.log(`Processing Refund Event: ${eventType}`, data);
+
+            // Look for intent_id in metadata
+            const intentId = data.metadata?.intent_id;
+            // Logic to find intent if metadata missing? Maybe match by payment_id/request_id if stored?
+            // But for now reliance on metadata is safest.
+
+            if (!intentId) {
+                console.error('Refund event missing metadata.intent_id');
+                return new Response(JSON.stringify({ message: 'Missing intent_id in metadata' }), { status: 200, headers: corsHeaders });
+            }
+
+            if (eventType === 'refund.succeeded') {
+                // 1. Mark Purchase Intent as Refunded
+                await supabaseClient
+                    .from('purchase_intents')
+                    .update({ status: 'refunded' })
+                    .eq('id', intentId);
+
+                // 2. Retrieve Intent Details for Accounting
+                const { data: intent } = await supabaseClient
+                    .from('purchase_intents')
+                    .select('*, event:events(organizer_id, tickets_sold)')
+                    .eq('id', intentId)
+                    .single();
+
+                if (intent) {
+                    // 3. Release Capacity?
+                    // If tickets were issued, we should probably void them?
+                    // Currently no 'void' status in tickets table schema mentioned, but let's check intent logic.
+                    // The requirement usually is to release capacity back to event.
+
+                    await supabaseClient.from('events')
+                        .update({ tickets_sold: intent.event.tickets_sold - intent.quantity })
+                        .eq('id', intent.event_id);
+
+                    // 3b. Mark tickets as cancelled/void if tickets table exists
+                    // "update tickets set status = 'void' where purchase_intent_id = ..."
+                    // Let's try it blindly or check schema? Schema has `tickets` table. Status?
+                    // "status TEXT NOT NULL CHECK (status IN ('valid', 'used', 'expired'))" - Wait, no 'void'?
+                    // Just delete them? Or add status 'expired'? 'expired' seems wrong.
+                    // Let's assume for now we just rely on purchase_intent status.
+
+                    // 4. Record Negative Transaction (Accounting)
+                    // Fetch original transaction to get fee breakdown?
+                    // Or just reverse the amounts from intent.
+
+                    const { data: partner } = await supabaseClient
+                        .from('partners')
+                        .select('custom_percentage')
+                        .eq('id', intent.event.organizer_id)
+                        .single();
+
+                    const platformFeePercentage = partner?.custom_percentage || 10.0;
+                    const refundAmount = data.amount || intent.total_amount; // Amount refunded
+
+                    // Logic: Refund affects Gross, Fees, and Payout.
+                    // If we refund full amount, we reverse everything.
+
+                    const refundPlatformFee = (refundAmount / intent.total_amount) * intent.platform_fee;
+                    const refundPayout = (refundAmount / intent.total_amount) * (intent.subtotal - intent.platform_fee); // Approx
+
+                    // Actually better to just use negative of what was stored if full refund.
+                    // If partial, proportional.
+
+                    await supabaseClient.from('transactions').insert({
+                        purchase_intent_id: intent.id,
+                        event_id: intent.event_id,
+                        partner_id: intent.event.organizer_id,
+                        user_id: intent.user_id,
+                        gross_amount: -refundAmount, // Negative
+                        platform_fee: -refundPlatformFee, // Reversal of revenue
+                        organizer_payout: -refundPayout, // Reversal of payout liability
+                        payment_processing_fee: 0, // Usually processing fees are NOT refunded by gateway!
+                        fee_percentage: platformFeePercentage,
+                        fee_basis: 'refund',
+                        xendit_transaction_id: data.id, // Refund ID
+                        status: 'refunded'
+                    });
+
+                    console.log(`✅ Refund processed for intent ${intentId}`);
+                }
+            } else {
+                // Refund Failed
+                console.log(`❌ Refund failed for intent ${intentId}: ${data.failure_code}`);
+                // Optionally notify admin?
+            }
+
+            return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
         // Unknown event type

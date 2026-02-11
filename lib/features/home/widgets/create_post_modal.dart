@@ -4,6 +4,7 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+
 import 'dart:io';
 
 class CreatePostModal extends StatefulWidget {
@@ -377,30 +378,31 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDisabled = onPressed == null;
 
+    final finalColor = isDisabled ? Colors.grey[400] : color;
+    final bgColor = isDisabled ? Colors.grey[100] : color.withOpacity(0.1);
+    final borderColor = isDisabled ? Colors.grey[300]! : color.withOpacity(0.3);
+
     return InkWell(
       onTap: onPressed,
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: isDisabled ? Colors.grey[100] : color.withOpacity(0.1),
+          color: bgColor,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isDisabled ? Colors.grey[300]! : color.withOpacity(0.3),
-            width: 1,
-          ),
+          border: Border.all(color: borderColor, width: 1),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 18, color: isDisabled ? Colors.grey[400] : color),
+            Icon(icon, size: 18, color: finalColor),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: isDisabled ? Colors.grey[400] : color,
+                color: finalColor,
               ),
             ),
           ],

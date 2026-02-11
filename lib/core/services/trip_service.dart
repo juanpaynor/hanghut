@@ -156,4 +156,26 @@ class TripService {
       return null;
     }
   }
+
+  // Get trip chats the user has joined
+  Future<List<Map<String, dynamic>>> getMyTripChats() async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return [];
+
+      final response = await _client
+          .from('trip_chat_participants')
+          .select('''
+            chat_id,
+            last_read_at,
+            chat:trip_group_chats!inner(*)
+          ''')
+          .eq('user_id', userId);
+
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      print('❌ Error fetching my trip chats: $e');
+      return [];
+    }
+  }
 }

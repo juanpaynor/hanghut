@@ -21,9 +21,11 @@ interface EmailRequest {
     event_title: string
     event_venue: string
     event_date: string // Expected ISO string
+    event_cover_image?: string
     ticket_quantity: number
     total_amount: number
     transaction_ref: string
+    payment_method?: string // New field
     tickets: TicketData[]
 }
 
@@ -61,51 +63,109 @@ async function generateInvoicePdf(data: EmailRequest): Promise<Uint8Array> {
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
 
+    // Colors
+    // Primary: #6B7FFF (Indigo) -> R:0.42, G:0.5, B:1.0
+    const primaryColor = rgb(0.42, 0.5, 1.0)
+    const highlightColor = rgb(0.2, 0.2, 0.8) // Darker Indigo for text/lines
+    const grayColor = rgb(0.4, 0.4, 0.4)
+    const lightGray = rgb(0.95, 0.95, 0.95)
+
     const formattedDate = formatEventDate(data.event_date)
 
-    // Header Background
-    page.drawRectangle({ x: 0, y: height - 100, width: width, height: 100, color: rgb(0.96, 0.96, 0.96) })
+    // --- HEADER SECTION (Full Width Maroon) ---
+    const headerHeight = 140
+    page.drawRectangle({
+        x: 0,
+        y: height - headerHeight,
+        width: width,
+        height: headerHeight,
+        color: primaryColor
+    })
 
-    // Header Text
-    page.drawText('INVOICE', { x: 50, y: height - 60, size: 24, font: boldFont, color: rgb(0.1, 0.1, 0.1) })
-    page.drawText('HangHut Inc.', { x: 50, y: height - 85, size: 10, font: font, color: rgb(0.5, 0.5, 0.5) })
+    // INVOICE Title (White, Neon underline)
+    page.drawText('INVOICE', { x: 50, y: height - 60, size: 36, font: boldFont, color: rgb(1, 1, 1) })
 
-    // RIGHT Header
-    const textDate = `Date: ${new Date().toLocaleDateString()}`
-    const textRef = `Ref: ${data.transaction_ref}`
-    page.drawText(textDate, { x: width - 50 - font.widthOfTextAtSize(textDate, 10), y: height - 60, size: 10, font: font, color: rgb(0.3, 0.3, 0.3) })
-    page.drawText(textRef, { x: width - 50 - font.widthOfTextAtSize(textRef, 10), y: height - 75, size: 10, font: font, color: rgb(0.3, 0.3, 0.3) })
+    // Neon Orange Accent Line under title
+    page.drawLine({
+        start: { x: 50, y: height - 70 },
+        end: { x: 200, y: height - 70 },
+        thickness: 3,
+        color: highlightColor
+    })
 
-    // Bill To Section
-    const startY = height - 150
-    page.drawText('BILL TO:', { x: 50, y: startY, size: 8, font: boldFont, color: rgb(0.6, 0.6, 0.6) })
-    page.drawText(data.name || data.email, { x: 50, y: startY - 15, size: 12, font: boldFont, color: rgb(0, 0, 0) })
-    page.drawText(data.email, { x: 50, y: startY - 30, size: 10, font: font, color: rgb(0.4, 0.4, 0.4) })
+    // Company Details (White text in header)
+    const companyX = width - 250
+    const companyY = height - 50
 
-    // Table Headers
-    const tableY = startY - 70
-    page.drawRectangle({ x: 40, y: tableY - 10, width: width - 80, height: 25, color: rgb(0.95, 0.95, 0.95) })
-    page.drawText('DESCRIPTION', { x: 50, y: tableY, size: 9, font: boldFont, color: rgb(0.4, 0.4, 0.4) })
-    page.drawText('AMOUNT', { x: 480, y: tableY, size: 9, font: boldFont, color: rgb(0.4, 0.4, 0.4) })
+    page.drawText('HangHut Inc.', { x: companyX, y: companyY, size: 14, font: boldFont, color: rgb(1, 1, 1) })
+    page.drawText('Level 40, PBcom Tower', { x: companyX, y: companyY - 20, size: 10, font: font, color: rgb(0.9, 0.9, 0.9) })
+    page.drawText('Ayala Avenue, Makati', { x: companyX, y: companyY - 34, size: 10, font: font, color: rgb(0.9, 0.9, 0.9) })
+    page.drawText('Metro Manila, Philippines', { x: companyX, y: companyY - 48, size: 10, font: font, color: rgb(0.9, 0.9, 0.9) })
+    page.drawText('support@hanghut.com', { x: companyX, y: companyY - 62, size: 10, font: boldFont, color: highlightColor })
 
-    // Line Item
-    const itemY = tableY - 40
-    const desc = `${data.event_title} (${data.ticket_quantity} Tickets)`
-    const price = formatCurrency(data.total_amount)
+    // --- INFO ROW ---
+    const infoY = height - 190
 
-    page.drawText(desc, { x: 50, y: itemY, size: 10, font: font, color: rgb(0.1, 0.1, 0.1) })
-    page.drawText(price, { x: 480, y: itemY, size: 10, font: font, color: rgb(0.1, 0.1, 0.1) })
+    // Status Badge (Paid)
+    page.drawRectangle({ x: width - 120, y: infoY, width: 70, height: 26, color: rgb(0.9, 1, 0.9), borderColor: rgb(0, 0.6, 0), borderWidth: 1 })
+    page.drawText('PAID', { x: width - 103, y: infoY + 7, size: 12, font: boldFont, color: rgb(0, 0.6, 0) })
 
-    // Total Section
-    const totalY = itemY - 60
-    page.drawLine({ start: { x: 40, y: totalY + 20 }, end: { x: width - 40, y: totalY + 20 }, thickness: 1, color: rgb(0.9, 0.9, 0.9) })
+    // LEFT: Bill To
+    page.drawText('BILL TO', { x: 50, y: infoY + 10, size: 9, font: boldFont, color: grayColor })
+    page.drawText((data.name || data.email).toUpperCase(), { x: 50, y: infoY - 10, size: 14, font: boldFont, color: rgb(0.1, 0.1, 0.1) })
+    page.drawText(data.email, { x: 50, y: infoY - 25, size: 10, font: font, color: grayColor })
 
-    page.drawText('TOTAL', { x: 380, y: totalY, size: 12, font: boldFont, color: rgb(0, 0, 0) })
-    page.drawText(price, { x: 480, y: totalY, size: 12, font: boldFont, color: rgb(0, 0, 0) })
+    // Payment Method (Below Email)
+    if (data.payment_method) {
+        page.drawText(`Paid via ${data.payment_method.toUpperCase()}`, { x: 50, y: infoY - 45, size: 9, font: font, color: rgb(0.3, 0.3, 0.3) })
+    }
 
-    // Footer
-    page.drawText('Thank you for your purchase!', { x: 50, y: 100, size: 10, font: font, color: rgb(0.6, 0.6, 0.6) })
-    page.drawText('This is a computer-generated invoice.', { x: 50, y: 85, size: 8, font: font, color: rgb(0.7, 0.7, 0.7) })
+    // RIGHT: Invoice Meta
+    const metaX = width - 250
+    page.drawText('DATE', { x: metaX, y: infoY + 10, size: 9, font: boldFont, color: grayColor })
+    page.drawText(new Date().toLocaleDateString(), { x: metaX, y: infoY - 5, size: 11, font: font, color: rgb(0.1, 0.1, 0.1) })
+
+    page.drawText('REFERENCE', { x: metaX + 100, y: infoY + 10, size: 9, font: boldFont, color: grayColor })
+    page.drawText(data.transaction_ref.substring(0, 12), { x: metaX + 100, y: infoY - 5, size: 11, font: font, color: rgb(0.1, 0.1, 0.1) })
+
+    // --- TABLE SECTION ---
+    const tableTop = infoY - 60
+
+    // Header Bar
+    page.drawRectangle({ x: 40, y: tableTop, width: width - 80, height: 25, color: lightGray })
+    page.drawText('DESCRIPTION', { x: 50, y: tableTop + 7, size: 9, font: boldFont, color: rgb(0.3, 0.3, 0.3) })
+    page.drawText('QTY', { x: 400, y: tableTop + 7, size: 9, font: boldFont, color: rgb(0.3, 0.3, 0.3) })
+    page.drawText('TOTAL', { x: 480, y: tableTop + 7, size: 9, font: boldFont, color: rgb(0.3, 0.3, 0.3) })
+
+    // Item Row
+    const rowY = tableTop - 30
+    page.drawText(data.event_title, { x: 50, y: rowY, size: 11, font: boldFont, color: rgb(0, 0, 0) })
+    page.drawText(`Event Date: ${formattedDate}`, { x: 50, y: rowY - 15, size: 9, font: font, color: grayColor })
+
+    page.drawText(`${data.ticket_quantity}`, { x: 405, y: rowY, size: 11, font: font, color: rgb(0, 0, 0) })
+    page.drawText(formatCurrency(data.total_amount), { x: 480, y: rowY, size: 11, font: boldFont, color: rgb(0, 0, 0) })
+
+    // Divider
+    const totalLineY = rowY - 40
+    page.drawLine({ start: { x: 40, y: totalLineY }, end: { x: width - 40, y: totalLineY }, thickness: 1, color: rgb(0.9, 0.9, 0.9) })
+
+    // --- TOTALS ---
+    const totalsY = totalLineY - 30
+    // Subtotal area could go here, but focusing on Total
+
+    // Big Total Box
+    page.drawText('TOTAL PAID', { x: 350, y: totalsY, size: 12, font: boldFont, color: grayColor })
+    page.drawText(formatCurrency(data.total_amount), { x: 450, y: totalsY, size: 18, font: boldFont, color: primaryColor })
+
+    // --- FOOTER ---
+    const footerY = 50
+    page.drawLine({ start: { x: 40, y: footerY + 20 }, end: { x: width - 40, y: footerY + 20 }, thickness: 1, color: highlightColor }) // Neon footer line
+
+    const year = new Date().getFullYear()
+    page.drawText(`\u00A9 ${year} Hanghut Inc. All rights reserved.`, { x: 50, y: footerY, size: 9, font: font, color: grayColor })
+    page.drawText('HangHut is a registered trademark.', { x: 50, y: footerY - 14, size: 8, font: font, color: rgb(0.7, 0.7, 0.7) })
+
+    page.drawText('support@hanghut.com', { x: width - 150, y: footerY, size: 9, font: font, color: primaryColor })
 
     return await pdfDoc.save()
 }
@@ -119,64 +179,94 @@ async function generateTicketsPdf(data: EmailRequest): Promise<Uint8Array> {
 
     const formattedDate = formatEventDate(data.event_date)
 
+    // Embed Cover Image if available
+    let coverImage = null
+    if (data.event_cover_image) {
+        try {
+            const imgRes = await fetch(data.event_cover_image)
+            const imgBuffer = await imgRes.arrayBuffer()
+            // Assume JPEG for now (common in Supabase Storage), fall safely if PNG
+            // Ideally check content-type
+            try {
+                coverImage = await pdfDoc.embedJpg(imgBuffer)
+            } catch {
+                coverImage = await pdfDoc.embedPng(imgBuffer)
+            }
+        } catch (e) {
+            console.error('Failed to load cover image for PDF', e)
+        }
+    }
+
     for (const ticket of data.tickets) {
-        const page = pdfDoc.addPage([400, 700]) // Mobile-friendly size
+        const page = pdfDoc.addPage([400, 800]) // Mobile-friendly size
         const { width, height } = page.getSize()
 
-        // Gradient-ish Header (Solid dark)
-        page.drawRectangle({ x: 0, y: height - 120, width: width, height: 120, color: rgb(0.1, 0.1, 0.2) })
+        // --- VISUAL HEADER (Image or Color) ---
+        if (coverImage) {
+            page.drawImage(coverImage, {
+                x: 0,
+                y: height - 250,
+                width: width,
+                height: 250,
+            })
+            // Darker Blue Tint for Indigo Theme
+            page.drawRectangle({ x: 0, y: height - 250, width: width, height: 250, color: rgb(0, 0, 0.2), opacity: 0.3 })
+        } else {
+            // Fallback Indigo
+            page.drawRectangle({ x: 0, y: height - 200, width: width, height: 200, color: rgb(0.42, 0.5, 1.0) })
+        }
 
-        // Event Title (White)
-        // Simple text wrapping logic for title
-        let titleFontSize = 18
-        if (data.event_title.length > 25) titleFontSize = 14
+        // Event Title (Over Image/Color)
+        let titleFontSize = 24
+        if (data.event_title.length > 20) titleFontSize = 18
 
+        // Multi-line Title Logic
+        // Simple manual wrap - split at space if too long?
+        // For now, just truncating or shrinking fits better reliably
         page.drawText(data.event_title.toUpperCase(), {
-            x: 30, y: height - 50, size: titleFontSize, font: boldFont, color: rgb(1, 1, 1), maxWidth: 340
+            x: 30, y: height - 60, size: titleFontSize, font: boldFont, color: rgb(1, 1, 1), maxWidth: 340
         })
 
-        page.drawText('ADMIT ONE', { x: 30, y: height - 90, size: 10, font: font, color: rgb(0.8, 0.8, 0.8) })
+        page.drawText('OFFICIAL TICKET', { x: 30, y: height - 100, size: 10, font: font, color: rgb(0.9, 0.9, 0.9) })
 
-        // Body Container
-        // Details
-        let currentY = height - 160
-        const labelColor = rgb(0.6, 0.6, 0.6)
+        // --- BODY ---
+        // White Background below image
+        // (Page is already white, but let's be explicit if we changed background)
+
+        let currentY = height - 280
+        const labelColor = rgb(0.5, 0.5, 0.5)
         const textColor = rgb(0.1, 0.1, 0.1)
 
         // Date
-        page.drawText('DATE & TIME', { x: 30, y: currentY, size: 8, font: boldFont, color: labelColor })
-        page.drawText(formattedDate, { x: 30, y: currentY - 15, size: 12, font: font, color: textColor })
+        page.drawText('DATE & TIME', { x: 30, y: currentY, size: 9, font: boldFont, color: labelColor })
+        page.drawText(formattedDate, { x: 30, y: currentY - 15, size: 14, font: font, color: textColor })
 
         currentY -= 50
 
         // Venue
-        page.drawText('LOCATION', { x: 30, y: currentY, size: 8, font: boldFont, color: labelColor })
-        // Basic wrap for venue if needed
-        page.drawText(data.event_venue, { x: 30, y: currentY - 15, size: 12, font: font, color: textColor, maxWidth: 340 })
+        page.drawText('LOCATION', { x: 30, y: currentY, size: 9, font: boldFont, color: labelColor })
+        page.drawText(data.event_venue, { x: 30, y: currentY - 15, size: 14, font: font, color: textColor, maxWidth: 340 })
 
         currentY -= 50
 
         // Holder
-        page.drawText('TICKET HOLDER', { x: 30, y: currentY, size: 8, font: boldFont, color: labelColor })
-        page.drawText(data.name || data.email, { x: 30, y: currentY - 15, size: 12, font: font, color: textColor })
+        page.drawText('TICKET HOLDER', { x: 30, y: currentY, size: 9, font: boldFont, color: labelColor })
+        page.drawText((data.name || data.email).toUpperCase(), { x: 30, y: currentY - 15, size: 14, font: boldFont, color: textColor })
 
-        // QR Code Section (Centered Box)
-        const boxY = 160
-        const boxSize = 220
+        // --- QR CODE SECTION ---
+        const boxY = 150
+        const boxSize = 250
         const boxX = (width - boxSize) / 2
 
-        // Dashed Line (simulated with small dots)
-        for (let i = 0; i < width; i += 10) {
-            page.drawText('-', { x: i, y: boxY + boxSize + 40, size: 10, font: font, color: rgb(0.8, 0.8, 0.8) })
+        // "Cut Here" Dashed Line
+        for (let i = 0; i < width; i += 15) {
+            page.drawLine({ start: { x: i, y: boxY + boxSize + 60 }, end: { x: i + 8, y: boxY + boxSize + 60 }, thickness: 1, color: rgb(0.8, 0.8, 0.8) })
         }
-
-        // Border for QR
-        page.drawRectangle({ x: boxX - 10, y: boxY - 10, width: boxSize + 20, height: boxSize + 20, borderColor: rgb(0.9, 0.9, 0.9), borderWidth: 2, color: rgb(1, 1, 1) })
 
         // Fetch QR Code Image
         try {
-            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(ticket.qr_code)}`
-            console.log(`   [QR] Fetching: ${qrUrl}`)
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&format=png&data=${encodeURIComponent(ticket.qr_code)}`
+            // console.log(`   [QR] Fetching: ${qrUrl}`)
             const qrRes = await fetch(qrUrl)
             if (!qrRes.ok) throw new Error(`QR API returned ${qrRes.status}`)
             const qrBuffer = await qrRes.arrayBuffer()
@@ -190,12 +280,13 @@ async function generateTicketsPdf(data: EmailRequest): Promise<Uint8Array> {
             })
         } catch (e) {
             console.error('   [QR] Error:', e)
-            page.drawText('QR Load Error', { x: 150, y: 300, size: 12, font: boldFont, color: rgb(1, 0, 0) })
+            page.drawText('QR Load Error', { x: 150, y: boxY + 100, size: 12, font: boldFont, color: rgb(1, 0, 0) })
         }
 
-        // Footnote
-        page.drawText(`#${ticket.ticket_number}`, { x: boxX, y: boxY - 30, size: 14, font: font, color: rgb(0.4, 0.4, 0.4) })
-        page.drawText('Scan at entrance', { x: width / 2 - 40, y: boxY - 50, size: 10, font: font, color: rgb(0.7, 0.7, 0.7) })
+        // Ticket Number below QR
+        const ticketNum = `#${ticket.ticket_number}`
+        const numWidth = font.widthOfTextAtSize(ticketNum, 16)
+        page.drawText(ticketNum, { x: (width - numWidth) / 2, y: boxY - 30, size: 16, font: font, color: rgb(0.3, 0.3, 0.3) })
     }
 
     return await pdfDoc.save()
@@ -249,6 +340,7 @@ serve(async (req) => {
         <!-- Event Details Card -->
         <div style="padding: 40px 30px;">
             <div style="margin-bottom: 25px;">
+                ${requestData.event_cover_image ? `<img src="${requestData.event_cover_image}" alt="Event Cover" style="width: 100%; height: 200px; object-fit: cover; border-radius: 8px; margin-bottom: 20px;">` : ''}
                 <h2 style="color: #0f172a; margin: 0; font-size: 20px; line-height: 1.4;">${requestData.event_title}</h2>
             </div>
             
@@ -279,6 +371,7 @@ serve(async (req) => {
                 <div>
                      <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">Payment Successful</p>
                      <p style="margin: 2px 0 0; font-size: 13px; color: #15803d;">Total Paid: ${formattedAmount}</p>
+                     ${requestData.payment_method ? `<p style="margin: 2px 0 0; font-size: 12px; color: #15803d; opacity: 0.8;">via ${requestData.payment_method}</p>` : ''}
                 </div>
             </div>
 
@@ -302,44 +395,77 @@ serve(async (req) => {
     </html>
     `
 
-        // 3. Send Email (Raw Fetch)
-        console.log('🚀 [Send] Sending via Resend API (Raw Fetch)...')
+        // 3. Send Email (with Retry Logic)
+        console.log('🚀 [Send] Sending via Resend API...')
 
         if (!RESEND_API_KEY) {
             throw new Error("Missing RESEND_API_KEY")
         }
 
-        const resendRes = await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${RESEND_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                from: 'HangHut Tickets <tickets@hanghut.com>',
-                to: [requestData.email],
-                subject: `Your Tickets for ${requestData.event_title} 🎟️`,
-                html: html,
-                attachments: [
-                    {
-                        filename: 'Invoice.pdf',
-                        content: invoiceBase64
+        const maxRetries = 3;
+        let attempt = 0;
+        let sendSuccess = false;
+        let responseData = null;
+        let finalStatus = 500;
+
+        while (attempt < maxRetries && !sendSuccess) {
+            attempt++;
+            try {
+                const resendRes = await fetch('https://api.resend.com/emails', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${RESEND_API_KEY}`,
+                        'Content-Type': 'application/json'
                     },
-                    {
-                        filename: 'Tickets.pdf',
-                        content: ticketsBase64
-                    }
-                ]
-            })
-        })
+                    body: JSON.stringify({
+                        from: 'HangHut Tickets <tickets@hanghut.com>',
+                        to: [requestData.email],
+                        subject: `Your Tickets for ${requestData.event_title} 🎟️`,
+                        html: html,
+                        attachments: [
+                            {
+                                filename: 'Invoice.pdf',
+                                content: invoiceBase64
+                            },
+                            {
+                                filename: 'Tickets.pdf',
+                                content: ticketsBase64
+                            }
+                        ]
+                    })
+                })
 
-        const responseData = await resendRes.json()
+                responseData = await resendRes.json()
+                finalStatus = resendRes.status
 
-        if (!resendRes.ok) {
-            console.error('❌ [Resend Error]', responseData)
+                if (resendRes.ok) {
+                    sendSuccess = true;
+                } else if (resendRes.status === 429) {
+                    // Rate Limit Hit - Wait and Retry
+                    console.warn(`⚠️ [Rate Limit] Hit limit on attempt ${attempt}. Waiting...`)
+                    const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                    // Other error (400, 401, 500) - Throw to exit loop
+                    throw new Error(responseData.message || JSON.stringify(responseData));
+                }
+
+            } catch (e) {
+                // If it was a 429 that exhausted retries, or another error
+                console.error(`❌ [Attempt ${attempt} Failed]`, e.message || e);
+                if (attempt >= maxRetries || finalStatus !== 429) {
+                    // Stop trying if max retries reached or if it's not a rate limit issue
+                    if (!responseData) responseData = { error: e.message || "Unknown error" };
+                    break;
+                }
+            }
+        }
+
+        if (!sendSuccess) {
+            console.error('❌ [Resend Error] Failed after retries:', responseData)
             return new Response(JSON.stringify({ error: responseData }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                status: resendRes.status,
+                status: finalStatus,
             })
         }
 

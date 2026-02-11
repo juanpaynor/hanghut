@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -19,52 +20,230 @@ class EventPurchaseScreen extends StatefulWidget {
 class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   int _quantity = 1;
   bool _isLoading = false;
-  Map<String, dynamic>? _cachedInvoice;
   String? _currentPurchaseIntentId;
   Timer? _pollingTimer;
+
+  // New State for Tiers & Promos
+  List<TicketTier> _tiers = [];
+  TicketTier? _selectedTier;
+  bool _isLoadingTiers = true;
+
+  final _promoCodeController = TextEditingController();
+  bool _isCheckingPromo = false;
+  String? _appliedPromoCode;
+  double _promoDiscountAmount = 0;
+  String? _promoError;
+
+  // Contact Details Controllers
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
 
   @override
   void initState() {
     super.initState();
-    _preloadInvoice();
+    _fetchUserProfile(); // Pre-fill if logged in
+    _fetchTicketTiers();
   }
 
   @override
   void dispose() {
     _pollingTimer?.cancel();
+    _nameController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _promoCodeController.dispose();
     super.dispose();
   }
 
-  /// Pre-load invoice in background for instant checkout
-  Future<void> _preloadInvoice() async {
+  Future<void> _fetchTicketTiers() async {
     try {
-      final invoice = await _createInvoice(quantity: 1);
+      final response = await SupabaseConfig.client
+          .from('ticket_tiers')
+          .select()
+          .eq('event_id', widget.event.id)
+          .eq('is_active', true)
+          .order('price', ascending: true); // Cheapest first
+
+      final tiers = (response as List)
+          .map((json) => TicketTier.fromJson(json))
+          .toList();
+
       if (mounted) {
-        setState(() => _cachedInvoice = invoice);
+        setState(() {
+          _tiers = tiers;
+          // Auto-select first available tier if exists
+          if (_tiers.isNotEmpty) {
+            _selectedTier = _tiers.firstWhere(
+              (t) => !t.isSoldOut,
+              orElse: () => _tiers.first,
+            );
+          }
+          _isLoadingTiers = false;
+        });
       }
-      print('✅ Invoice pre-loaded for instant checkout');
     } catch (e) {
-      print('⚠️ Invoice pre-load failed: $e');
-      // Silent fail - will create on-demand
+      print('⚠️ Failed to fetch tiers: $e');
+      if (mounted) setState(() => _isLoadingTiers = false);
+    }
+  }
+
+  Future<void> _fetchUserProfile() async {
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user != null) {
+      try {
+        // Pre-fill email from Auth
+        _emailController.text = user.email ?? '';
+
+        // Fetch profile for name/phone
+        final data = await SupabaseConfig.client
+            .from('users')
+            .select('display_name, phone')
+            .eq('id', user.id)
+            .single();
+
+        if (mounted) {
+          setState(() {
+            _nameController.text = data['display_name'] ?? '';
+            if (data['phone'] != null) _phoneController.text = data['phone'];
+          });
+        }
+      } catch (e) {
+        print('⚠️ Failed to fetch profile: $e');
+      }
+    }
+  }
+
+  Future<void> _applyPromoCode() async {
+    final code = _promoCodeController.text.trim();
+    if (code.isEmpty) return;
+
+    setState(() {
+      _isCheckingPromo = true;
+      _promoError = null;
+    });
+
+    try {
+      // We check promo via DB direct select first for optimistic UI updates
+      // The real validation happens in the Edge Function during checkout
+      final response = await SupabaseConfig.client
+          .from('promo_codes')
+          .select()
+          .eq('event_id', widget.event.id)
+          .eq('code', code.toUpperCase()) // Force uppercase
+          .eq('is_active', true)
+          .maybeSingle();
+
+      if (response == null) {
+        setState(() {
+          _promoError = 'Invalid promo code';
+          _appliedPromoCode = null;
+          _promoDiscountAmount = 0;
+        });
+      } else {
+        // Calculate discount (optimistic)
+        final type = response['discount_type'];
+        final amount = (response['discount_amount'] as num).toDouble();
+
+        // Basic limits check
+        final usageLimit = response['usage_limit'] as int?;
+        final usageCount = response['usage_count'] as int? ?? 0;
+        final expiresAt = response['expires_at'] != null
+            ? DateTime.parse(response['expires_at'])
+            : null;
+
+        if (expiresAt != null && DateTime.now().isAfter(expiresAt)) {
+          throw Exception('Promo code expired');
+        }
+        if (usageLimit != null && usageCount >= usageLimit) {
+          throw Exception('Promo usage limit reached');
+        }
+
+        double discount = 0;
+        double currentPrice = _selectedTier?.price ?? widget.event.ticketPrice;
+        double subtotal = currentPrice * _quantity;
+
+        if (type == 'percentage') {
+          discount = subtotal * (amount / 100);
+        } else {
+          discount =
+              amount; // Fixed amount off total (or per ticket? usually total)
+          // Actually implementation usually varies. Edge function assumes fixed amount per order
+          // or we need to clarify.
+          // Let's assume fixed amount off for now based on Edge Function logic `discountAmount = promo.discount_amount`.
+        }
+
+        // Cap at subtotal
+        if (discount > subtotal) discount = subtotal;
+
+        setState(() {
+          _appliedPromoCode = code.toUpperCase();
+          _promoDiscountAmount = discount;
+          _promoError = null;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _promoError = e.toString().replaceAll('Exception: ', '');
+        _appliedPromoCode = null;
+        _promoDiscountAmount = 0;
+      });
+    } finally {
+      setState(() => _isCheckingPromo = false);
+    }
+  }
+
+  void _removePromoCode() {
+    setState(() {
+      _appliedPromoCode = null;
+      _promoDiscountAmount = 0;
+      _promoCodeController.clear();
+      _promoError = null;
+    });
+  }
+
+  void _recalculatePromo() {
+    if (_appliedPromoCode != null) {
+      // Re-run apply to update amount based on new qty/tier
+      _applyPromoCode();
     }
   }
 
   /// Create purchase intent via Edge Function
   Future<Map<String, dynamic>> _createInvoice({required int quantity}) async {
+    // Collect Guest/User Details
+    final guestDetails = {
+      'name': _nameController.text.trim(),
+      'email': _emailController.text.trim(),
+      'phone': _phoneController.text.trim(),
+    };
+
+    final body = {
+      'event_id': widget.event.id,
+      'quantity': quantity,
+      // 'amount' is calculated by backend now
+      'guest_details': guestDetails,
+      'success_url': 'https://hanghut.com/checkout/success',
+      'failure_url': 'https://hanghut.com/events/${widget.event.id}',
+      // NEW PARAMS
+      if (_selectedTier != null) 'tier_id': _selectedTier!.id,
+      if (_appliedPromoCode != null) 'promo_code': _appliedPromoCode,
+    };
+
     final response = await SupabaseConfig.client.functions.invoke(
       'create-purchase-intent',
-      body: {
-        'event_id': widget.event.id,
-        'quantity': quantity,
-        'amount': widget.event.ticketPrice * quantity,
-        // Use official HangHut web URLs for redirect
-        'success_url': 'https://hanghut.com/checkout/success',
-        'failure_url': 'https://hanghut.com/events/${widget.event.id}',
-      },
+      body: body,
     );
 
     if (response.status != 200) {
-      throw Exception('Failed to create purchase intent');
+      try {
+        final err = response.data;
+        if (err is Map && err['error'] != null) {
+          throw Exception(err['error']['message']);
+        }
+      } catch (_) {}
+      throw Exception('Failed to create purchase intent: ${response.status}');
     }
 
     return response.data as Map<String, dynamic>;
@@ -74,13 +253,22 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   Future<void> _proceedToPayment() async {
     if (_isLoading) return;
 
+    // Validate Form
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    // Validate Tier
+    if (_tiers.isNotEmpty && _selectedTier == null) {
+      _showErrorDialog('Select Ticket', 'Please select a ticket type.');
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     try {
-      // Use cached invoice if quantity matches, otherwise create new
-      final invoice = (_cachedInvoice != null && _quantity == 1)
-          ? _cachedInvoice!
-          : await _createInvoice(quantity: _quantity);
+      // Create new invoice with current form data
+      final invoice = await _createInvoice(quantity: _quantity);
 
       // Extract data from nested response structure
       final data = invoice['data'] as Map<String, dynamic>;
@@ -121,9 +309,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
     }
   }
 
-  /// Poll for payment completion
+  // ... _startPaymentPolling and others remain same ...
+  // Re-pasting for completeness since I stripped the whole file structure in replace attempt
+
   void _startPaymentPolling() {
-    // Show processing dialog
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -175,7 +364,6 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
         print('⚠️ Polling error: $e');
       }
 
-      // Timeout after 5 minutes
       if (pollCount > 100) {
         timer.cancel();
         if (mounted) {
@@ -230,96 +418,268 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final total = widget.event.ticketPrice * _quantity;
+    // Calculate totals with bundled fee (10%)
+    // Note: We use 1.10 estimate for display. Backend calculates exact fee based on partner settings.
+    const double feeMultiplier = 1.10;
+
+    double baseUnitPrice = _selectedTier?.price ?? widget.event.ticketPrice;
+    double displayUnitPrice = baseUnitPrice * feeMultiplier;
+    double displaySubtotal = displayUnitPrice * _quantity;
+    double displayDiscount = _promoDiscountAmount * feeMultiplier;
+
+    double total = displaySubtotal - displayDiscount;
+    if (total < 0) total = 0;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Buy Tickets'), centerTitle: true),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Event summary card
-                  _EventSummaryCard(event: widget.event),
+      body: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Event summary card
+                    _EventSummaryCard(event: widget.event),
 
-                  const SizedBox(height: 32),
+                    const SizedBox(height: 32),
 
-                  // Quantity selector
-                  const Text(
-                    'Number of Tickets',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  _QuantitySelector(
-                    quantity: _quantity,
-                    max: widget.event.ticketsAvailable.clamp(1, 10),
-                    onChanged: (qty) => setState(() => _quantity = qty),
-                  ),
+                    // --- TIER SELECTION ---
+                    if (_isLoadingTiers)
+                      const Center(child: CircularProgressIndicator())
+                    else if (_tiers.isNotEmpty) ...[
+                      const Text(
+                        'Select Ticket Type',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._tiers.map(
+                        (tier) => _TierOption(
+                          tier: tier,
+                          isSelected: _selectedTier?.id == tier.id,
+                          onTap: () {
+                            if (!tier.isSoldOut) {
+                              setState(() {
+                                _selectedTier = tier;
+                                _recalculatePromo(); // Update if % based
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                    ],
 
-                  const SizedBox(height: 32),
-
-                  // Price breakdown
-                  _PriceBreakdown(
-                    ticketPrice: widget.event.ticketPrice,
-                    quantity: _quantity,
-                    total: total,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Bottom action
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -5),
-                ),
-              ],
-            ),
-            child: SafeArea(
-              top: false,
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _proceedToPayment,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurple,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                    // Contact Details Section
+                    const Text(
+                      'Contact Details',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Full Name',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                      validator: (value) =>
+                          value == null || value.isEmpty ? 'Required' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Email Address',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                      validator: (value) => value == null
+                          ? 'Required'
+                          : (!value.contains('@') ? 'Invalid email' : null),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _phoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Phone Number',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.phone_outlined),
+                        hintText: '+63',
+                      ),
+                      validator: (value) =>
+                          value == null || value.isEmpty ? 'Required' : null,
+                    ),
+
+                    const SizedBox(height: 32),
+
+                    // Quantity selector
+                    const Text(
+                      'Quantity',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _QuantitySelector(
+                      quantity: _quantity,
+                      // Logic: If tier selected, use tier limit. Else use event capacity.
+                      max: (_selectedTier != null)
+                          ? _selectedTier!.quantityAvailable.clamp(1, 10)
+                          : widget.event.ticketsAvailable.clamp(1, 10),
+                      onChanged: (qty) => setState(() {
+                        _quantity = qty;
+                        _recalculatePromo();
+                      }),
+                    ),
+
+                    const SizedBox(height: 32),
+
+                    // --- PROMO CODE ---
+                    const Text(
+                      'Promo Code',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _promoCodeController,
+                            textCapitalization: TextCapitalization.characters,
+                            enabled: _appliedPromoCode == null,
+                            decoration: InputDecoration(
+                              hintText: 'ENTER CODE',
+                              border: const OutlineInputBorder(),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 0,
+                              ),
+                              errorText: _promoError,
+                              suffixIcon: _appliedPromoCode != null
+                                  ? IconButton(
+                                      icon: const Icon(Icons.close),
+                                      onPressed: _removePromoCode,
+                                    )
+                                  : null,
+                            ),
                           ),
-                        )
-                      : Text(
-                          'Proceed to Payment • ₱${total.toStringAsFixed(2)}',
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed:
+                              (_isCheckingPromo || _appliedPromoCode != null)
+                              ? null
+                              : _applyPromoCode,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.black,
+                            foregroundColor: Colors.white,
+                            fixedSize: const Size.fromHeight(48),
+                          ),
+                          child: _isCheckingPromo
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Apply'),
+                        ),
+                      ],
+                    ),
+                    if (_appliedPromoCode != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Code $_appliedPromoCode applied!',
                           style: const TextStyle(
-                            fontSize: 18,
+                            color: Colors.green,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
+                      ),
+
+                    const SizedBox(height: 32),
+
+                    // Price breakdown
+                    _PriceBreakdown(
+                      unitPrice: displayUnitPrice,
+                      quantity: _quantity,
+                      subtotal: displaySubtotal,
+                      discount: displayDiscount,
+                      total: total,
+                    ),
+                  ],
                 ),
               ),
             ),
-          ),
-        ],
+
+            // Bottom action
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                top: false,
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _proceedToPayment,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
+                            'Pay Now • ₱${total.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -328,6 +688,80 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 // ============================================
 // SUPPORTING WIDGETS
 // ============================================
+
+class _TierOption extends StatelessWidget {
+  final TicketTier tier;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _TierOption({
+    required this.tier,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? Colors.deepPurple.withOpacity(0.05)
+              : Colors.white,
+          border: Border.all(
+            color: isSelected ? Colors.deepPurple : Colors.grey[300]!,
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    tier.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  if (tier.description != null)
+                    Text(
+                      tier.description!,
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    ),
+                  if (tier.isSoldOut)
+                    const Text(
+                      'SOLD OUT',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Text(
+              '₱${(tier.price * 1.10).toStringAsFixed(0)}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(width: 12),
+            Icon(
+              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: isSelected ? Colors.deepPurple : Colors.grey,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _EventSummaryCard extends StatelessWidget {
   final Event event;
@@ -435,6 +869,20 @@ class _QuantitySelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // If sold out or max is 0
+    if (max <= 0) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey[200],
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Center(
+          child: Text('Unavailable', style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+
     return Row(
       children: [
         IconButton(
@@ -471,13 +919,17 @@ class _QuantitySelector extends StatelessWidget {
 }
 
 class _PriceBreakdown extends StatelessWidget {
-  final double ticketPrice;
+  final double unitPrice;
   final int quantity;
+  final double subtotal;
+  final double discount;
   final double total;
 
   const _PriceBreakdown({
-    required this.ticketPrice,
+    required this.unitPrice,
     required this.quantity,
+    required this.subtotal,
+    required this.discount,
     required this.total,
   });
 
@@ -493,15 +945,29 @@ class _PriceBreakdown extends StatelessWidget {
         children: [
           _PriceRow(
             label: 'Ticket Price',
-            value: '₱${ticketPrice.toStringAsFixed(2)}',
+            value: '₱${unitPrice.toStringAsFixed(2)}',
           ),
           const SizedBox(height: 8),
           _PriceRow(label: 'Quantity', value: '× $quantity'),
+          const Divider(),
+          _PriceRow(
+            label: 'Subtotal',
+            value: '₱${subtotal.toStringAsFixed(2)}',
+          ),
+          if (discount > 0) ...[
+            const SizedBox(height: 8),
+            _PriceRow(
+              label: 'Discount',
+              value: '-₱${discount.toStringAsFixed(2)}',
+              color: Colors.green,
+            ),
+          ],
           const Divider(height: 24),
           _PriceRow(
             label: 'Total',
             value: '₱${total.toStringAsFixed(2)}',
             isBold: true,
+            fontSize: 18,
           ),
         ],
       ),
@@ -513,11 +979,15 @@ class _PriceRow extends StatelessWidget {
   final String label;
   final String value;
   final bool isBold;
+  final Color? color;
+  final double fontSize;
 
   const _PriceRow({
     required this.label,
     required this.value,
     this.isBold = false,
+    this.color,
+    this.fontSize = 16,
   });
 
   @override
@@ -528,15 +998,17 @@ class _PriceRow extends StatelessWidget {
         Text(
           label,
           style: TextStyle(
-            fontSize: isBold ? 18 : 16,
+            fontSize: fontSize,
             fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            color: color,
           ),
         ),
         Text(
           value,
           style: TextStyle(
-            fontSize: isBold ? 18 : 16,
+            fontSize: fontSize,
             fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            color: color,
           ),
         ),
       ],

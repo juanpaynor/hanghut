@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/profile_service.dart';
+import 'package:bitemates/core/services/image_crop_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:confetti/confetti.dart';
@@ -38,6 +39,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   String? _uploadedPhotoUrl;
 
   // Step 2: Basics Controllers
+  final _nameController = TextEditingController(); // Added Name Controller
   final _bioController = TextEditingController();
   Country? _selectedCountry;
   DateTime? _dateOfBirth;
@@ -186,11 +188,20 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       duration: const Duration(seconds: 3),
     );
     _fetchInterests();
+
+    // Pre-fill name if available
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user?.userMetadata?['full_name'] != null) {
+      _nameController.text = user!.userMetadata!['full_name'];
+    } else if (user?.userMetadata?['name'] != null) {
+      _nameController.text = user!.userMetadata!['name'];
+    }
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _nameController.dispose(); // Dispose Name Controller
     _bioController.dispose();
     _confettiController.dispose();
     super.dispose();
@@ -219,9 +230,19 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       );
 
       if (photo != null) {
-        setState(() {
-          _selectedPhoto = photo;
-        });
+        // Cut the flow to crop the image
+        if (mounted) {
+          final croppedFile = await ImageCropService.cropImage(
+            sourcePath: photo.path,
+            context: context,
+          );
+
+          if (croppedFile != null) {
+            setState(() {
+              _selectedPhoto = XFile(croppedFile.path);
+            });
+          }
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -331,6 +352,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
       await _profileService.createProfile(
         userId: userId,
+        displayName: _nameController.text.trim().isNotEmpty
+            ? _nameController.text.trim()
+            : 'User',
         bio: _bioController.text,
         dob: _dateOfBirth ?? DateTime(2000),
         gender: _genderIdentity ?? 'Prefer not to say',
@@ -665,6 +689,33 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           ).animate().fadeIn(delay: 200.ms).moveY(begin: 20, end: 0),
 
           const SizedBox(height: 32),
+
+          // Name
+          const Text(
+            'Name',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _nameController,
+            decoration: InputDecoration(
+              hintText: 'Your name',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
 
           // Bio
           const Text(

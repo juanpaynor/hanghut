@@ -4,6 +4,8 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
@@ -314,6 +316,58 @@ class _CreateTableModalState extends State<CreateTableModal> {
     }
   }
 
+  // --- Map Picker Logic (NEW) ---
+  Future<void> _pickLocationOnMap() async {
+    // Get current location for initial map position
+    Position? currentPosition;
+    try {
+      // Check permissions logic if needed, or rely on LocationPickerModal to handle default
+      // For now, let's pass null if we don't have it, or use widget.currentLat/Lng
+      if (widget.currentLat != null && widget.currentLng != null) {
+        currentPosition = Position(
+          longitude: widget.currentLng!,
+          latitude: widget.currentLat!,
+          timestamp: DateTime.now(),
+          accuracy: 0,
+          altitude: 0,
+          heading: 0,
+          speed: 0,
+          speedAccuracy: 0,
+          altitudeAccuracy: 0,
+          headingAccuracy: 0,
+        );
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            LocationPickerModal(initialPosition: currentPosition),
+      ),
+    );
+
+    if (result != null && result is Map) {
+      final address = result['address'] as String?;
+      final lat = result['latitude'] as double?;
+      final lng = result['longitude'] as double?;
+
+      if (lat != null && lng != null) {
+        setState(() {
+          _venueAddress = address;
+          _venueLat = lat;
+          _venueLng = lng;
+          // Use address as name if we picked from map
+          _venueName = address;
+          _venueController.text = address ?? '';
+          _showPredictions = false;
+        });
+      }
+    }
+  }
+
   // --- Creation Logic ---
   Future<void> _createTable() async {
     if (_activityController.text.isEmpty) {
@@ -501,6 +555,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
                         prefixIcon: Icon(
                           Icons.search,
                           color: theme.iconTheme.color?.withOpacity(0.7),
+                        ),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.map_outlined),
+                          color: theme.primaryColor,
+                          tooltip: 'Pick on Map',
+                          onPressed: _pickLocationOnMap,
                         ),
                         filled: true,
                         fillColor: isDark ? Colors.grey[800] : Colors.grey[100],

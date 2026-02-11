@@ -484,7 +484,23 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     ),
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
+
+                  // Description
+                  if (widget.table['description'] != null &&
+                      widget.table['description'].toString().isNotEmpty) ...[
+                    Text(
+                      widget.table['description'],
+                      style: TextStyle(
+                        color: Colors.grey[800],
+                        fontSize: 14,
+                        height: 1.5,
+                      ),
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 20),
+                  ],
 
                   // Actions
                   SizedBox(

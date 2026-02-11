@@ -26,7 +26,8 @@ class FeedScreen extends StatefulWidget {
   State<FeedScreen> createState() => _FeedScreenState();
 }
 
-class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
+class _FeedScreenState extends State<FeedScreen>
+    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final SocialService _socialService = SocialService();
   final TableService _tableService = TableService();
@@ -52,6 +53,13 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
 
   Timer? _scrollDebounce;
   String? _errorMessage;
+
+  // Cache management
+  DateTime? _lastFetchTime;
+  static const Duration _cacheLifetime = Duration(minutes: 5);
+
+  @override
+  bool get wantKeepAlive => true; // Keep state alive across navigation
 
   @override
   void initState() {
@@ -84,19 +92,18 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   }
 
   void _onScroll() {
-    if (_scrollDebounce?.isActive ?? false) _scrollDebounce!.cancel();
+    if (!mounted) return;
+    if (!_scrollController.hasClients) return;
 
-    _scrollDebounce = Timer(const Duration(milliseconds: 200), () {
-      if (!mounted) return;
-      if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
 
-      if (_scrollController.position.pixels >=
-          _scrollController.position.maxScrollExtent * 0.8) {
-        if (!_isLoadingMore) {
-          _loadMorePosts();
-        }
+    // Trigger when 70% down (earlier pre-fetching) or 500px from bottom trying to be smoother
+    if (currentScroll >= maxScroll * 0.7) {
+      if (!_isLoadingMore) {
+        _loadMorePosts();
       }
-    });
+    }
   }
 
   void _subscribeToAblyFeed() {
@@ -106,43 +113,33 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
     }
     _ablySubscriptions.clear();
 
-    if (_userPosition == null) return;
+    // ✅ Subscribe to single Philippines-wide channel (instead of 19 H3 cells)
+    print('📍 Subscribing to Philippines feed channel');
 
-    // Get H3 cells for current location (center + neighbors)
-    final h3Cells = _socialService.getH3CellsForLocation(
-      _userPosition!.latitude,
-      _userPosition!.longitude,
-    );
+    final stream = AblyService().subscribeToCityFeed('philippines');
 
-    print('📍 Subscribing to ${h3Cells.length} H3 cells');
+    if (stream != null) {
+      final sub = stream.listen((message) {
+        if (!mounted) return;
 
-    // Subscribe to each cell's channel
-    for (final cell in h3Cells) {
-      final stream = AblyService().subscribeToCityFeed(
-        cell,
-      ); // Use cell as channel name
-      if (stream != null) {
-        final sub = stream.listen((message) {
-          if (!mounted) return;
+        if (message.name == 'post_created') {
+          final postData = message.data as Map<String, dynamic>;
+          // Avoid duplicates
+          if (_socialPosts.any((p) => p['id'] == postData['id'])) return;
 
-          if (message.name == 'post_created') {
-            final postData = message.data as Map<String, dynamic>;
-            // Avoid duplicates
-            if (_socialPosts.any((p) => p['id'] == postData['id'])) return;
-
-            setState(() {
-              _socialPosts.insert(0, postData);
-            });
-          } else if (message.name == 'post_deleted') {
-            final data = message.data as Map<String, dynamic>;
-            final postId = data['post_id'];
-            setState(() {
-              _socialPosts.removeWhere((post) => post['id'] == postId);
-            });
-          }
-        });
-        _ablySubscriptions.add(sub);
-      }
+          setState(() {
+            _socialPosts.insert(0, postData);
+            _lastFetchTime = null; // ✅ Invalidate cache on new post
+          });
+        } else if (message.name == 'post_deleted') {
+          final data = message.data as Map<String, dynamic>;
+          final postId = data['post_id'];
+          setState(() {
+            _socialPosts.removeWhere((post) => post['id'] == postId);
+          });
+        }
+      });
+      _ablySubscriptions.add(sub);
     }
   }
 
@@ -175,6 +172,16 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _loadSocialPosts({bool force = false}) async {
+    // ✅ Check cache freshness first
+    if (!force && _socialPosts.isNotEmpty && _lastFetchTime != null) {
+      final age = DateTime.now().difference(_lastFetchTime!);
+      if (age < _cacheLifetime) {
+        print('✅ Using cached feed (age: ${age.inSeconds}s)');
+        return; // Cache is fresh, skip query
+      }
+      print('⏰ Cache expired (age: ${age.inSeconds}s), refetching...');
+    }
+
     if (!force && _isLoading && _socialPosts.isNotEmpty) return;
 
     // Don't set isLoading true here if it's already true (initial load)
@@ -202,6 +209,7 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
           _hasMore = result['hasMore'] as bool? ?? false;
           _nextCursor = result['nextCursor'] as String?;
           _nextCursorId = result['nextCursorId'] as String?;
+          _lastFetchTime = DateTime.now(); // ✅ Set cache timestamp
         });
       }
     } catch (e) {
@@ -311,6 +319,8 @@ class _FeedScreenState extends State<FeedScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+
     // Determine list to show
     final postsToShow = _filteredPosts;
 

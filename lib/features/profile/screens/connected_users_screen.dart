@@ -144,10 +144,9 @@ class _UserListTabState extends State<_UserListTab> {
         final user = _users[index];
         final avatarUrl = user['avatar_url'];
         final displayName = user['display_name'] ?? 'Unknown User';
-        final username = user['username'] ?? 'user';
-
-        // TODO: Ensure proper display of user photos if avatar_url is missing
-        // For now, simple fallback
+        final occupation = user['occupation'] as String?;
+        final bio = user['bio'] as String?;
+        final subtitle = occupation ?? bio ?? 'No bio available';
 
         return ListTile(
           leading: CircleAvatar(
@@ -158,7 +157,12 @@ class _UserListTabState extends State<_UserListTab> {
                 : null,
           ),
           title: Text(displayName),
-          subtitle: Text('@$username'),
+          subtitle: Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Colors.grey[600], fontSize: 13),
+          ),
           trailing: _FollowButton(userId: user['id']),
           onTap: () {
             Navigator.push(

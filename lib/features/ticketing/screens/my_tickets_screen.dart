@@ -15,6 +15,7 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
   List<Ticket>? _tickets;
   bool _isLoading = true;
   String? _error;
+  String _selectedFilter = 'All'; // New filter state
 
   @override
   void initState() {
@@ -50,7 +51,50 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('My Tickets'), centerTitle: true),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          _buildFilterBar(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterBar() {
+    final filters = ['All', 'Upcoming', 'Past', 'Cancelled'];
+    return Container(
+      height: 60,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final isSelected = _selectedFilter == filter;
+          return ChoiceChip(
+            label: Text(filter),
+            selected: isSelected,
+            onSelected: (selected) {
+              if (selected) setState(() => _selectedFilter = filter);
+            },
+            selectedColor: Colors.deepPurple,
+            labelStyle: TextStyle(
+              color: isSelected ? Colors.white : Colors.black87,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+            backgroundColor: Colors.grey[200],
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: BorderSide(
+                color: isSelected ? Colors.deepPurple : Colors.transparent,
+              ),
+            ),
+            showCheckmark: false,
+          );
+        },
+      ),
     );
   }
 
@@ -145,11 +189,55 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
     }
 
     // Group tickets by status
-    final upcomingTickets = _tickets!.where((t) => t.isUpcoming).toList();
-    final usedTickets = _tickets!.where((t) => t.isUsed).toList();
-    final expiredTickets = _tickets!
-        .where((t) => t.isExpired && !t.isUsed)
+    var upcomingTickets = _tickets!.where((t) => t.isUpcoming).toList();
+    // Sort Upcoming: Soonest First (ASC)
+    upcomingTickets.sort((a, b) => a.eventDateTime.compareTo(b.eventDateTime));
+
+    var usedTickets = _tickets!.where((t) => t.isUsed).toList();
+    // Sort Past: Most Recent First (DESC)
+    usedTickets.sort((a, b) => b.eventDateTime.compareTo(a.eventDateTime));
+
+    var cancelledRefundedTickets = _tickets!
+        .where((t) => t.isCancelled || t.isRefunded)
         .toList();
+    cancelledRefundedTickets.sort(
+      (a, b) => b.eventDateTime.compareTo(a.eventDateTime),
+    );
+
+    var expiredTickets = _tickets!
+        .where(
+          (t) => t.isExpired && !t.isUsed && !t.isCancelled && !t.isRefunded,
+        )
+        .toList();
+    expiredTickets.sort((a, b) => b.eventDateTime.compareTo(a.eventDateTime));
+
+    // Apply Filter logic
+    if (_selectedFilter == 'Upcoming') {
+      usedTickets = [];
+      expiredTickets = [];
+      cancelledRefundedTickets = [];
+    } else if (_selectedFilter == 'Past') {
+      upcomingTickets = [];
+      cancelledRefundedTickets = [];
+      // Show used & expired
+    } else if (_selectedFilter == 'Cancelled') {
+      upcomingTickets = [];
+      usedTickets = [];
+      expiredTickets = [];
+    }
+
+    // Check if empty after filter
+    if (upcomingTickets.isEmpty &&
+        usedTickets.isEmpty &&
+        expiredTickets.isEmpty &&
+        cancelledRefundedTickets.isEmpty) {
+      return Center(
+        child: Text(
+          'No ${_selectedFilter.toLowerCase()} tickets found',
+          style: const TextStyle(color: Colors.grey),
+        ),
+      );
+    }
 
     return RefreshIndicator(
       onRefresh: _loadTickets,
@@ -185,6 +273,20 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
             _SectionHeader(title: 'Expired', count: expiredTickets.length),
             const SizedBox(height: 12),
             ...expiredTickets.map(
+              (ticket) => Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: TicketCard(ticket: ticket),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (cancelledRefundedTickets.isNotEmpty) ...[
+            _SectionHeader(
+              title: 'Cancelled / Refunded',
+              count: cancelledRefundedTickets.length,
+            ),
+            const SizedBox(height: 12),
+            ...cancelledRefundedTickets.map(
               (ticket) => Padding(
                 padding: const EdgeInsets.only(bottom: 16),
                 child: TicketCard(ticket: ticket),

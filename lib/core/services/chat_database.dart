@@ -156,9 +156,19 @@ class ChatDatabase {
 
   Future<void> syncToCloud(Map<String, dynamic> message) async {
     try {
-      final isTrip = message['chat_type'] == 'trip';
-      final tableName = isTrip ? 'trip_messages' : 'messages';
-      final idColumn = isTrip ? 'chat_id' : 'table_id';
+      final chatType = message['chat_type'] ?? 'table';
+      String tableName = 'messages';
+      String idColumn = 'table_id';
+      bool isTrip = chatType == 'trip';
+      bool isDM = chatType == 'dm';
+
+      if (isTrip) {
+        tableName = 'trip_messages';
+        idColumn = 'chat_id';
+      } else if (isDM) {
+        tableName = 'direct_messages';
+        idColumn = 'chat_id';
+      }
 
       // Check if reply_to_id message exists in Supabase
       String? validReplyToId;
@@ -187,18 +197,29 @@ class ChatDatabase {
         idColumn: message['table_id'], // Local DB always calls it table_id
         'sender_id': message['sender_id'],
         'content': message['content'],
-        if (!isTrip)
+        if (isTrip)
+          'sent_at': DateTime.fromMillisecondsSinceEpoch(
+            message['timestamp'],
+          ).toIso8601String(),
+        if (isDM)
+          'created_at': DateTime.fromMillisecondsSinceEpoch(
+            message['timestamp'],
+          ).toIso8601String(),
+        if (!isTrip && !isDM)
           'timestamp': DateTime.fromMillisecondsSinceEpoch(
             message['timestamp'],
           ).toIso8601String(),
-        if (isTrip)
+        if (isTrip || isDM)
           'message_type':
-              message['message_type'] ?? 'text', // Trip uses message_type
-        if (!isTrip)
+              message['message_type'] ?? 'text', // Trip/DM use message_type
+        if (!isTrip && !isDM)
           'content_type':
               message['message_type'] ?? 'text', // Legacy uses content_type
         if (validReplyToId != null) 'reply_to_id': validReplyToId,
         if (message['gif_url'] != null) 'gif_url': message['gif_url'],
+        if (message['sender_name'] != null)
+          'sender_name': message['sender_name'],
+        'sequence_number': message['sequence_number'],
       };
 
       // Use upsert to avoid duplicate key errors
@@ -233,14 +254,23 @@ class ChatDatabase {
     String chatType = 'table',
   }) async {
     try {
-      final isTrip = chatType == 'trip';
-      final tableName = isTrip ? 'trip_messages' : 'messages';
-      final idColumn = isTrip ? 'chat_id' : 'table_id';
-      final timeColumn = isTrip ? 'sent_at' : 'timestamp';
+      String tableName = 'messages';
+      String idColumn = 'table_id';
+      String timeColumn = 'timestamp';
+
+      if (chatType == 'trip') {
+        tableName = 'trip_messages';
+        idColumn = 'chat_id';
+        timeColumn = 'sent_at';
+      } else if (chatType == 'dm') {
+        tableName = 'direct_messages';
+        idColumn = 'chat_id';
+        timeColumn = 'created_at';
+      }
 
       final cloudMessages = await SupabaseConfig.client
           .from(tableName)
-          .select()
+          .select('*, sender:users(display_name)')
           .eq(idColumn, tableId)
           .order(
             'sequence_number',
@@ -250,11 +280,15 @@ class ChatDatabase {
       if (cloudMessages.isEmpty) return;
 
       final localMessages = cloudMessages.map((msg) {
+        final senderName = msg['sender'] != null
+            ? msg['sender']['display_name'] as String?
+            : null;
+
         return {
           'id': msg['id'],
           'table_id': tableId, // Standardize on table_id locally
           'sender_id': msg['sender_id'],
-          'sender_name': msg['sender_name'], // Might be null depending on query
+          'sender_name': senderName,
           'content': msg['content'],
           'timestamp': DateTime.parse(msg[timeColumn]).millisecondsSinceEpoch,
           'sequence_number': msg['sequence_number'], // Include sequence number
@@ -313,5 +347,36 @@ class ChatDatabase {
     );
 
     print('🧹 Cleaned up $deletedCount old messages (>30 days)');
+  }
+
+  /// Update message delivery status
+  Future<void> updateMessageStatus({
+    required String messageId,
+    required String status,
+  }) async {
+    await init();
+
+    await _database!.update(
+      'messages',
+      {'status': status},
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+
+    print('✅ Updated message $messageId status to: $status');
+  }
+
+  /// Get unsynced message count for monitoring
+  Future<int> getUnsyncedCount(String tableId) async {
+    await init();
+
+    final result = await _database!.query(
+      'messages',
+      columns: ['COUNT(*) as count'],
+      where: 'table_id = ? AND synced = 0',
+      whereArgs: [tableId],
+    );
+
+    return Sqflite.firstIntValue(result) ?? 0;
   }
 }

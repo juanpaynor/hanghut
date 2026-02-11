@@ -10,8 +10,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
+import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 
-class HangoutFeedCard extends StatelessWidget {
+class HangoutFeedCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final VoidCallback onTap;
   final Function(String)? onPostDeleted;
@@ -24,10 +25,49 @@ class HangoutFeedCard extends StatelessWidget {
   });
 
   @override
+  State<HangoutFeedCard> createState() => _HangoutFeedCardState();
+}
+
+class _HangoutFeedCardState extends State<HangoutFeedCard> {
+  late bool _isLiked;
+  late int _likeCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _isLiked =
+        widget.post['is_liked'] ?? widget.post['user_has_liked'] ?? false;
+    _likeCount = widget.post['like_count'] ?? widget.post['likes_count'] ?? 0;
+  }
+
+  void _handleLike() {
+    setState(() {
+      if (_isLiked) {
+        _isLiked = false;
+        _likeCount = (_likeCount - 1).clamp(0, 999999);
+      } else {
+        _isLiked = true;
+        _likeCount++;
+      }
+    });
+    // Call Service
+    SocialService().togglePostLike(widget.post['id']);
+  }
+
+  Future<void> _handleComment() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => CommentsBottomSheet(post: widget.post),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final user = post['user'];
-    final createdAt = DateTime.parse(post['created_at']);
-    final metadata = post['metadata'] as Map<String, dynamic>? ?? {};
+    final user = widget.post['user'];
+    final createdAt = DateTime.parse(widget.post['created_at']);
+    final metadata = widget.post['metadata'] as Map<String, dynamic>? ?? {};
 
     final venueName = metadata['venue_name'] ?? 'Unknown Venue';
     final activityType = metadata['activity_type'] ?? 'Hangout';
@@ -36,6 +76,8 @@ class HangoutFeedCard extends StatelessWidget {
     final scheduledTime = scheduledTimeStr != null
         ? DateTime.parse(scheduledTimeStr)
         : null;
+
+    final commentCount = widget.post['comment_count'] ?? 0;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
@@ -109,8 +151,6 @@ class HangoutFeedCard extends StatelessWidget {
                             fontSize: 13,
                           ),
                           linkStyle: const TextStyle(color: Colors.blue),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ],
@@ -173,7 +213,8 @@ class HangoutFeedCard extends StatelessWidget {
                           ),
                         );
                       } else {
-                        onTap(); // If it's a map or placeholder, treat as card tap
+                        widget
+                            .onTap(); // If it's a map or placeholder, treat as card tap
                       }
                     },
                     child: Container(
@@ -297,20 +338,23 @@ class HangoutFeedCard extends StatelessWidget {
                           ),
                         )
                       else
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Text(
-                            'Join',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold,
+                        GestureDetector(
+                          onTap: widget.onTap,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'Join',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
@@ -321,11 +365,30 @@ class HangoutFeedCard extends StatelessWidget {
             ),
           ),
 
-          // 3. Footer (Time ago)
+          // 3. Social Actions Row (Like & Comment)
           Padding(
-            padding: const EdgeInsets.all(12.0),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
               children: [
+                _buildActionButton(
+                  icon: _isLiked
+                      ? Icons.favorite
+                      : Icons.favorite_border_rounded,
+                  label: _likeCount > 0 ? '$_likeCount' : 'Like',
+                  onTap: _handleLike,
+                  color: _isLiked ? Colors.red : Colors.grey[600]!,
+                  activeColor: Colors.red,
+                ),
+                const SizedBox(width: 20),
+                _buildActionButton(
+                  icon: Icons.chat_bubble_outline_rounded,
+                  label: commentCount > 0 ? '$commentCount' : 'Comment',
+                  onTap: _handleComment,
+                  color: Colors.grey[600],
+                  activeColor: Colors.blueAccent,
+                ),
+                const Spacer(),
+                // Time ago
                 Icon(Icons.access_time, size: 14, color: Colors.grey[400]),
                 const SizedBox(width: 4),
                 Text(
@@ -335,6 +398,7 @@ class HangoutFeedCard extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 8),
         ],
       ),
     );
@@ -346,22 +410,12 @@ class HangoutFeedCard extends StatelessWidget {
       const mapboxToken =
           'sk.eyJ1Ijoiam9obmlub3BhdGluIiwiYSI6ImNtaWoyeDJ0bzBvYWIzZXIxZ3NuNGVtY2cifQ.klu_T_fIF06R96z5MGDsMw';
 
-      // We need coordinates. TableService stores table_id but we might not have lat/lng directly in metadata
-      // unless we put it there.
-      // Let's check TableService.dart:
-      // metadata: { 'table_id': ..., 'venue_name': ..., 'activity_type': ... }
-      // It DOES NOT currently put lat/lng in metadata.
-      // However, the post itself has 'latitude' and 'longitude' columns!
-
-      final lat = post['latitude']; // Post table has these
-      final lng = post['longitude'];
+      final lat = widget.post['latitude']; // Post table has these
+      final lng = widget.post['longitude'];
 
       if (lat == null || lng == null) return null;
 
       // Construct Mapbox Static Image URL
-      // Style: Streets v11
-      // Size: 600x320 (matches close to container aspect ratio)
-      // Zoom: 15
       return 'https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/$lng,$lat,15,0,0/600x320?access_token=$mapboxToken';
     } catch (e) {
       print('Error generating static map URL: $e');
@@ -371,5 +425,43 @@ class HangoutFeedCard extends StatelessWidget {
 
   String _getActivityDescription(String type) {
     return 'created an event';
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? color,
+    Color? activeColor,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: activeColor != null && color == Colors.red
+                  ? activeColor
+                  : (color ?? Colors.grey[600]),
+            ),
+            if (label.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color ?? Colors.grey[600],
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

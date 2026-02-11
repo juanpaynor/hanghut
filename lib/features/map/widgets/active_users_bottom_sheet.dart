@@ -54,44 +54,22 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
 
   Future<void> _fetchActiveUsers() async {
     try {
-      // Use viewport filtering if bounds available
-      if (widget.minLat != null &&
-          widget.maxLat != null &&
-          widget.minLng != null &&
-          widget.maxLng != null) {
-        final response = await SupabaseConfig.client.rpc(
-          'get_active_users_in_viewport',
-          params: {
-            'min_lat': widget.minLat,
-            'max_lat': widget.maxLat,
-            'min_lng': widget.minLng,
-            'max_lng': widget.maxLng,
-            'page_size': _pageSize,
-            'page_number': 0,
-          },
-        );
+      print('🔍 Fetching active users in Philippines...');
 
-        if (mounted) {
-          setState(() {
-            _users = List<Map<String, dynamic>>.from(response);
-            _hasMore = _users.length >= _pageSize;
-            _isLoading = false;
-          });
-        }
-      } else {
-        // Fallback to global active users
-        final response = await SupabaseConfig.client.rpc(
-          'get_active_users',
-          params: {'page_size': _pageSize, 'page_number': 0},
-        );
+      // Use Philippines-specific query
+      final response = await SupabaseConfig.client.rpc(
+        'get_active_users_philippines',
+        params: {'page_size': _pageSize, 'page_number': 0},
+      );
 
-        if (mounted) {
-          setState(() {
-            _users = List<Map<String, dynamic>>.from(response);
-            _hasMore = _users.length >= _pageSize;
-            _isLoading = false;
-          });
-        }
+      print('✅ Got ${(response as List).length} active users');
+
+      if (mounted) {
+        setState(() {
+          _users = List<Map<String, dynamic>>.from(response);
+          _hasMore = _users.length >= _pageSize;
+          _isLoading = false;
+        });
       }
     } catch (e) {
       print('Error fetching active users: $e');

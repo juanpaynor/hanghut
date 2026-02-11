@@ -428,7 +428,12 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     final avatarUrl = userMetadata?['avatar_url'];
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: Colors.grey[200]!)),

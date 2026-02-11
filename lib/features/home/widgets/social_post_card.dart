@@ -5,6 +5,10 @@ import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/home/widgets/event_attachment_card.dart';
+import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
+import 'package:bitemates/features/ticketing/models/event.dart';
 
 class SocialPostCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -19,14 +23,41 @@ class SocialPostCard extends StatefulWidget {
 class _SocialPostCardState extends State<SocialPostCard> {
   late bool _isLiked;
   late int _likeCount;
+  bool _isAnimatingLike = false;
+  Map<String, dynamic>? _attachedEvent;
+  bool _isLoadingEvent = false;
   late int _commentCount;
 
   @override
   void initState() {
     super.initState();
-    _isLiked = widget.post['is_liked'] ?? false;
-    _likeCount = widget.post['like_count'] ?? 0;
+    _isLiked = widget.post['user_has_liked'] ?? false;
+    _likeCount = widget.post['likes_count'] ?? 0;
     _commentCount = widget.post['comment_count'] ?? 0;
+    _fetchAttachedEvent();
+  }
+
+  Future<void> _fetchAttachedEvent() async {
+    final eventId = widget.post['event_id'];
+    // print('🔍 [SocialPostCard] Post ${widget.post['id']} has eventId: $eventId');
+
+    if (eventId != null) {
+      if (mounted) setState(() => _isLoadingEvent = true);
+      try {
+        final data = await SupabaseConfig.client
+            .from('events')
+            .select('*')
+            .eq('id', eventId)
+            .single();
+        // print('✅ [SocialPostCard] Fetched event data: ${data['title']}');
+
+        if (mounted) setState(() => _attachedEvent = data);
+      } catch (e) {
+        print('❌ [SocialPostCard] Error fetching event $eventId: $e');
+      } finally {
+        if (mounted) setState(() => _isLoadingEvent = false);
+      }
+    }
   }
 
   void _handleLike() {
@@ -104,25 +135,39 @@ class _SocialPostCardState extends State<SocialPostCard> {
                 // Header Row (Avatar + Name + Time)
                 Row(
                   children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: Colors.grey[100],
-                      backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
-                          ? NetworkImage(avatarUrl)
-                          : null,
-                      child: avatarUrl == null || avatarUrl.isEmpty
-                          ? Text(
-                              displayName.isNotEmpty
-                                  ? displayName[0].toUpperCase()
-                                  : 'U',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(
-                                  context,
-                                ).textTheme.bodyLarge?.color,
-                              ),
-                            )
-                          : null,
+                    GestureDetector(
+                      onTap: () {
+                        // Navigate to user profile
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => UserProfileScreen(
+                              userId: widget.post['user_id'],
+                            ),
+                          ),
+                        );
+                      },
+                      child: CircleAvatar(
+                        radius: 20,
+                        backgroundColor: Colors.grey[100],
+                        backgroundImage:
+                            avatarUrl != null && avatarUrl.isNotEmpty
+                            ? NetworkImage(avatarUrl)
+                            : null,
+                        child: avatarUrl == null || avatarUrl.isEmpty
+                            ? Text(
+                                displayName.isNotEmpty
+                                    ? displayName[0].toUpperCase()
+                                    : 'U',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(
+                                    context,
+                                  ).textTheme.bodyLarge?.color,
+                                ),
+                              )
+                            : null,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -234,6 +279,68 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     ),
                   ),
 
+                // Event Attachment
+                if (_attachedEvent != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: EventAttachmentCard(
+                      event: _attachedEvent!,
+                      onTap: () {
+                        try {
+                          // Add defaults for potentially missing fields
+                          final eventData = Map<String, dynamic>.from(
+                            _attachedEvent!,
+                          );
+
+                          // Ensure required fields have defaults
+                          eventData['venue_address'] ??=
+                              eventData['venue_name'] ?? 'TBA';
+                          eventData['category'] ??= 'general';
+                          eventData['created_at'] ??= DateTime.now()
+                              .toIso8601String();
+                          eventData['tickets_sold'] ??= 0;
+
+                          // Convert Map to Event model
+                          final event = Event.fromJson(eventData);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => EventPurchaseScreen(event: event),
+                            ),
+                          );
+                        } catch (e) {
+                          print('Error parsing event: $e');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Could not open event: $e')),
+                          );
+                        }
+                      },
+                      onImageTap: () {
+                        final imageUrl = _attachedEvent!['cover_image_url'];
+                        if (imageUrl != null) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  FullScreenImageViewer(imageUrl: imageUrl),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  )
+                else if (widget.post['event_id'] != null && _isLoadingEvent)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Center(
+                      child: SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ),
+
                 // Post Images (Grid Collage for multiple, single for one)
                 if (images.isNotEmpty) ...[
                   _buildImageCollage(images),
@@ -307,10 +414,8 @@ class _SocialPostCardState extends State<SocialPostCard> {
                           backgroundColor: Colors.transparent,
                           builder: (context) =>
                               CommentsBottomSheet(post: widget.post),
-                        ).then((_) {
-                          // Refresh to update comment count
-                          if (widget.onTap != null) widget.onTap!();
-                        });
+                        );
+                        // ✅ Removed .then() reload - feed state persists now
                       },
                       color: Colors.grey[600],
                       activeColor: Colors.blueAccent,

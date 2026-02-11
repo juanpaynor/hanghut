@@ -252,21 +252,43 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     Map<String, dynamic> metadata,
   ) async {
     final chatType = metadata['chat_type'] ?? 'table';
-    final channelId = '${chatType}_$entityId';
-
-    // Fetch table title for header
+    var channelId = '${chatType}_$entityId';
     String tableTitle = 'Chat';
+
     try {
-      final table = await SupabaseConfig.client
-          .from(chatType == 'trip' ? 'trips' : 'tables')
-          .select('title')
-          .eq('id', entityId)
-          .maybeSingle();
-      if (table != null) {
-        tableTitle = table['title'] ?? 'Chat';
+      if (chatType == 'trip') {
+        // Fetch Trip Chat Details (Bucket ID)
+        final chat = await SupabaseConfig.client
+            .from('trip_group_chats')
+            .select('ably_channel_id, destination_city')
+            .eq('id', entityId) // entityId is the chat_id
+            .maybeSingle();
+
+        if (chat != null) {
+          channelId = chat['ably_channel_id'] ?? channelId;
+          tableTitle = '${chat['destination_city']} Group';
+        }
+      } else if (chatType == 'dm' || chatType == 'direct') {
+        // Ensure "direct_" prefix for DMs
+        // If entityId is the chat UUID, prefix matches ActiveChatsList
+        channelId = 'direct_$entityId';
+
+        // Fetch Other User Name for Title
+        // (Optional optimization: pass name in metadata)
+        tableTitle = 'Direct Message';
+      } else {
+        // Table / Hangout
+        final table = await SupabaseConfig.client
+            .from('tables')
+            .select('title')
+            .eq('id', entityId)
+            .maybeSingle();
+        if (table != null) {
+          tableTitle = table['title'] ?? 'Chat';
+        }
       }
     } catch (e) {
-      print('⚠️ Converting chat title failed, using default');
+      print('⚠️ Converting chat title/channel failed, using default: $e');
     }
 
     if (mounted) {
@@ -277,7 +299,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             tableId: entityId,
             channelId: channelId,
             tableTitle: tableTitle,
-            chatType: chatType,
+            chatType: chatType == 'dm' ? 'dm' : chatType, // normalize dm
           ),
         ),
       );

@@ -15,10 +15,19 @@ interface NotificationPayload {
 
 async function getAccessToken(): Promise<string> {
   const serviceAccount = JSON.parse(Deno.env.get('FIREBASE_SERVICE_ACCOUNT') || '{}')
+  if (!serviceAccount.client_email || !serviceAccount.private_key) {
+    throw new Error('Missing FIREBASE_SERVICE_ACCOUNT credentials');
+  }
 
-  const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  // Helper to convert to base64url encoding (URL-safe)
+  const base64url = (input: string): string => {
+    const base64 = btoa(input);
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  };
+
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
   const now = Math.floor(Date.now() / 1000)
-  const claim = btoa(JSON.stringify({
+  const claim = base64url(JSON.stringify({
     iss: serviceAccount.client_email,
     scope: 'https://www.googleapis.com/auth/firebase.messaging',
     aud: 'https://oauth2.googleapis.com/token',
@@ -28,10 +37,24 @@ async function getAccessToken(): Promise<string> {
 
   const signatureInput = `${header}.${claim}`
 
+  // Robustly extract key content: handle \n literals and remove headers/whitespace
+  const pem = serviceAccount.private_key.replace(/\\n/g, '\n');
+  const pemContents = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s/g, '');
+
+  // decode base64
+  const binaryDerString = atob(pemContents);
+  const binaryDer = new Uint8Array(binaryDerString.length);
+  for (let i = 0; i < binaryDerString.length; i++) {
+    binaryDer[i] = binaryDerString.charCodeAt(i);
+  }
+
   // Import private key
   const privateKey = await crypto.subtle.importKey(
     'pkcs8',
-    new TextEncoder().encode(serviceAccount.private_key.replace(/\\n/g, '\n')),
+    binaryDer,
     { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
     false,
     ['sign']
@@ -44,7 +67,12 @@ async function getAccessToken(): Promise<string> {
     new TextEncoder().encode(signatureInput)
   )
 
-  const jwt = `${signatureInput}.${btoa(String.fromCharCode(...new Uint8Array(signature)))}`
+  // Convert signature to base64url
+  const signatureArray = new Uint8Array(signature);
+  const signatureBase64 = btoa(String.fromCharCode(...signatureArray));
+  const signatureBase64url = signatureBase64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
+  const jwt = `${signatureInput}.${signatureBase64url}`
 
   // Exchange JWT for access token
   const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -52,6 +80,12 @@ async function getAccessToken(): Promise<string> {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
   })
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('OAuth2 Token Error:', response.status, errorText);
+    throw new Error(`Failed to get access token: ${response.status} ${errorText}`);
+  }
 
   const { access_token } = await response.json()
   return access_token
@@ -63,7 +97,31 @@ serve(async (req) => {
   }
 
   try {
-    const { user_id, title, body, data }: NotificationPayload = await req.json()
+    const rawBody = await req.text()
+    console.log('📨 Raw request body:', rawBody)
+
+    let payload;
+    try {
+      payload = JSON.parse(rawBody)
+    } catch (parseError) {
+      console.error('❌ JSON Parse Error:', parseError)
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON payload', details: parseError.message }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    console.log('📦 Parsed payload:', JSON.stringify(payload, null, 2))
+
+    const { user_id, title, body, data } = payload as NotificationPayload
+
+    if (!user_id || !title || !body) {
+      console.error('❌ Missing required fields:', { user_id, title, body })
+      return new Response(
+        JSON.stringify({ error: 'Missing required fields: user_id, title, body' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -150,9 +208,16 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Error:', error)
+    console.error('Error in send-push function:', error)
+    console.error('Error name:', error.name)
+    console.error('Error message:', error.message)
+    console.error('Error stack:', error.stack)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({
+        error: error.message,
+        errorName: error.name,
+        errorStack: error.stack
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

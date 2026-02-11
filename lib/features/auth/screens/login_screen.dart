@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/features/auth/screens/forgot_password_screen.dart';
 import 'package:bitemates/features/auth/screens/signup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/providers/auth_provider.dart';
@@ -134,6 +135,31 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
     }
   }
 
+  Future<void> _handleGoogleLogin(BuildContext context) async {
+    HapticFeedback.mediumImpact();
+    // Explode particles on tap
+    _physicsEngine.explode();
+
+    final authProvider = context.read<AuthProvider>();
+
+    try {
+      // Launch OAuth flow in external browser
+      // The actual authentication will complete via deep link callback
+      // and AuthProvider will listen to auth state changes automatically
+      await authProvider.signInWithGoogle();
+    } catch (e) {
+      if (mounted) {
+        HapticFeedback.heavyImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to launch Google Sign-In: $e'),
+            backgroundColor: const Color(0xFF3F51B5), // Indigo
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
@@ -240,6 +266,30 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                               validator: (v) =>
                                   v!.length > 5 ? null : 'Password too short',
                             ),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: GestureDetector(
+                                onTap: () {
+                                  HapticFeedback.lightImpact();
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const ForgotPasswordScreen(),
+                                    ),
+                                  );
+                                },
+                                child: Text(
+                                  'Forgot Password?',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 14,
+                                    color: indigo.withOpacity(0.8),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
                             const SizedBox(height: 24),
 
                             // ACTION BUTTON
@@ -280,6 +330,45 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
+                                );
+                              },
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // GOOGLE SIGN IN
+                            Consumer<AuthProvider>(
+                              builder: (context, auth, _) {
+                                return OutlinedButton.icon(
+                                  onPressed: auth.isLoading
+                                      ? null
+                                      : () => _handleGoogleLogin(context),
+                                  icon: Image.asset(
+                                    'assets/images/google_logo.png',
+                                    height: 24,
+                                    width: 24,
+                                    errorBuilder:
+                                        (context, error, stackTrace) =>
+                                            const Icon(Icons.g_mobiledata),
+                                  ),
+                                  label: const Text('Sign in with Google'),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                    side: BorderSide(
+                                      color: indigo.withOpacity(0.2),
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    textStyle: GoogleFonts.outfit(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                    foregroundColor: Colors.black87,
+                                  ),
                                 );
                               },
                             ),

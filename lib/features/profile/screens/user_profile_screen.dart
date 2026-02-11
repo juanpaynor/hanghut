@@ -17,6 +17,7 @@ import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
 // PHASE 2: New imports
 
+import 'package:bitemates/features/ticketing/screens/organizer_dashboard_screen.dart';
 import 'package:bitemates/features/profile/widgets/profile_completeness_indicator.dart';
 import 'package:bitemates/features/profile/screens/connected_users_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
@@ -461,21 +462,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             SliverAppBar(
               pinned: true,
               expandedHeight: 280,
-              leading: IconButton(
-                icon: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Colors.black26,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.arrow_back,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-                onPressed: () => Navigator.pop(context),
-              ),
+              leading: widget.isOwnProfile
+                  ? null
+                  : IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                          color: Colors.black26,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.arrow_back,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                    ),
               actions: [
                 if (widget.isOwnProfile) ...[
                   IconButton(

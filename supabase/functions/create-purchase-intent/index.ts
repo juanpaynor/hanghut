@@ -30,8 +30,8 @@ serve(async (req) => {
             Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
         )
 
-        // Parse request body first (needed for guest check)
-        const { event_id, quantity, channel_code, guest_details, success_url, failure_url } = await req.json()
+        // Parse request body
+        const { event_id, quantity, tier_id, promo_code, channel_code, guest_details, success_url, failure_url, subscribed_to_newsletter } = await req.json()
 
         // Get authenticated user (if any)
         const {
@@ -63,7 +63,7 @@ serve(async (req) => {
             userProfile = profile
         }
 
-        // Validate input
+        // Validate basic input
         if (!event_id || !quantity || quantity < 1) {
             return new Response(
                 JSON.stringify({
@@ -74,16 +74,112 @@ serve(async (req) => {
             )
         }
 
-        // Call RPC function to reserve tickets (handles atomic capacity locking)
+        // --- PRICING LOGIC ---
+        let unitPrice = 0
+        let tierName = 'General Admission'
+        let organizerId = null
+
+        if (tier_id) {
+            // Fetch Tier Price AND Organizer ID via Event relation
+            const { data: tier, error: tierError } = await supabaseClient
+                .from('ticket_tiers')
+                .select('price, name, quantity_sold, quantity_total, events(organizer_id)')
+                .eq('id', tier_id)
+                .eq('event_id', event_id)
+                .single()
+
+            if (tierError || !tier) {
+                return new Response(JSON.stringify({ success: false, error: { message: 'Invalid Ticket Tier' } }), { status: 400, headers: corsHeaders })
+            }
+
+            // Check Tier Capacity
+            if (tier.quantity_sold + quantity > tier.quantity_total) {
+                return new Response(JSON.stringify({ success: false, error: { message: 'Selected ticket tier is sold out' } }), { status: 400, headers: corsHeaders })
+            }
+
+            unitPrice = tier.price
+            tierName = tier.name
+            // @ts-ignore
+            organizerId = tier.events?.organizer_id
+        } else {
+            // Fallback to Event Price (Legacy / Simple Events)
+            const { data: event, error: eventError } = await supabaseClient
+                .from('events')
+                .select('ticket_price, organizer_id')
+                .eq('id', event_id)
+                .single()
+
+            if (eventError || !event) {
+                return new Response(JSON.stringify({ success: false, error: { message: 'Invalid Event' } }), { status: 400, headers: corsHeaders })
+            }
+            unitPrice = event.ticket_price
+            organizerId = event.organizer_id
+        }
+
+        // --- FETCH PLATFORM FEE ---
+        let platformFeePercentage = 10.0 // Default 10%
+        if (organizerId) {
+            const { data: partner } = await supabaseClient
+                .from('partners')
+                .select('custom_percentage')
+                .eq('id', organizerId)
+                .single()
+
+            // Check if distinct custom_percentage exists (it might be 0, so check undefined/null)
+            if (partner && partner.custom_percentage !== null && partner.custom_percentage !== undefined) {
+                platformFeePercentage = partner.custom_percentage
+            }
+        }
+
+        // --- PROMO CODE LOGIC ---
+        let discountAmount = 0
+        let promoCodeId = null
+
+        if (promo_code) {
+            const { data: promo, error: promoError } = await supabaseClient
+                .from('promo_codes')
+                .select('*')
+                .eq('event_id', event_id)
+                .eq('code', promo_code.toUpperCase())
+                .eq('is_active', true)
+                .single()
+
+            if (promo) {
+                // Check Limits (Expiry / Usage)
+                const now = new Date()
+                if (promo.expires_at && new Date(promo.expires_at) < now) {
+                    return new Response(JSON.stringify({ success: false, error: { message: 'Promo code expired' } }), { status: 400, headers: corsHeaders })
+                }
+                if (promo.usage_limit && promo.usage_count >= promo.usage_limit) {
+                    return new Response(JSON.stringify({ success: false, error: { message: 'Promo code usage limit reached' } }), { status: 400, headers: corsHeaders })
+                }
+
+                promoCodeId = promo.id
+
+                // Calculate Discount
+                const subtotal = unitPrice * quantity
+                if (promo.discount_type === 'percentage') {
+                    discountAmount = subtotal * (promo.discount_amount / 100)
+                } else {
+                    discountAmount = promo.discount_amount // Fixed amount
+                }
+
+                // Cap discount at subtotal
+                if (discountAmount > subtotal) discountAmount = subtotal
+            } else {
+                return new Response(JSON.stringify({ success: false, error: { message: 'Invalid Promo Code' } }), { status: 400, headers: corsHeaders })
+            }
+        }
+
         const { data: intentData, error: reserveError } = await supabaseClient.rpc(
             'reserve_tickets',
             {
                 p_event_id: event_id,
                 p_user_id: user?.id ?? null,
                 p_quantity: quantity,
-                p_guest_email: guest_details?.email ?? null,
-                p_guest_name: guest_details?.name ?? null,
-                p_guest_phone: guest_details?.phone ?? null,
+                p_guest_email: guest_details?.email ?? user?.email ?? null,
+                p_guest_name: guest_details?.name ?? userProfile?.full_name ?? null,
+                p_guest_phone: guest_details?.phone ?? userProfile?.phone ?? null,
             }
         )
 
@@ -102,6 +198,36 @@ serve(async (req) => {
         }
 
         const intentId = intentData
+
+        // --- UPDATE INTENT WITH PRICING & TIER INFO ---
+        const subtotal = unitPrice * quantity
+        // Calculate Platform Fee (default 10% or custom)
+        const platformFee = (subtotal - discountAmount) * (platformFeePercentage / 100)
+        const totalAmount = (subtotal - discountAmount) + platformFee
+
+        console.log(`Updating Intent ${intentId}: Tier=${tierName}, Promo=${promo_code}, Total=${totalAmount}, Fee%=${platformFeePercentage}`)
+
+        const { error: updateError } = await supabaseAdmin // Use Admin to bypass RLS
+            .from('purchase_intents')
+            .update({
+                tier_id: tier_id ?? null,
+                promo_code_id: promoCodeId,
+                unit_price: unitPrice,
+                subtotal: subtotal,
+                discount_amount: discountAmount,
+                platform_fee: platformFee,
+                total_amount: totalAmount,
+                pricing_note: `Tier: ${tierName}${promo_code ? ' | Promo: ' + promo_code : ''}`,
+                fee_percentage: platformFeePercentage,
+                subscribed_to_newsletter: subscribed_to_newsletter ?? false
+            })
+            .eq('id', intentId)
+
+        if (updateError) {
+            console.error('Failed to update intent pricing:', updateError)
+            throw new Error('Failed to update intent pricing details')
+        }
+
 
         // Fetch the created purchase intent using Admin client (bypasses RLS)
         const { data: intent, error: fetchError } = await supabaseAdmin
@@ -138,7 +264,7 @@ serve(async (req) => {
                     surname: (user ? (userProfile?.full_name?.split(' ').slice(1).join(' ')) : (guest_details?.name?.split(' ').slice(1).join(' '))) || '-',
                 },
             },
-            description: `${quantity} ticket(s) for ${intent.event.title}`,
+            description: `${quantity}x ${tierName} for ${intent.event.title}`,
             success_return_url: success_url || undefined,
             cancel_return_url: failure_url || undefined,
             metadata: {
@@ -146,6 +272,8 @@ serve(async (req) => {
                 intent_id: intentId,
                 user_id: user?.id || 'guest',
                 is_guest: String(!user),
+                tier_id: tier_id || 'default',
+                promo_code: promo_code || ''
             },
         }
 
@@ -201,11 +329,13 @@ serve(async (req) => {
                     intent_id: intentId,
                     payment_request_id: session.id,
                     subtotal: intent.subtotal,
+                    discount_amount: intent.discount_amount,
                     platform_fee: intent.platform_fee,
                     total_amount: intent.total_amount,
                     payment_url: session.payment_link_url,
                     expires_at: intent.expires_at,
                     tickets_reserved: quantity,
+                    tier_name: tierName,
                     event: {
                         title: intent.event.title,
                         start_datetime: intent.event.start_datetime,

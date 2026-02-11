@@ -158,8 +158,10 @@ class MapScreenState extends State<MapScreen>
             .eq('id', user.id);
       }
 
-      // Fetch count
-      final count = await SupabaseConfig.client.rpc('get_active_user_count');
+      // Fetch count (Philippines only)
+      final count = await SupabaseConfig.client.rpc(
+        'get_active_users_philippines_count',
+      );
       if (mounted) {
         setState(() => _activeUserCount = count as int);
       }
@@ -251,9 +253,11 @@ class MapScreenState extends State<MapScreen>
           .eq('id', user.id)
           .single();
 
-      setState(() {
-        _currentUserData = response;
-      });
+      if (mounted) {
+        setState(() {
+          _currentUserData = response;
+        });
+      }
 
       print('✅ User data loaded successfully');
 
@@ -629,6 +633,59 @@ class MapScreenState extends State<MapScreen>
           }
         } else {
           // Handle Marker Tap (Existing Logic)
+          // CHECK FOR STACKED MARKERS (Overlap)
+          // If we tapped a stack of markers (e.g. multiple events at same venue),
+          // features list will contain all of them.
+          if (features.length > 1) {
+            print('📚 Stacked markers tapped! Count: ${features.length}');
+            final List<Map<String, dynamic>> stackedItems = [];
+
+            for (final stackedFeature in features) {
+              final props =
+                  stackedFeature?.queriedFeature.feature['properties'] as Map?;
+              final index = props?['index'];
+              final type = props?['type'];
+
+              if (type == 'event' &&
+                  index != null &&
+                  index is int &&
+                  index < _events.length) {
+                // Convert Event to Map for Cluster Sheet
+                final event = _events[index];
+                stackedItems.add({
+                  'id': event.id,
+                  'title': event.title,
+                  'datetime': event.startDatetime.toIso8601String(),
+                  'current_capacity': event.ticketsSold,
+                  'max_guests': event.capacity,
+                  'location_name': event.venueName,
+                  'type': 'event',
+                  'original_object': event,
+                });
+              } else if (index != null &&
+                  index is int &&
+                  index < _tables.length) {
+                // Add Table
+                final table = _tables[index];
+                stackedItems.add({
+                  ...table,
+                  'type': 'table', // specific marker for sheet to know
+                });
+              }
+            }
+
+            if (stackedItems.isNotEmpty && mounted) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (context) => EventClusterSheet(events: stackedItems),
+              );
+              return; // Stop processing single tap
+            }
+          }
+
+          // Single Marker Tap (Fallback)
           final properties =
               feature?.queriedFeature.feature['properties'] as Map?;
           final index = properties?['index'];
@@ -677,20 +734,61 @@ class MapScreenState extends State<MapScreen>
           '📊 _events.length=${_events.length}, _tables.length=${_tables.length}',
         );
 
-        if (markerType == 'event' &&
+        if ((markerType == 'event' || markerType == 'stack') &&
             index != null &&
-            index is int &&
-            index < _events.length) {
-          // Event marker tapped
-          print('🎟️ EVENT MARKER TAPPED! Index: $index');
-          final event = _events[index];
-          if (mounted) {
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (context) => EventDetailModal(event: event),
-            );
+            index is int) {
+          // Handle Event or Stack
+          if (markerType == 'stack') {
+            // Stack Tap -> Open Cluster Sheet
+            print('📚 Stack Marker Tapped');
+            final ids = properties?['ids']?.toString().split(',') ?? [];
+
+            // Find events by ID
+            final List<Map<String, dynamic>> stackedItems = [];
+            for (final id in ids) {
+              final event = _events.firstWhere(
+                (e) => e.id == id,
+                orElse: () => _events[0],
+              ); // Fallback safe
+              if (event.id == id) {
+                stackedItems.add({
+                  'id': event.id,
+                  'title': event.title,
+                  'datetime': event.startDatetime.toIso8601String(),
+                  'current_capacity': event.ticketsSold,
+                  'max_guests': event.capacity,
+                  'location_name': event.venueName,
+                  'type': 'event',
+                  'original_object': event,
+                  // Pass full object for detailed view
+                });
+              }
+            }
+
+            if (mounted) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (context) => EventClusterSheet(events: stackedItems),
+              );
+            }
+          } else {
+            // Single Event (or Spiderfied) Tap
+            print('🎟️ EVENT MARKER TAPPED! Index: $index');
+            // Be careful: index might not match _events index if we have phantom spider markers?
+            // Actually, I set index correctly in the loop above.
+            if (index < _events.length) {
+              final event = _events[index];
+              if (mounted) {
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (context) => EventDetailModal(event: event),
+                );
+              }
+            }
           }
         } else if (index != null && index is int && index < _tables.length) {
           // Table marker tapped
@@ -864,9 +962,7 @@ class MapScreenState extends State<MapScreen>
 
       // 3. Get Viewport Bounds
       double? minLat, maxLat, minLng, maxLng;
-
       // Get the visible region of the map
-
       final cameraOptions = CameraOptions(
         center: cameraState.center,
         zoom: cameraState.zoom,
@@ -884,36 +980,37 @@ class MapScreenState extends State<MapScreen>
         minLng = bounds.southwest.coordinates.lng.toDouble();
         maxLng = bounds.northeast.coordinates.lng.toDouble();
       } else {
-        // Fallback or just return if we can't get bounds
         print('⚠️ Could not get map bounds');
         return;
       }
 
-      var fetchedTables = await _tableService.getMapReadyTables(
-        userLat: _currentPosition?.latitude,
-        userLng: _currentPosition?.longitude,
-        // radiusKm: 30.0, // Removed fixed radius in favor of bounds
-        minLat: minLat,
-        maxLat: maxLat,
-        minLng: minLng,
-        maxLng: maxLng,
-        limit: 100, // Smart server-side limit
-      );
+      // Parallel Fetch: Get Tables and Events concurrently
+      final results = await Future.wait([
+        _tableService.getMapReadyTables(
+          userLat: _currentPosition?.latitude,
+          userLng: _currentPosition?.longitude,
+          minLat: minLat,
+          maxLat: maxLat,
+          minLng: minLng,
+          maxLng: maxLng,
+          limit: 100,
+        ),
+        _eventService.getEventsInViewport(
+          minLat: minLat,
+          maxLat: maxLat,
+          minLng: minLng,
+          maxLng: maxLng,
+        ),
+      ]);
 
-      // Fetch events in the same viewport
-      final fetchedEvents = await _eventService.getEventsInViewport(
-        minLat: minLat,
-        maxLat: maxLat,
-        minLng: minLng,
-        maxLng: maxLng,
-      );
+      var fetchedTables = results[0] as List<Map<String, dynamic>>;
+      final fetchedEvents = results[1] as List<Event>;
 
       print('📍 Found ${fetchedTables.length} tables in viewport');
       print('📅 Found ${fetchedEvents.length} events in viewport');
 
       // 4. Relevance Filtering: Sort by Match Score and Cap
       if (_currentUserData != null) {
-        // Calculate score for each table
         final scoredTables = fetchedTables.map((table) {
           final matchData = _matchingService.calculateMatch(
             currentUser: _currentUserData!,
@@ -922,25 +1019,17 @@ class MapScreenState extends State<MapScreen>
           return {'table': table, 'score': matchData['score'] as double};
         }).toList();
 
-        // Sort descending by score
         scoredTables.sort(
           (a, b) => (b['score'] as double).compareTo(a['score'] as double),
         );
 
-        // Take top 50 max (to prevent saturation)
-        // If "Explore All" mode logic existed, we might skip this, but for now defaults to smart cap.
         final int maxMarkers = 50;
         if (scoredTables.length > maxMarkers) {
-          print(
-            '⚠️ Capping markers to top $maxMarkers most relevant (from ${scoredTables.length})',
-          );
           fetchedTables = scoredTables
               .take(maxMarkers)
               .map((e) => e['table'] as Map<String, dynamic>)
               .toList();
         } else {
-          // Even if not capped, we use the sorted list so best matches render LAST (on top)
-          // or we might want them first. Usually Z-order isn't strict here but good to have sorted data.
           fetchedTables = scoredTables
               .map((e) => e['table'] as Map<String, dynamic>)
               .toList();
@@ -951,74 +1040,88 @@ class MapScreenState extends State<MapScreen>
         _tables = fetchedTables;
         _events = fetchedEvents;
       });
-      // Ghosts cleared, replaced by Pop Animation later
 
       // 5. Clustering & Native Layers Implementation
       final style = _mapboxMap?.style;
       if (style == null) return;
 
-      // A. Remove Annotation Manager (Switching to Native Layers)
       if (_tableMarkerManager != null) {
         _tableMarkerManager?.deleteAll();
         _tableMarkerManager = null;
       }
 
-      // A. Prepare Images & GeoJSON Features
       final features = <Map<String, dynamic>>[];
 
+      // --- Parallel Marker Generation: Tables ---
+      // Filter out tables that already have images to avoid re-processing
+      final tablesNeedImages = fetchedTables.where((table) {
+        final imageId = 'table_img_${table['id']}';
+        return !_addedImages.contains(imageId);
+      }).toList();
+
+      if (tablesNeedImages.isNotEmpty) {
+        print(
+          '🎨 Generating ${tablesNeedImages.length} table markers in parallel...',
+        );
+        await Future.wait(
+          tablesNeedImages.map((table) async {
+            try {
+              final imageId = 'table_img_${table['id']}';
+              final matchData = _matchingService.calculateMatch(
+                currentUser: _currentUserData!,
+                table: table,
+              );
+
+              final Uint8List markerImage;
+              final markerImageUrl = table['marker_image_url'];
+              final markerEmoji = table['marker_emoji'];
+
+              if (markerImageUrl != null &&
+                  markerImageUrl.toString().isNotEmpty) {
+                markerImage = await _createCustomMarkerImage(
+                  imageUrl: markerImageUrl,
+                  glowColor: matchData['color'],
+                  glowIntensity: matchData['glowIntensity'],
+                  count: 1,
+                );
+              } else if (markerEmoji != null &&
+                  markerEmoji.toString().isNotEmpty) {
+                markerImage = await _createEmojiMarkerImage(
+                  emoji: markerEmoji,
+                  glowColor: matchData['color'],
+                  glowIntensity: matchData['glowIntensity'],
+                );
+              } else {
+                markerImage = await _createTableMarkerImage(
+                  photoUrl: table['host_photo_url'],
+                  activityType: table['activityType'],
+                  glowColor: matchData['color'],
+                  glowIntensity: matchData['glowIntensity'],
+                  count: 1,
+                );
+              }
+
+              await style.addStyleImage(
+                imageId,
+                2.0,
+                MbxImage(width: 120, height: 120, data: markerImage),
+                false,
+                [],
+                [],
+                null,
+              );
+              _addedImages.add(imageId);
+            } catch (e) {
+              print('❌ Error generating table marker for ${table['id']}: $e');
+            }
+          }),
+        );
+      }
+
+      // Add table features (fast, just data mapping)
       for (var i = 0; i < fetchedTables.length; i++) {
         final table = fetchedTables[i];
-        final matchData = _matchingService.calculateMatch(
-          currentUser: _currentUserData!,
-          table: table,
-        );
-
         final imageId = 'table_img_${table['id']}';
-
-        // Generate and Add Image to Style (if not exists)
-        // Note: For performance, we should track which images are already added.
-        // But for <100, checking/adding is acceptable.
-        if (!_addedImages.contains(imageId)) {
-          final Uint8List markerImage;
-          final markerImageUrl = table['marker_image_url'];
-          final markerEmoji = table['marker_emoji'];
-
-          if (markerImageUrl != null && markerImageUrl.toString().isNotEmpty) {
-            markerImage = await _createCustomMarkerImage(
-              imageUrl: markerImageUrl,
-              glowColor: matchData['color'],
-              glowIntensity: matchData['glowIntensity'],
-              count: 1, // Individual marker, count handled by cluster
-            );
-          } else if (markerEmoji != null && markerEmoji.toString().isNotEmpty) {
-            markerImage = await _createEmojiMarkerImage(
-              emoji: markerEmoji,
-              glowColor: matchData['color'],
-              glowIntensity: matchData['glowIntensity'],
-            );
-          } else {
-            markerImage = await _createTableMarkerImage(
-              photoUrl: table['host_photo_url'],
-              activityType: table['activityType'], // Pass activity type
-              glowColor: matchData['color'],
-              glowIntensity: matchData['glowIntensity'],
-              count: 1,
-            );
-          }
-
-          // Add to style
-          await style.addStyleImage(
-            imageId,
-            2.0, // Scale factor
-            MbxImage(width: 120, height: 120, data: markerImage),
-            false,
-            [],
-            [],
-            null,
-          );
-          _addedImages.add(imageId);
-        }
-
         features.add({
           'type': 'Feature',
           'id': table['id'],
@@ -1029,65 +1132,158 @@ class MapScreenState extends State<MapScreen>
           'properties': {
             'icon_id': imageId,
             'description': table['venue_name'],
-            'index': i, // Store index to lookup table data later
+            'index': i,
           },
         });
+      }
+
+      // --- Parallel Marker Generation: Events ---
+      final eventsNeedImages = _events.where((event) {
+        final imageId = 'event_img_${event.id}';
+        return !_addedImages.contains(imageId);
+      }).toList();
+
+      if (eventsNeedImages.isNotEmpty) {
         print(
-          '✅ Added table feature ${i + 1}/${fetchedTables.length}: icon_id=$imageId',
+          '🎨 Generating ${eventsNeedImages.length} event markers in parallel...',
+        );
+        await Future.wait(
+          eventsNeedImages.map((event) async {
+            try {
+              final imageId = 'event_img_${event.id}';
+              final markerImage = await _createEventMarkerImage(event: event);
+
+              await style.addStyleImage(
+                imageId,
+                2.0,
+                MbxImage(width: 120, height: 120, data: markerImage),
+                false,
+                [],
+                [],
+                null,
+              );
+              _addedImages.add(imageId);
+            } catch (e) {
+              print('❌ Error generating event marker for ${event.id}: $e');
+            }
+          }),
         );
       }
 
-      // Add event markers
-      for (var i = 0; i < _events.length; i++) {
-        try {
-          final event = _events[i];
-          final imageId = 'event_img_${event.id}';
+      // Tracking groups by coordinate
+      final Map<String, List<Event>> eventGroups = {};
+      for (final event in _events) {
+        final key =
+            '${event.latitude.toStringAsFixed(6)},${event.longitude.toStringAsFixed(6)}';
+        if (!eventGroups.containsKey(key)) {
+          eventGroups[key] = [];
+        }
+        eventGroups[key]!.add(event);
+      }
 
-          print(
-            '🎟️ Processing event ${i + 1}/${_events.length}: ${event.title}',
-          );
+      // Generate Features based on Hybrid Logic
+      for (final key in eventGroups.keys) {
+        final group = eventGroups[key]!;
+        final count = group.length;
+        final firstEvent = group.first;
 
-          // Generate event marker image (calendar/ticket icon)
-          if (!_addedImages.contains(imageId)) {
-            print('🖼️ Creating marker image for event: ${event.id}');
-            final markerImage = await _createEventMarkerImage(event: event);
+        // 1. Single Event
+        if (count == 1) {
+          final imageId = 'event_img_${firstEvent.id}';
+          features.add({
+            'type': 'Feature',
+            'id': 'event_${firstEvent.id}',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [firstEvent.longitude, firstEvent.latitude],
+            },
+            'properties': {
+              'icon_id': imageId,
+              'description': firstEvent.title,
+              'index': _events.indexOf(firstEvent),
+              'type': 'event',
+            },
+          });
+        }
+        // 2. Spiderfy (2-5 Events) - "Fan Out"
+        else if (count <= 5) {
+          final centerLat = firstEvent.latitude;
+          final centerLng = firstEvent.longitude;
+          final radius = 0.0002; // Approx 20-25 meters
 
-            // Add to style
-            await style.addStyleImage(
-              imageId,
-              2.0, // Scale factor
-              MbxImage(width: 120, height: 120, data: markerImage),
-              false,
-              [],
-              [],
-              null,
-            );
-            _addedImages.add(imageId);
-            print('✅ Event marker image added: $imageId');
+          for (var i = 0; i < count; i++) {
+            final event = group[i];
+            final imageId = 'event_img_${event.id}';
+
+            // Calculate spiral/circle position
+            final angle = (2 * pi * i) / count;
+            final offsetLat = radius * cos(angle);
+            final offsetLng = radius * sin(angle);
+
+            features.add({
+              'type': 'Feature',
+              'id': 'event_${event.id}',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [centerLng + offsetLng, centerLat + offsetLat],
+              },
+              'properties': {
+                'icon_id': imageId,
+                'description': event.title,
+                'index': _events.indexOf(event),
+                'type': 'event', // Treat as normal event so tap opens detail
+                'spiderfied': true, // Tag for potential styling
+              },
+            });
+          }
+        }
+        // 3. Venue Stack (6+ Events)
+        else {
+          // Generate a custom "Stack" marker image if not exists
+          // We use the first event's ID for the image cache key but append '_stack'
+          final stackImageId = 'stack_img_${firstEvent.id}';
+
+          if (!_addedImages.contains(stackImageId)) {
+            try {
+              // Generate marker with Badge
+              final markerImage = await _createEventMarkerImage(
+                event: firstEvent,
+                badgeCount:
+                    count, // We need to update _createEventMarkerImage signature or handle this
+              );
+
+              await style.addStyleImage(
+                stackImageId,
+                2.0,
+                MbxImage(width: 120, height: 120, data: markerImage),
+                false,
+                [],
+                [],
+                null,
+              );
+              _addedImages.add(stackImageId);
+            } catch (e) {
+              print('❌ Error generating stack marker: $e');
+            }
           }
 
           features.add({
             'type': 'Feature',
-            'id':
-                'event_${event.id}', // Prefix with 'event_' to distinguish from tables
+            'id': 'stack_${key}',
             'geometry': {
               'type': 'Point',
-              'coordinates': [event.longitude, event.latitude],
+              'coordinates': [firstEvent.longitude, firstEvent.latitude],
             },
             'properties': {
-              'icon_id': imageId,
-              'description': event.title,
-              'index': i,
-              'type': 'event', // Mark as event for tap handling
+              'icon_id': stackImageId,
+              'description': '${firstEvent.venueName} (Cluster)',
+              'count': count,
+              'type': 'stack', // Special type for tap handling
+              'ids': group
+                  .map((e) => e.id)
+                  .join(','), // Store IDs to retrieve later
             },
           });
-          print(
-            '✅ Added event feature ${i + 1}/${_events.length}: ${event.title}',
-          );
-        } catch (e, stackTrace) {
-          print('❌ Error adding event marker $i: $e');
-          print('Stack trace: $stackTrace');
-          // Continue with next event instead of breaking entire loop
         }
       }
 
@@ -1512,65 +1708,107 @@ class MapScreenState extends State<MapScreen>
     return byteData!.buffer.asUint8List();
   }
 
-  Future<Uint8List> _createEventMarkerImage({required Event event}) async {
+  Future<Uint8List> _createEventMarkerImage({
+    required Event event,
+    int badgeCount = 1,
+  }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
-    final int size = 120;
+    final int size = 120; // Size of the marker
 
-    // Event markers use orange border (distinctive from blue table markers)
-    final Paint borderPaint = Paint()
-      ..color =
-          const Color(0xFFFF6B35) // Orange for events
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 6;
-
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 3, borderPaint);
-
-    // Draw white background
+    // 1. Draw White Circle Background
     final Paint bgPaint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.fill;
 
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 8, bgPaint);
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2, bgPaint);
 
-    // Try to load event cover image
-    if (event.coverImageUrl != null && event.coverImageUrl!.isNotEmpty) {
+    // 2. Draw Image (Clip to Circle)
+    if (event.coverImageUrl != null) {
       try {
         final response = await http.get(Uri.parse(event.coverImageUrl!));
-        final Uint8List bytes = response.bodyBytes;
-        final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-        final ui.FrameInfo frameInfo = await codec.getNextFrame();
-        final ui.Image coverImage = frameInfo.image;
+        if (response.statusCode == 200) {
+          final Uint8List bytes = response.bodyBytes;
+          final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+          final ui.FrameInfo frameInfo = await codec.getNextFrame();
+          final ui.Image image = frameInfo.image;
 
-        // Draw circular clipped cover photo
-        canvas.save();
-        final Path clipPath = Path()
-          ..addOval(
-            Rect.fromCircle(
-              center: Offset(size / 2, size / 2),
-              radius: size / 2 - 12,
-            ),
+          canvas.save();
+          final Path clipPath = Path()
+            ..addOval(
+              Rect.fromCircle(
+                center: Offset(size / 2, size / 2),
+                radius: (size / 2) - 4, // Slight padding
+              ),
+            );
+          canvas.clipPath(clipPath);
+          paintImage(
+            canvas: canvas,
+            rect: Rect.fromLTWH(4, 4, size - 8, size - 8),
+            image: image,
+            fit: BoxFit.cover,
           );
-        canvas.clipPath(clipPath);
-
-        paintImage(
-          canvas: canvas,
-          rect: Rect.fromLTWH(12, 12, size - 24, size - 24),
-          image: coverImage,
-          fit: BoxFit.cover,
-        );
-        canvas.restore();
+          canvas.restore();
+        }
       } catch (e) {
-        print('⚠️ Failed to load event cover image, using fallback: $e');
-        // Fallback to ticket emoji if image fails
-        _drawTicketIconFallback(canvas, size);
+        print('Error loading event image: $e');
       }
-    } else {
-      // No cover image, use ticket emoji
-      _drawTicketIconFallback(canvas, size);
     }
 
-    // Convert to image
+    // 3. Draw Default Icon if no image
+    if (event.coverImageUrl == null) {
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: '📅', // Calendar emoji
+          style: TextStyle(fontSize: 60),
+        ),
+        textDirection: ui.TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+      );
+    }
+
+    // 4. Draw Border Ring
+    final Paint borderPaint = Paint()
+      ..color = Colors
+          .black // Dark border for contrast
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4;
+
+    canvas.drawCircle(Offset(size / 2, size / 2), (size / 2) - 2, borderPaint);
+
+    // 5. Draw Badge (If count > 1)
+    if (badgeCount > 1) {
+      final double badgeSize = 40.0;
+      final Paint badgeBgPaint = Paint()..color = Colors.red;
+
+      // Draw badge at top-right
+      canvas.drawCircle(Offset(size - 20, 20), badgeSize / 2, badgeBgPaint);
+
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: badgeCount > 9 ? '9+' : '$badgeCount',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: ui.TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(
+          size - 20 - (textPainter.width / 2),
+          20 - (textPainter.height / 2),
+        ),
+      );
+    }
+
     final ui.Image image = await pictureRecorder.endRecording().toImage(
       size,
       size,

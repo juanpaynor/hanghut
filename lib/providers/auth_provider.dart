@@ -65,6 +65,27 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
+  // Sign in with Google
+  Future<bool> signInWithGoogle() async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      final success = await _authService.signInWithGoogle();
+      if (success) {
+        notifyListeners();
+        return true;
+      } else {
+        _setLoading(false);
+        return false;
+      }
+    } catch (e) {
+      _setError(e.toString());
+      _setLoading(false);
+      return false;
+    }
+  }
+
   // Sign out
   Future<void> signOut() async {
     _setLoading(true);
@@ -77,6 +98,20 @@ class AuthProvider with ChangeNotifier {
     } catch (e) {
       _setError(e.toString());
       _setLoading(false);
+    }
+  }
+
+  // Reset password
+  Future<void> resetPasswordForEmail(String email) async {
+    _setLoading(true);
+    _clearError();
+    try {
+      await _authService.resetPasswordForEmail(email);
+      _setLoading(false);
+    } catch (e) {
+      _setError(e.toString());
+      _setLoading(false);
+      rethrow;
     }
   }
 
