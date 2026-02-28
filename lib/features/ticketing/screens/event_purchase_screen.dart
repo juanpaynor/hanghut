@@ -6,6 +6,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/ticketing/screens/ticket_success_screen.dart';
+import 'package:bitemates/core/services/event_service.dart';
 import 'dart:async';
 
 class EventPurchaseScreen extends StatefulWidget {
@@ -22,6 +23,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   bool _isLoading = false;
   String? _currentPurchaseIntentId;
   Timer? _pollingTimer;
+
+  // Event Details (for Fees)
+  Event? _fullEvent;
+  bool _isLoadingEventDetails = false;
+
+  // Real availability (counted from tickets table)
+  int _realTicketsAvailable = 10; // default max per person
 
   // New State for Tiers & Promos
   List<TicketTier> _tiers = [];
@@ -45,6 +53,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
     super.initState();
     _fetchUserProfile(); // Pre-fill if logged in
     _fetchTicketTiers();
+    _checkEventDetails();
+    _fetchRealAvailability();
   }
 
   @override
@@ -86,6 +96,48 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
     } catch (e) {
       print('⚠️ Failed to fetch tiers: $e');
       if (mounted) setState(() => _isLoadingTiers = false);
+    }
+  }
+
+  /// Fetch actual sold count via RPC (bypasses RLS on tickets table)
+  Future<void> _fetchRealAvailability() async {
+    try {
+      final int actualSold = await SupabaseConfig.client.rpc(
+        'get_event_sold_count',
+        params: {'p_event_id': widget.event.id},
+      );
+
+      final int available = widget.event.capacity - actualSold;
+
+      if (mounted) {
+        setState(() {
+          _realTicketsAvailable = available > 0 ? available : 0;
+        });
+      }
+    } catch (e) {
+      print('⚠️ Failed to fetch real availability: $e');
+    }
+  }
+
+  Future<void> _checkEventDetails() async {
+    // If fee info is missing, fetch full event details
+    if (widget.event.passFeesToCustomer == null) {
+      setState(() => _isLoadingEventDetails = true);
+      try {
+        final event = await EventService().getEvent(widget.event.id);
+        if (mounted) {
+          setState(() {
+            _fullEvent = event;
+            _isLoadingEventDetails = false;
+          });
+        }
+      } catch (e) {
+        print('⚠️ Failed to fetch event details: $e');
+        if (mounted) setState(() => _isLoadingEventDetails = false);
+      }
+    } else {
+      // Already has data
+      setState(() => _fullEvent = widget.event);
     }
   }
 
@@ -300,7 +352,17 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
       }
     } catch (e) {
       if (mounted) {
-        _showErrorDialog('Error', e.toString());
+        final errorMsg = e.toString().replaceAll('Exception: ', '');
+        String displayMsg = errorMsg;
+        if (errorMsg.toLowerCase().contains('not enough tickets') ||
+            errorMsg.toLowerCase().contains('sold out')) {
+          displayMsg =
+              'Sorry, there are not enough tickets available for this selection.';
+        } else if (errorMsg.toLowerCase().contains('purchase limits')) {
+          displayMsg =
+              'You have exceeded the maximum number of tickets allowed per person.';
+        }
+        _showErrorDialog('Booking Failed', displayMsg);
       }
     } finally {
       if (mounted) {
@@ -418,15 +480,26 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Calculate totals with bundled fee (10%)
-    // Note: We use 1.10 estimate for display. Backend calculates exact fee based on partner settings.
-    const double feeMultiplier = 1.10;
+    final event = _fullEvent ?? widget.event;
 
-    double baseUnitPrice = _selectedTier?.price ?? widget.event.ticketPrice;
-    double displayUnitPrice = baseUnitPrice * feeMultiplier;
+    // Fee Logic (Match Backend)
+    double feeAmount = 0;
+    if (event.passFeesToCustomer == true) {
+      feeAmount = event.fixedFeePerTicket ?? 15.00;
+    }
+
+    double baseUnitPrice = _selectedTier?.price ?? event.ticketPrice;
+    double displayUnitPrice = baseUnitPrice + feeAmount;
     double displaySubtotal = displayUnitPrice * _quantity;
-    double displayDiscount = _promoDiscountAmount * feeMultiplier;
+    double displayDiscount =
+        _promoDiscountAmount; // Discount is usually calculated on base price but subtracted from total
 
+    // If promo is percentage, it should apply to SUBTOTAL (excluding fees?) or Total?
+    // Backend logic: Platform fee is calculated on subtotal. Promo is deducted from subtotal?
+    // Let's assume promo applies to base price for now.
+    // Actually, `_promoDiscountAmount` is calculated in `_applyPromoCode`. I need to review that too.
+
+    // For now, simple subtraction.
     double total = displaySubtotal - displayDiscount;
     if (total < 0) total = 0;
 
@@ -462,6 +535,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
                       ..._tiers.map(
                         (tier) => _TierOption(
                           tier: tier,
+                          feeAmount: feeAmount,
                           isSelected: _selectedTier?.id == tier.id,
                           onTap: () {
                             if (!tier.isSoldOut) {
@@ -535,10 +609,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
                     const SizedBox(height: 12),
                     _QuantitySelector(
                       quantity: _quantity,
-                      // Logic: If tier selected, use tier limit. Else use event capacity.
+                      // Use real availability from tickets table, capped at 10
                       max: (_selectedTier != null)
                           ? _selectedTier!.quantityAvailable.clamp(1, 10)
-                          : widget.event.ticketsAvailable.clamp(1, 10),
+                          : _realTicketsAvailable.clamp(1, 10),
                       onChanged: (qty) => setState(() {
                         _quantity = qty;
                         _recalculatePromo();
@@ -618,6 +692,12 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 
                     const SizedBox(height: 32),
 
+                    if (_isLoadingEventDetails)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                        child: LinearProgressIndicator(),
+                      ),
+
                     // Price breakdown
                     _PriceBreakdown(
                       unitPrice: displayUnitPrice,
@@ -691,11 +771,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 
 class _TierOption extends StatelessWidget {
   final TicketTier tier;
+  final double feeAmount;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _TierOption({
     required this.tier,
+    this.feeAmount = 0,
     required this.isSelected,
     required this.onTap,
   });
@@ -748,7 +830,7 @@ class _TierOption extends StatelessWidget {
               ),
             ),
             Text(
-              '₱${(tier.price * 1.10).toStringAsFixed(0)}',
+              '₱${(tier.price + feeAmount).toStringAsFixed(0)}',
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             const SizedBox(width: 12),

@@ -1,7 +1,7 @@
 import 'package:bitemates/core/config/supabase_config.dart';
 
 class TableMemberService {
-  // Join a table (instant join)
+  // Join a table (sends pending request for host approval)
   Future<Map<String, dynamic>> joinTable(String tableId) async {
     try {
       final user = SupabaseConfig.client.auth.currentUser;
@@ -19,20 +19,31 @@ class TableMemberService {
 
       if (existingMember != null) {
         final status = existingMember['status'];
-        // Allow re-joining if previously left or declined/cancelled
+        // Allow re-requesting if previously left or declined/cancelled
         if (status == 'left' || status == 'declined' || status == 'cancelled') {
-          // Update existing record to re-join
           await SupabaseConfig.client
               .from('table_members')
               .update({
-                'status': 'approved',
-                'joined_at': DateTime.now().toIso8601String(),
-                'role': 'member',
+                'status': 'pending',
+                'requested_at': DateTime.now().toIso8601String(),
+                'approved_at': null,
+                'joined_at': null,
+                'left_at': null,
               })
               .eq('table_id', tableId)
               .eq('user_id', user.id);
 
-          return {'success': true, 'message': 'Successfully joined the table!'};
+          return {
+            'success': true,
+            'message': 'Request sent! Waiting for host approval.',
+          };
+        }
+
+        if (status == 'pending') {
+          return {
+            'success': false,
+            'message': 'You already have a pending request',
+          };
         }
 
         return {
@@ -69,20 +80,21 @@ class TableMemberService {
         return {'success': false, 'message': 'This table is full'};
       }
 
-      // Add member with approved status (instant join)
+      // Add member with pending status (host must approve)
       await SupabaseConfig.client.from('table_members').insert({
         'table_id': tableId,
         'user_id': user.id,
         'role': 'member',
-        'status': 'approved',
+        'status': 'pending',
         'requested_at': DateTime.now().toIso8601String(),
-        'approved_at': DateTime.now().toIso8601String(),
-        'joined_at': DateTime.now().toIso8601String(),
       });
 
-      // Notification now handled by database trigger (handle_table_join)
+      // Notification handled by database trigger (handle_table_join)
 
-      return {'success': true, 'message': 'Successfully joined the table!'};
+      return {
+        'success': true,
+        'message': 'Request sent! Waiting for host approval.',
+      };
     } catch (e) {
       print('❌ Error joining table: $e');
       return {

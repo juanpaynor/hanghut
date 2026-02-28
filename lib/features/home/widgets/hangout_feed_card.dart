@@ -11,17 +11,20 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
+import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 
 class HangoutFeedCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final VoidCallback onTap;
   final Function(String)? onPostDeleted;
+  final ValueChanged<Map<String, dynamic>>? onPostEdited;
 
   const HangoutFeedCard({
     super.key,
     required this.post,
     required this.onTap,
     this.onPostDeleted,
+    this.onPostEdited,
   });
 
   @override
@@ -156,35 +159,144 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange.withOpacity(0.5)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.celebration,
-                        size: 14,
-                        color: Colors.orange,
+                // 3-dot menu for owner, 'New' badge for others
+                if (widget.post['user_id'] ==
+                    SupabaseConfig.client.auth.currentUser?.id)
+                  PopupMenuButton<String>(
+                    icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
+                    onSelected: (value) async {
+                      if (value == 'edit') {
+                        final result = await Navigator.of(context)
+                            .push<Map<String, dynamic>?>(
+                              PageRouteBuilder(
+                                opaque: false,
+                                barrierDismissible: true,
+                                barrierColor: Colors.black54,
+                                transitionDuration: const Duration(
+                                  milliseconds: 300,
+                                ),
+                                reverseTransitionDuration: const Duration(
+                                  milliseconds: 250,
+                                ),
+                                pageBuilder:
+                                    (context, animation, secondaryAnimation) {
+                                      return EditPostModal(post: widget.post);
+                                    },
+                                transitionsBuilder:
+                                    (
+                                      context,
+                                      animation,
+                                      secondaryAnimation,
+                                      child,
+                                    ) {
+                                      return FadeTransition(
+                                        opacity: CurvedAnimation(
+                                          parent: animation,
+                                          curve: Curves.easeOut,
+                                        ),
+                                        child: child,
+                                      );
+                                    },
+                              ),
+                            );
+                        if (result != null && mounted) {
+                          widget.onPostEdited?.call(result);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Post updated')),
+                          );
+                        }
+                      } else if (value == 'delete') {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Delete Hangout Post'),
+                            content: const Text(
+                              'Are you sure you want to delete this hangout post?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirm == true && context.mounted) {
+                          final success = await SocialService().deletePost(
+                            widget.post['id'],
+                          );
+                          if (success && context.mounted) {
+                            widget.onPostDeleted?.call(widget.post['id']);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Post deleted')),
+                            );
+                          }
+                        }
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined, color: Colors.black87),
+                            SizedBox(width: 8),
+                            Text('Edit Post'),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'New',
-                        style: TextStyle(
-                          color: Colors.orange[700],
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, color: Colors.red),
+                            SizedBox(width: 8),
+                            Text(
+                              'Delete Post',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ],
                         ),
                       ),
                     ],
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.celebration,
+                          size: 14,
+                          color: Colors.orange,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'New',
+                          style: TextStyle(
+                            color: Colors.orange[700],
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),

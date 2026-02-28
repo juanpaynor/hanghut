@@ -5,9 +5,10 @@ RETURNS TRIGGER AS $$
 DECLARE
   host_record RECORD;
   joiner_name TEXT;
+  joiner_photo TEXT;
 BEGIN
-  -- Only send notification for approved joins (not pending requests)
-  IF NEW.status != 'approved' THEN
+  -- Only send notification for confirmed joins (not pending requests)
+  IF NEW.status != 'confirmed' THEN
     RETURN NEW;
   END IF;
 
@@ -31,10 +32,12 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Get the joiner's display name
-  SELECT display_name INTO joiner_name
-  FROM users
-  WHERE id = NEW.user_id;
+  -- Get the joiner's display name AND photo
+  SELECT u.display_name, up.photo_url 
+  INTO joiner_name, joiner_photo
+  FROM users u
+  LEFT JOIN user_photos up ON up.user_id = u.id AND up.is_primary = true
+  WHERE u.id = NEW.user_id;
 
   -- Call the Edge Function to send push notification
   -- IMPORTANT: Must include Authorization header with Service Role Key for invoking Edge Functions
@@ -46,8 +49,9 @@ BEGIN
     ),
     body := jsonb_build_object(
       'user_id', host_record.host_id,
-      'title', joiner_name || ' joined your event!',
-      'body', 'Someone just joined "' || host_record.table_name || '"',
+      'title', joiner_name || ' joined your event! 🎉', -- Improved Copy
+      'body', 'They just joined "' || host_record.table_name || '"', -- Improved Copy
+      'image', joiner_photo, -- Add Image URL
       'data', jsonb_build_object(
         'type', 'table_join',
         'table_id', NEW.table_id::TEXT,
@@ -72,5 +76,5 @@ DROP TRIGGER IF EXISTS on_table_participant_approved ON table_participants;
 CREATE TRIGGER on_table_participant_approved
   AFTER UPDATE OF status ON table_participants
   FOR EACH ROW
-  WHEN (OLD.status = 'pending' AND NEW.status = 'approved')
+  WHEN (OLD.status = 'pending' AND NEW.status = 'confirmed')
   EXECUTE FUNCTION notify_table_join();

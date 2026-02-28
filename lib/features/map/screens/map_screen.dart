@@ -24,6 +24,7 @@ import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/features/splash/screens/cloud_opening_screen.dart';
 import 'package:bitemates/features/map/widgets/event_cluster_sheet.dart';
+import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 
 // Filter enum for toggling between tables and events
 enum MapFilter { all, tables, events }
@@ -62,6 +63,11 @@ class MapScreenState extends State<MapScreen>
   final Set<String> _addedImages = {};
   static const int _maxCachedImages = 200; // Prevent memory leak
 
+  // Experience route polyline
+  PolylineAnnotationManager? _routePolylineManager;
+  CameraState?
+  _preFlyCamera; // To restore camera after dismissing experience sheet
+
   @override
   bool get wantKeepAlive => true;
 
@@ -78,7 +84,7 @@ class MapScreenState extends State<MapScreen>
   @override
   void dispose() {
     _debounceTimer?.cancel();
-    _popAnimationTimer?.cancel();
+    // _popAnimationTimer?.cancel();
     _heartbeatTimer?.cancel();
     super.dispose();
   }
@@ -580,6 +586,12 @@ class MapScreenState extends State<MapScreen>
     print('👆 Map tapped at ${details.localPosition}');
     if (_mapboxMap == null) return;
 
+    // If an experience route is active, the first tap anywhere clears it and returns to previous view
+    if (_routePolylineManager != null) {
+      _clearExperienceRoute();
+      return;
+    }
+
     try {
       final screenCoordinate = ScreenCoordinate(
         x: details.localPosition.dx,
@@ -714,7 +726,19 @@ class MapScreenState extends State<MapScreen>
               table: table,
             );
             if (mounted) {
-              _openTableModal(context, table, matchData, screenCoordinate);
+              if (table['is_experience'] == true) {
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (context) => ExperienceDetailModal(
+                    experience: table,
+                    matchData: matchData,
+                  ),
+                );
+              } else {
+                _openTableModal(context, table, matchData, screenCoordinate);
+              }
             }
           }
         }
@@ -799,12 +823,126 @@ class MapScreenState extends State<MapScreen>
           );
 
           if (mounted) {
-            _openTableModal(context, table, matchData, screenCoordinate);
+            if (table['is_experience'] == true) {
+              // Open Experience Detail using LiquidMorphRoute (full screen)
+              print('🎨 Launching ExperienceDetailModal via LiquidMorphRoute');
+              await _drawExperienceRoute(
+                table,
+              ); // Draw route before so it's visible after pop
+              if (mounted) {
+                final center = Offset(screenCoordinate.x, screenCoordinate.y);
+                Navigator.of(context).push(
+                  LiquidMorphRoute(
+                    center: center,
+                    page: ExperienceDetailModal(
+                      experience: table,
+                      matchData: matchData,
+                    ),
+                  ),
+                );
+              }
+            } else {
+              // Open Standard Handout Modal
+              _openTableModal(context, table, matchData, screenCoordinate);
+            }
           }
         }
       }
     } catch (e) {
       print('❌ Error handling map tap: $e');
+    }
+  }
+
+  // ───────────────── Experience Route Drawing ─────────────────
+
+  Future<void> _drawExperienceRoute(Map<String, dynamic> table) async {
+    if (_mapboxMap == null) return;
+
+    // Save camera state to restore later
+    _preFlyCamera = await _mapboxMap!.getCameraState();
+
+    // Parse itinerary coordinates
+    final List<Position> route = [];
+
+    if (table['location_lat'] != null && table['location_lng'] != null) {
+      route.add(
+        Position(
+          (table['location_lng'] as num).toDouble(),
+          (table['location_lat'] as num).toDouble(),
+        ),
+      );
+    }
+
+    if (table['itinerary'] != null) {
+      try {
+        List<dynamic> raw = table['itinerary'] is String
+            ? jsonDecode(table['itinerary'])
+            : table['itinerary'];
+
+        for (var stop in raw) {
+          if (stop is Map && stop['lat'] != null && stop['lng'] != null) {
+            route.add(
+              Position(
+                (stop['lng'] as num).toDouble(),
+                (stop['lat'] as num).toDouble(),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        print('Error parsing itinerary: $e');
+      }
+    }
+
+    // Draw polyline if we have a route
+    if (route.length > 1) {
+      _routePolylineManager = await _mapboxMap!.annotations
+          .createPolylineAnnotationManager();
+      await _routePolylineManager!.create(
+        PolylineAnnotationOptions(
+          geometry: LineString(coordinates: route),
+          lineColor: Colors.pink.value,
+          lineWidth: 4.0,
+        ),
+      );
+    }
+
+    // Fly camera to the experience location with cinematic swoop
+    if (route.isNotEmpty) {
+      final target = route.first;
+      _mapboxMap!.flyTo(
+        CameraOptions(
+          center: Point(coordinates: target),
+          zoom: 15.5,
+          pitch: 0.0,
+          bearing: 0.0,
+        ),
+        MapAnimationOptions(duration: 2000, startDelay: 0),
+      );
+    }
+  }
+
+  Future<void> _clearExperienceRoute() async {
+    // Remove polyline
+    if (_routePolylineManager != null && _mapboxMap != null) {
+      await _mapboxMap!.annotations.removeAnnotationManager(
+        _routePolylineManager!,
+      );
+      _routePolylineManager = null;
+    }
+
+    // Restore camera
+    if (_preFlyCamera != null && _mapboxMap != null) {
+      _mapboxMap!.flyTo(
+        CameraOptions(
+          center: _preFlyCamera!.center,
+          zoom: _preFlyCamera!.zoom,
+          pitch: _preFlyCamera!.pitch,
+          bearing: _preFlyCamera!.bearing,
+        ),
+        MapAnimationOptions(duration: 1500, startDelay: 0),
+      );
+      _preFlyCamera = null;
     }
   }
 
@@ -814,6 +952,20 @@ class MapScreenState extends State<MapScreen>
     Map<String, dynamic> matchData,
     ScreenCoordinate tapPosition,
   ) {
+    // Route experiences to their own full-screen modal
+    if (table['is_experience'] == true) {
+      print('🎨 Launching ExperienceDetailModal via LiquidMorphRoute');
+      _drawExperienceRoute(table); // Call _drawExperienceRoute here
+      final center = Offset(tapPosition.x, tapPosition.y);
+      Navigator.of(context).push(
+        LiquidMorphRoute(
+          center: center,
+          page: ExperienceDetailModal(experience: table, matchData: matchData),
+        ),
+      );
+      return;
+    }
+
     print('🚀 Launching TableCompactModal via LiquidMorphRoute');
     // Calculate center offset from tap position
     final center = Offset(tapPosition.x, tapPosition.y);
@@ -1036,6 +1188,41 @@ class MapScreenState extends State<MapScreen>
         }
       }
 
+      // DUMMY DATA FOR TESTING EXPERIENCES
+      /*
+      fetchedTables.add({
+        'id': 'dummy_exp_1',
+        'location_lat': 14.5547,
+        'location_lng': 121.0244, // Makati
+        'venue_name': 'Pottery Workshop',
+        'description': 'Learn to make your own mugs!',
+        'is_experience': true,
+        'experience_type': 'workshop',
+        'price_per_person': 2500,
+        'currency': 'PHP',
+        'images': ['https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80'],
+        'marker_image_url': 'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=200&q=80',
+      });
+      */
+
+      // DUMMY DATA FOR TESTING EXPERIENCES
+      fetchedTables.add({
+        'id': '123e4567-e89b-12d3-a456-426614174000', // Valid UUID format
+        'location_lat': 14.5547,
+        'location_lng': 121.0244, // Makati
+        'venue_name': 'Pottery Workshop',
+        'description': 'Learn to make your own mugs!',
+        'is_experience': true,
+        'experience_type': 'workshop',
+        'price_per_person': 2500,
+        'currency': 'PHP',
+        'images': [
+          'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80',
+        ],
+        'marker_image_url':
+            'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=200&q=80',
+      });
+
       setState(() {
         _tables = fetchedTables;
         _events = fetchedEvents;
@@ -1076,7 +1263,14 @@ class MapScreenState extends State<MapScreen>
               final markerImageUrl = table['marker_image_url'];
               final markerEmoji = table['marker_emoji'];
 
-              if (markerImageUrl != null &&
+              if (table['is_experience'] == true) {
+                // --- EXPERIENCE MARKER ---
+                markerImage = await _createExperienceMarkerImage(
+                  table: table,
+                  glowColor: matchData['color'],
+                  glowIntensity: matchData['glowIntensity'],
+                );
+              } else if (markerImageUrl != null &&
                   markerImageUrl.toString().isNotEmpty) {
                 markerImage = await _createCustomMarkerImage(
                   imageUrl: markerImageUrl,
@@ -1334,7 +1528,7 @@ class MapScreenState extends State<MapScreen>
       print('✅ Updated Cluster Source with ${features.length} features');
 
       // Trigger "Spring Pop" Animation now that data is on map
-      _startPopAnimation();
+      // _startPopAnimation(); // DISABLED: Causing crash on iOS Simulator
 
       // 3D Models removed - no longer updating 3D layer
       // await _update3DLayerData(fetchedTables); // REMOVED
@@ -1413,6 +1607,145 @@ class MapScreenState extends State<MapScreen>
       print('   Stack: ${StackTrace.current}');
       rethrow;
     }
+  }
+
+  // --- EXPERIENCE MARKER (Map Pin with Photo) ---
+  Future<Uint8List> _createExperienceMarkerImage({
+    required Map<String, dynamic> table,
+    required String glowColor,
+    required double glowIntensity,
+  }) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    final int size = 120; // Same size as other markers
+    final double tailHeight = 16.0;
+    final double totalHeight = size + tailHeight;
+    final double borderRadius = 12.0;
+
+    // Parse hex color
+    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+
+    // 1. Build pin shape: rounded rect body + triangle tail
+    final Path markerPath = Path();
+    // Body
+    markerPath.addRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
+        Radius.circular(borderRadius),
+      ),
+    );
+    // Tail
+    markerPath.moveTo(size / 2 - 12, size.toDouble());
+    markerPath.lineTo(size / 2, size + tailHeight);
+    markerPath.lineTo(size / 2 + 12, size.toDouble());
+    markerPath.close();
+
+    // Drop shadow
+    canvas.drawShadow(markerPath, Colors.black.withOpacity(0.5), 4.0, true);
+
+    // White frame fill
+    final Paint framePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(markerPath, framePaint);
+
+    // 2. Draw image content (clipped inside body)
+    String? imageUrl = table['marker_image_url'];
+    if (imageUrl == null &&
+        table['images'] != null &&
+        (table['images'] as List).isNotEmpty) {
+      imageUrl = (table['images'] as List)[0];
+    }
+
+    try {
+      if (imageUrl != null) {
+        final response = await http.get(Uri.parse(imageUrl));
+        final Uint8List bytes = response.bodyBytes;
+        final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+        final ui.FrameInfo frameInfo = await codec.getNextFrame();
+        final ui.Image image = frameInfo.image;
+
+        final double padding = 6.0;
+        final double imgSize = size - (padding * 2);
+
+        canvas.save();
+        canvas.clipPath(
+          Path()..addRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(padding, padding, imgSize, imgSize),
+              Radius.circular(borderRadius - 2),
+            ),
+          ),
+        );
+        paintImage(
+          canvas: canvas,
+          rect: Rect.fromLTWH(padding, padding, imgSize, imgSize),
+          image: image,
+          fit: BoxFit.cover,
+        );
+        canvas.restore();
+      } else {
+        _drawPlaceholder(canvas, size, table['activityType']);
+      }
+    } catch (e) {
+      print('❌ Error loading experience image: $e');
+      _drawPlaceholder(canvas, size, table['activityType']);
+    }
+
+    // 3. Price tag pill (dark, overlaid at bottom of image)
+    if (table['price_per_person'] != null) {
+      final double priceVal = (table['price_per_person'] as num).toDouble();
+      final String currency = table['currency'] ?? 'PHP';
+      final String priceText = '$currency ${priceVal.toStringAsFixed(0)}';
+
+      final TextPainter tp = TextPainter(
+        text: TextSpan(
+          text: priceText,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+
+      final double pw = tp.width + 14;
+      final double ph = 20.0;
+      final double px = (size - pw) / 2;
+      final double py = size - ph - 10;
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(px, py, pw, ph),
+          const Radius.circular(10),
+        ),
+        Paint()..color = Colors.black.withOpacity(0.7),
+      );
+      tp.paint(canvas, Offset(px + 7, py + (ph - tp.height) / 2));
+    }
+
+    // 4. Glow border (follows pin shape)
+    if (glowIntensity > 0) {
+      canvas.drawPath(
+        markerPath,
+        Paint()
+          ..color = color.withOpacity(glowIntensity)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+    }
+
+    // Convert to image
+    final ui.Image markerImg = await pictureRecorder.endRecording().toImage(
+      size,
+      totalHeight.toInt(),
+    );
+    final ByteData? byteData = await markerImg.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+
+    return byteData!.buffer.asUint8List();
   }
 
   Future<Uint8List> _createCustomMarkerImage({
@@ -1974,8 +2307,8 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
-  // --- MARKER POP ANIMATION LOGIC ---
-
+  // --- MARKER POP ANIMATION LOGIC (DISABLED) ---
+  /*
   Timer? _popAnimationTimer;
   double _markerScale = 0.0;
   int _animationStep = 0;
@@ -2008,17 +2341,6 @@ class MapScreenState extends State<MapScreen>
       }
 
       // Physics: Overshoot
-      // f(t) = 1 + 2^(-10t) * sin((t - 0.3/4) * (2pi/0.3)) ... roughly
-      // Let's use a simpler "boing" function directly:
-      // sin(t * pi * (0.2 + 2.5 * t * t * t)) * pow(1 - t, 2.2) + t
-      // Actually let's just use a simple dampened sine wave for "spring"
-      // Val = Target + Amplitude * sin(freq * t) * decay^t
-
-      // Or manually keyframe for simplicity and control:
-      // 0-200ms: 0 -> 1.2
-      // 200-400ms: 1.2 -> 0.9
-      // 400-600ms: 0.9 -> 1.0
-
       if (t < 0.3) {
         // First 30% time: Shoot up to 1.2
         _markerScale = (t / 0.3) * 1.2;
@@ -2052,6 +2374,7 @@ class MapScreenState extends State<MapScreen>
       // Ignored
     }
   }
+  */
 
   // End of MapScreenState
 }

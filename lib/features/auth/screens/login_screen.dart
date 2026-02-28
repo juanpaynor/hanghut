@@ -23,24 +23,24 @@ class LoginScreen extends StatelessWidget {
       child: const Scaffold(
         resizeToAvoidBottomInset: false,
         backgroundColor: Colors.white,
-        body: ParticleLoginBody(),
+        body: EmojiLoginBody(),
       ),
     );
   }
 }
 
-class ParticleLoginBody extends StatefulWidget {
-  const ParticleLoginBody({super.key});
+class EmojiLoginBody extends StatefulWidget {
+  const EmojiLoginBody({super.key});
 
   @override
-  State<ParticleLoginBody> createState() => _ParticleLoginBodyState();
+  State<EmojiLoginBody> createState() => _EmojiLoginBodyState();
 }
 
-class _ParticleLoginBodyState extends State<ParticleLoginBody>
+class _EmojiLoginBodyState extends State<EmojiLoginBody>
     with SingleTickerProviderStateMixin {
   // Animation & Physics
   late AnimationController _ticker;
-  final _physicsEngine = ParticleEngine();
+  final _physicsEngine = EmojiEngine();
   StreamSubscription? _sensorSub;
 
   // Inputs
@@ -50,8 +50,8 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
   bool _isPasswordVisible = false;
 
   // Entrance Animations
-  double _cardOpacity = 0.0;
-  Offset _cardOffset = const Offset(0, 0.1);
+  double _contentOpacity = 0.0;
+  Offset _contentOffset = const Offset(0, 0.1);
 
   @override
   void initState() {
@@ -68,19 +68,19 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _physicsEngine.init(MediaQuery.of(context).size);
       setState(() {
-        _cardOpacity = 1.0;
-        _cardOffset = Offset.zero;
+        _contentOpacity = 1.0;
+        _contentOffset = Offset.zero;
       });
     });
   }
 
   void _initSensors() {
-    // Smooth gyro reaction
+    // Smooth gyro reaction for parallax wind
     _sensorSub = gyroscopeEventStream().listen((event) {
       // Sensitivity
-      const double sensitivity = 5.0;
+      const double sensitivity = 2.0;
       _physicsEngine.updateSensorForce(
-        Offset(event.y * sensitivity, event.x * sensitivity),
+        Offset(event.y * sensitivity, 0), // Only influence X sway
       );
     });
   }
@@ -105,7 +105,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
       return;
     }
     HapticFeedback.mediumImpact();
-    // Explode particles on tap
+    // Explode emojis on tap
     _physicsEngine.explode();
 
     final authProvider = context.read<AuthProvider>();
@@ -137,15 +137,11 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
 
   Future<void> _handleGoogleLogin(BuildContext context) async {
     HapticFeedback.mediumImpact();
-    // Explode particles on tap
     _physicsEngine.explode();
 
     final authProvider = context.read<AuthProvider>();
 
     try {
-      // Launch OAuth flow in external browser
-      // The actual authentication will complete via deep link callback
-      // and AuthProvider will listen to auth state changes automatically
       await authProvider.signInWithGoogle();
     } catch (e) {
       if (mounted) {
@@ -153,7 +149,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to launch Google Sign-In: $e'),
-            backgroundColor: const Color(0xFF3F51B5), // Indigo
+            backgroundColor: const Color(0xFF3F51B5),
           ),
         );
       }
@@ -163,101 +159,81 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    const indigo = Color(0xFF3F51B5);
+    const indigo = Color(0xFF6B7FFF); // Vibrant Indigo from AppTheme
+    final size = MediaQuery.of(context).size;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Stack(
         children: [
-          // 1. Interactive Particle Network (Background)
+          // 1. Emoji Rain Layer
           CustomPaint(
             size: Size.infinite,
-            painter: ParticlePainter(_physicsEngine.particles),
+            painter: EmojiPainter(_physicsEngine.particles),
           ),
 
           // 2. Foreground Content
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 400),
-            curve: Curves.easeOutCubic,
+          Positioned(
             top: 0,
-            bottom: 0, // Fill screen, rely on padding for insets
+            bottom: 0,
             left: 0,
             right: 0,
-            child: Center(
-              child: SingleChildScrollView(
-                // Ensure content pushes up when keyboard appears
-                padding: EdgeInsets.only(
-                  left: 24,
-                  right: 24,
-                  bottom: bottomInset > 0 ? bottomInset + 20 : 20,
-                  top: 20,
-                ),
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 800),
-                  curve: Curves.easeOut,
-                  opacity: _cardOpacity,
-                  child: AnimatedSlide(
-                    duration: const Duration(milliseconds: 800),
-                    curve: Curves.easeOutCubic,
-                    offset: _cardOffset,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 32,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.95),
-                        borderRadius: BorderRadius.circular(32),
-                        boxShadow: [
-                          BoxShadow(
-                            color: indigo.withOpacity(0.15),
-                            blurRadius: 40,
-                            offset: const Offset(0, 20),
-                          ),
-                        ],
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.symmetric(horizontal: 32),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: size.height),
+                child: IntrinsicHeight(
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 1000),
+                    curve: Curves.easeOut,
+                    opacity: _contentOpacity,
+                    child: AnimatedSlide(
+                      duration: const Duration(milliseconds: 1000),
+                      curve: Curves.easeOutCubic,
+                      offset: _contentOffset,
                       child: Form(
                         key: _formKey,
                         child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // HERO SECTION
-                            Center(
-                              child: Image.asset(
-                                'assets/images/Hanghut.png',
-                                height: 220, // Increased a bit as requested
-                                width: 220,
-                                fit: BoxFit.contain,
-                              ),
-                            ),
-                            // "Hanghut" text removed for cleaner look
-                            const SizedBox(height: 12),
+                            const Spacer(flex: 2),
+                            // HERO TEXT
                             Text(
-                              'Meet new people.',
-                              textAlign: TextAlign.center,
+                              'hello.',
                               style: GoogleFonts.inter(
-                                fontSize: 14,
-                                color: indigo.withOpacity(0.6),
-                                fontWeight: FontWeight.w500,
+                                fontSize: 64,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -3.0,
+                                color: indigo, // indigo
+                                height: 1.0,
                               ),
                             ),
-                            const SizedBox(height: 24), // Reduced from 32
+                            Text(
+                              'Welcome back.',
+                              style: GoogleFonts.inter(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[500],
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            const Spacer(flex: 1),
+
                             // INPUTS
-                            _IndigoInput(
+                            _MinimalInput(
                               controller: _emailController,
                               hint: 'Email',
-                              icon: Icons.email_outlined,
+                              icon: Icons.alternate_email,
                               validator: (v) => v!.contains('@')
                                   ? null
                                   : 'Enter a valid email',
                             ),
-                            const SizedBox(height: 12),
-                            _IndigoInput(
+                            const SizedBox(height: 16),
+                            _MinimalInput(
                               controller: _passwordController,
                               hint: 'Password',
-                              icon: Icons.lock_outline,
+                              icon: Icons.lock_outline_rounded,
                               isPassword: true,
                               isVisible: _isPasswordVisible,
                               onVisibilityChanged: () => setState(
@@ -266,6 +242,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                               validator: (v) =>
                                   v!.length > 5 ? null : 'Password too short',
                             ),
+
                             const SizedBox(height: 12),
                             Align(
                               alignment: Alignment.centerRight,
@@ -282,15 +259,16 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                 },
                                 child: Text(
                                   'Forgot Password?',
-                                  style: GoogleFonts.outfit(
+                                  style: GoogleFonts.inter(
                                     fontSize: 14,
-                                    color: indigo.withOpacity(0.8),
+                                    color: indigo,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 24),
+
+                            const SizedBox(height: 32),
 
                             // ACTION BUTTON
                             Consumer<AuthProvider>(
@@ -303,13 +281,12 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                     backgroundColor: indigo,
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
-                                      vertical: 18,
+                                      vertical: 20,
                                     ),
+                                    elevation: 0, // Flat
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(16),
                                     ),
-                                    elevation: 10,
-                                    shadowColor: indigo.withOpacity(0.4),
                                   ),
                                   child: auth.isLoading
                                       ? const SizedBox(
@@ -324,8 +301,8 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                           ),
                                         )
                                       : Text(
-                                          'Connect',
-                                          style: GoogleFonts.outfit(
+                                          'Sign In',
+                                          style: GoogleFonts.inter(
                                             fontSize: 18,
                                             fontWeight: FontWeight.bold,
                                           ),
@@ -334,7 +311,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                               },
                             ),
 
-                            const SizedBox(height: 24),
+                            const SizedBox(height: 20),
 
                             // GOOGLE SIGN IN
                             Consumer<AuthProvider>(
@@ -345,24 +322,25 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                       : () => _handleGoogleLogin(context),
                                   icon: Image.asset(
                                     'assets/images/google_logo.png',
-                                    height: 24,
-                                    width: 24,
+                                    height: 20,
+                                    width: 20,
                                     errorBuilder:
                                         (context, error, stackTrace) =>
                                             const Icon(Icons.g_mobiledata),
                                   ),
-                                  label: const Text('Sign in with Google'),
+                                  label: const Text('Continue with Google'),
                                   style: OutlinedButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
+                                      vertical: 18,
                                     ),
                                     side: BorderSide(
-                                      color: indigo.withOpacity(0.2),
+                                      color: Colors.grey[200]!,
+                                      width: 1.5,
                                     ),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(16),
                                     ),
-                                    textStyle: GoogleFonts.outfit(
+                                    textStyle: GoogleFonts.inter(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
                                       color: Colors.black87,
@@ -373,17 +351,15 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                               },
                             ),
 
-                            const SizedBox(height: 24),
+                            const Spacer(flex: 2),
 
                             // FOOTER
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(
-                                  "New to Hanghut? ",
-                                  style: TextStyle(
-                                    color: indigo.withOpacity(0.6),
-                                  ),
+                                  "New here? ",
+                                  style: TextStyle(color: Colors.grey[600]),
                                 ),
                                 GestureDetector(
                                   onTap: () {
@@ -396,7 +372,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                     );
                                   },
                                   child: Text(
-                                    "Join Here",
+                                    "Create Account",
                                     style: TextStyle(
                                       color: indigo,
                                       fontWeight: FontWeight.bold,
@@ -405,6 +381,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
                                 ),
                               ],
                             ),
+                            const SizedBox(height: 32),
                           ],
                         ),
                       ),
@@ -420,7 +397,7 @@ class _ParticleLoginBodyState extends State<ParticleLoginBody>
   }
 }
 
-class _IndigoInput extends StatelessWidget {
+class _MinimalInput extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
   final IconData icon;
@@ -429,7 +406,7 @@ class _IndigoInput extends StatelessWidget {
   final VoidCallback? onVisibilityChanged;
   final String? Function(String?)? validator;
 
-  const _IndigoInput({
+  const _MinimalInput({
     required this.controller,
     required this.hint,
     required this.icon,
@@ -441,35 +418,50 @@ class _IndigoInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const indigo = Color(0xFF3F51B5);
+    const indigo = Color(0xFF6B7FFF);
     return TextFormField(
       controller: controller,
       obscureText: isPassword && !(isVisible ?? false),
-      style: const TextStyle(color: indigo, fontWeight: FontWeight.w600),
+      style: const TextStyle(
+        color: Colors.black87,
+        fontWeight: FontWeight.w600,
+        fontSize: 16,
+      ),
       cursorColor: indigo,
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: indigo.withOpacity(0.4)),
-        prefixIcon: Icon(icon, color: indigo.withOpacity(0.6)),
+        hintStyle: TextStyle(
+          color: Colors.grey[400],
+          fontWeight: FontWeight.normal,
+        ),
+        prefixIcon: Icon(icon, color: Colors.grey[400], size: 22),
+        // Minimalist: No fill, just background color of scaffold
         filled: true,
-        fillColor: Colors.grey[50], // Very subtle off-white
+        fillColor: Colors.grey[50],
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical: 20,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: indigo.withOpacity(0.1)),
+          borderSide: BorderSide.none, // Clean look
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: indigo, width: 2),
+          borderSide: const BorderSide(color: indigo, width: 2),
         ),
         suffixIcon: isPassword
             ? IconButton(
                 icon: Icon(
-                  isVisible! ? Icons.visibility : Icons.visibility_off,
-                  color: indigo.withOpacity(0.6),
+                  isVisible!
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: Colors.grey[400],
+                  size: 20,
                 ),
                 onPressed: onVisibilityChanged,
               )
@@ -480,131 +472,194 @@ class _IndigoInput extends StatelessWidget {
   }
 }
 
-// --- PARTICLE ENGINE ---
+// --- EMOJI PHYSICS ENGINE ---
 
-class ParticleEngine {
-  final List<Particle> particles = [];
+class EmojiEngine {
+  final List<FallingObject> particles = [];
   final Random _rnd = Random();
   Offset _sensorForce = Offset.zero;
 
+  // Social & Food Emojis
+  static const List<String> _emojis = [
+    '🍕', '🍔', '🍟', '🍦', '🥂', '🍻', '🍹', // Food/Drink
+    '🎉', '🎈', '✨', '👋', '🔥', '👀', // Social
+    '🎱', '🎳', '🎮', '🎤', '🎲', // Activities
+  ];
+
+  // Brand Icons to mix in
+  static final List<IconData> _icons = [
+    Icons.music_note_rounded,
+    Icons.star_rounded,
+    Icons.favorite_rounded,
+    Icons.bolt_rounded,
+    Icons.local_bar_rounded,
+    Icons.auto_awesome_rounded,
+  ];
+
   void init(Size size) {
     particles.clear();
-    // Create ~60 particles for performance/aesthetic balance
-    for (int i = 0; i < 60; i++) {
-      particles.add(
-        Particle(
-          position: Offset(
-            _rnd.nextDouble() * size.width,
-            _rnd.nextDouble() * size.height,
-          ),
-          velocity: Offset(
-            (_rnd.nextDouble() - 0.5) * 0.5, // Slow drifting
-            (_rnd.nextDouble() - 0.5) * 0.5,
-          ),
-          radius: _rnd.nextDouble() * 3 + 1, // 1-4px
-        ),
-      );
+    // Create ~25 particles (mixed)
+    for (int i = 0; i < 25; i++) {
+      _spawnParticle(size, randomY: true);
     }
   }
 
+  void _spawnParticle(Size size, {bool randomY = false}) {
+    // 70% Emoji, 30% Brand Icons
+    final isEmoji = _rnd.nextDouble() > 0.3;
+
+    particles.add(
+      FallingObject(
+        content: isEmoji
+            ? _emojis[_rnd.nextInt(_emojis.length)]
+            : String.fromCharCode(
+                _icons[_rnd.nextInt(_icons.length)].codePoint,
+              ),
+        isIcon: !isEmoji,
+        position: Offset(
+          _rnd.nextDouble() * size.width,
+          randomY ? _rnd.nextDouble() * size.height : -50.0,
+        ),
+        velocity: Offset(
+          (_rnd.nextDouble() - 0.5) * 0.5,
+          _rnd.nextDouble() * 1.5 + 0.5,
+        ),
+        size: _rnd.nextDouble() * (isEmoji ? 20 : 30) + 20,
+        rotation: _rnd.nextDouble() * pi * 2,
+        rotationSpeed: (_rnd.nextDouble() - 0.5) * 0.1,
+        color: !isEmoji
+            ? const Color(0xFF6B7FFF).withOpacity(0.4)
+            : null, // Transparent Indigo for icons
+      ),
+    );
+  }
+
   void updateSensorForce(Offset force) {
-    // Smooth interpolation could go here, but direct is responsive
     _sensorForce = force;
   }
 
   void explode() {
     for (var p in particles) {
       p.velocity += Offset(
-        (_rnd.nextDouble() - 0.5) * 10,
-        (_rnd.nextDouble() - 0.5) * 10,
+        (_rnd.nextDouble() - 0.5) * 15,
+        -_rnd.nextDouble() * 10 - 5,
       );
     }
   }
 
   void update(Size size) {
-    for (var p in particles) {
-      // Apply Velocity + Sensor Parallax
-      // We add sensor force to position directly for parallax feel,
-      // or to velocity for physics feel. Let's do velocity for "swarming".
-      p.velocity += _sensorForce * 0.01;
+    for (int i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
 
-      // Drag/Friction to stop infinite acceleration
-      p.velocity *= 0.98;
+      // Apply Gravity & Sensor
+      p.velocity += Offset(_sensorForce.dx * 0.05, 0);
+      p.position += p.velocity;
 
-      // Keep a minimum drift
-      if (p.velocity.distance < 0.2) {
-        p.velocity += Offset(
-          (_rnd.nextDouble() - 0.5) * 0.02,
-          (_rnd.nextDouble() - 0.5) * 0.02,
+      // Update Rotation
+      p.rotation += p.rotationSpeed;
+
+      // Wrap / Respawn logic
+      if (p.position.dy > size.height + 50) {
+        p.position = Offset(_rnd.nextDouble() * size.width, -50);
+        p.velocity = Offset(
+          (_rnd.nextDouble() - 0.5) * 0.5,
+          _rnd.nextDouble() * 1.5 + 0.5,
         );
       }
 
-      p.position += p.velocity;
-
-      // Wrap around screen
       if (p.position.dx < -50)
         p.position = Offset(size.width + 50, p.position.dy);
       if (p.position.dx > size.width + 50)
         p.position = Offset(-50, p.position.dy);
-      if (p.position.dy < -50)
-        p.position = Offset(p.position.dx, size.height + 50);
-      if (p.position.dy > size.height + 50)
-        p.position = Offset(p.position.dx, -50);
     }
   }
 }
 
-class Particle {
+class FallingObject {
+  String content; // Emoji char or Icon codePoint
+  bool isIcon;
   Offset position;
   Offset velocity;
-  double radius;
+  double size;
+  double rotation;
+  double rotationSpeed;
+  Color? color;
 
-  Particle({
+  FallingObject({
+    required this.content,
+    required this.isIcon,
     required this.position,
     required this.velocity,
-    required this.radius,
+    required this.size,
+    required this.rotation,
+    required this.rotationSpeed,
+    this.color,
   });
 }
 
-class ParticlePainter extends CustomPainter {
-  final List<Particle> particles;
-  static const indigo = Color(0xFF3F51B5);
+class EmojiPainter extends CustomPainter {
+  final List<FallingObject> particles;
 
-  ParticlePainter(this.particles);
+  EmojiPainter(this.particles);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final dotPaint = Paint()
-      ..color = indigo.withOpacity(0.6)
-      ..style = PaintingStyle.fill;
-
-    final linePaint = Paint()
-      ..color = indigo
-          .withOpacity(0.15) // Faint connections
-      ..strokeWidth = 1.0;
-
-    // Draw Particles & Connections
-    for (int i = 0; i < particles.length; i++) {
-      final p1 = particles[i];
-
-      // Draw Dot
-      canvas.drawCircle(p1.position, p1.radius, dotPaint);
-
-      // Connect to neighbors
-      for (int j = i + 1; j < particles.length; j++) {
-        final p2 = particles[j];
-        final dx = p1.position.dx - p2.position.dx;
-        final dy = p1.position.dy - p2.position.dy;
-        final distSq = dx * dx + dy * dy;
-
-        // Connect if close enough (within 100px approx => 10000 sq)
-        if (distSq < 15000) {
-          canvas.drawLine(p1.position, p2.position, linePaint);
-        }
+    for (var p in particles) {
+      if (p.isIcon) {
+        _drawIcon(canvas, p);
+      } else {
+        _drawText(canvas, p);
       }
     }
   }
 
+  void _drawText(Canvas canvas, FallingObject p) {
+    final textSpan = TextSpan(
+      text: p.content,
+      style: TextStyle(fontSize: p.size, height: 1.0),
+    );
+
+    final textPainter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    );
+
+    textPainter.layout();
+
+    canvas.save();
+    canvas.translate(p.position.dx, p.position.dy);
+    canvas.rotate(p.rotation);
+    canvas.translate(-textPainter.width / 2, -textPainter.height / 2);
+    textPainter.paint(canvas, Offset.zero);
+    canvas.restore();
+  }
+
+  void _drawIcon(Canvas canvas, FallingObject p) {
+    final textSpan = TextSpan(
+      text: p.content,
+      style: TextStyle(
+        fontSize: p.size,
+        height: 1.0,
+        fontFamily: 'MaterialIcons', // Crucial for rendering IconData chars
+        color: p.color,
+      ),
+    );
+
+    final textPainter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    );
+
+    textPainter.layout();
+
+    canvas.save();
+    canvas.translate(p.position.dx, p.position.dy);
+    canvas.rotate(p.rotation);
+    canvas.translate(-textPainter.width / 2, -textPainter.height / 2);
+    textPainter.paint(canvas, Offset.zero);
+    canvas.restore();
+  }
+
   @override
-  bool shouldRepaint(covariant ParticlePainter oldDelegate) => true;
+  bool shouldRepaint(covariant EmojiPainter oldDelegate) => true;
 }

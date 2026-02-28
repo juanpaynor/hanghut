@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/legal/screens/terms_of_service_screen.dart';
 import 'package:bitemates/features/verification/screens/user_verification_screen.dart';
+import 'package:bitemates/features/experiences/screens/my_trips_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -102,6 +103,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // --- Removed placeholder settings widgets (stepper, circle button) ---
   // These were for non-functional features: notification distance, age range
 
+  Future<void> _testPushNotification() async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No logged in user')));
+        }
+        return;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Sending test push...')));
+      }
+
+      final response = await SupabaseConfig.client.functions.invoke(
+        'send-push',
+        body: {
+          'user_id': user.id,
+          'title': 'Debug Deep Link 🚀',
+          'body': 'Tap to test Table Join deep link!',
+          'image': 'https://placekitten.com/200/200',
+          'data': {
+            'type': 'table_join',
+            'table_id': '00000000-0000-0000-0000-000000000000',
+          },
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Response: ${response.data}')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
@@ -132,6 +179,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const UserVerificationScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  Icons.luggage,
+                  color: Theme.of(context).primaryColor,
+                ),
+                title: const Text('My Trips'),
+                subtitle: const Text('View your booked experiences & tickets'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const MyTripsScreen(),
                     ),
                   );
                 },
@@ -292,6 +356,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SnackBar(content: Text('Report issue placeholder')),
                   );
                 },
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.notifications_active,
+                  color: Colors.red,
+                ),
+                title: const Text('Send Test Push Notification'),
+                subtitle: const Text('Debug: Sends a push to yourself'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _testPushNotification,
               ),
             ],
           ),

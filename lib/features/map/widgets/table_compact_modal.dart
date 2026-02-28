@@ -8,6 +8,7 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
+import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -26,6 +27,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
   bool _isHost = false;
   List<String> _memberPhotoUrls = [];
   int _totalMembers = 0;
+  int _pendingCount = 0;
 
   void initState() {
     super.initState();
@@ -35,6 +37,18 @@ class _TableCompactModalState extends State<TableCompactModal> {
     print('  - marker_image_url: ${widget.table['marker_image_url']}');
     _checkMembershipStatus();
     _fetchMembers();
+    _fetchPendingCount();
+  }
+
+  Future<void> _fetchPendingCount() async {
+    try {
+      final requests = await _memberService.getPendingRequests(
+        widget.table['id'],
+      );
+      if (mounted) {
+        setState(() => _pendingCount = requests.length);
+      }
+    } catch (_) {}
   }
 
   Future<void> _fetchMembers() async {
@@ -560,13 +574,52 @@ class _TableCompactModalState extends State<TableCompactModal> {
               style: buttonStyle,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
+          // Pending Requests Button with badge
+          SizedBox(
+            width: 52,
+            child: Stack(
+              children: [
+                ElevatedButton(
+                  onPressed: _openPendingRequests,
+                  style: secondaryButtonStyle,
+                  child: const Icon(Icons.person_add, size: 22),
+                ),
+                if (_pendingCount > 0)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 20,
+                        minHeight: 20,
+                      ),
+                      child: Text(
+                        '$_pendingCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
           SizedBox(
             width: 52,
             child: ElevatedButton(
               onPressed: _deleteTable,
               style: secondaryButtonStyle.copyWith(
-                foregroundColor: MaterialStateProperty.all(Colors.red),
+                foregroundColor: WidgetStateProperty.all(Colors.red),
               ),
               child: const Icon(Icons.delete_outline, size: 22),
             ),
@@ -595,7 +648,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
               child: ElevatedButton(
                 onPressed: _leaveTable,
                 style: secondaryButtonStyle.copyWith(
-                  foregroundColor: MaterialStateProperty.all(Colors.red),
+                  foregroundColor: WidgetStateProperty.all(Colors.red),
                 ),
                 child: const Icon(Icons.logout, size: 22),
               ),
@@ -630,6 +683,24 @@ class _TableCompactModalState extends State<TableCompactModal> {
   }
 
   // --- Logic copied and adapted from TableDetailsBottomSheet ---
+
+  void _openPendingRequests() {
+    final tableTitle =
+        widget.table['title'] ?? widget.table['location_name'] ?? 'Table';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => PendingRequestsSheet(
+        tableId: widget.table['id'],
+        tableTitle: tableTitle,
+      ),
+    ).then((_) {
+      // Refresh pending count after closing
+      _fetchPendingCount();
+      _fetchMembers();
+    });
+  }
 
   void _openChat() {
     Navigator.pop(context); // Close modal first

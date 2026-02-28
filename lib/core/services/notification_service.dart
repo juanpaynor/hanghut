@@ -4,6 +4,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/push_notification_service.dart';
+import 'dart:convert';
 
 // Top-level function for Workmanager
 @pragma('vm:entry-point')
@@ -46,6 +48,18 @@ class NotificationService {
       settings,
       onDidReceiveNotificationResponse: (details) {
         print('Notification tapped: ${details.payload}');
+        if (details.payload != null) {
+          try {
+            // Note: The payload from FCM might be a stringified map depending on how we structured it
+            // Assuming PushNotificationService passes the raw data map as a string
+            final dynamic parsed = jsonDecode(details.payload!);
+            if (parsed is Map<String, dynamic>) {
+              PushNotificationService().handleNotificationTap(parsed);
+            }
+          } catch (e) {
+            print('Error parsing local notification payload: $e');
+          }
+        }
       },
     );
   }

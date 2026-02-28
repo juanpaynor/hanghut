@@ -39,7 +39,14 @@ class Event {
     this.organizerPhotoUrl,
     this.organizerVerified = false,
     required this.createdAt,
+    this.passFeesToCustomer,
+    this.fixedFeePerTicket,
+    this.customPercentage,
   });
+
+  final bool? passFeesToCustomer;
+  final double? fixedFeePerTicket;
+  final double? customPercentage;
 
   int get ticketsAvailable => capacity - ticketsSold;
   bool get isSoldOut => ticketsAvailable <= 0;
@@ -68,6 +75,11 @@ class Event {
       organizerPhotoUrl: json['organizer_photo_url'] as String?,
       organizerVerified: json['organizer_verified'] as bool? ?? false,
       createdAt: DateTime.parse(json['created_at'] as String),
+      passFeesToCustomer: json['partners']?['pass_fees_to_customer'] as bool?,
+      fixedFeePerTicket: (json['partners']?['fixed_fee_per_ticket'] as num?)
+          ?.toDouble(),
+      customPercentage: (json['partners']?['custom_percentage'] as num?)
+          ?.toDouble(),
     );
   }
 

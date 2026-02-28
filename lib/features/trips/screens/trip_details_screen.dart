@@ -95,15 +95,16 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
       // Deriving a title like "Tokyo Chat"
       final title = '${widget.trip['destination_city']} Travelers';
 
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ChatScreen(
-            tableId: chatInfo['chatId'], // Actual Trip Chat UUID
-            tableTitle: title,
-            channelId: chatInfo['channelId'], // Ably Channel ID
-            chatType: 'trip',
-          ),
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        enableDrag: true,
+        builder: (context) => ChatScreen(
+          tableId: chatInfo['chatId'], // Actual Trip Chat UUID
+          tableTitle: title,
+          channelId: chatInfo['channelId'], // Ably Channel ID
+          chatType: 'trip',
         ),
       );
     } else {

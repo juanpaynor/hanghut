@@ -42,7 +42,12 @@ class EventService {
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, created_at
+            capacity, tickets_sold, event_type, organizer_id, created_at,
+            partners:organizer_id (
+              pass_fees_to_customer,
+              fixed_fee_per_ticket,
+              custom_percentage
+            )
           ''')
           .eq('id', eventId)
           .single();

@@ -2,22 +2,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
-import 'package:any_link_preview/any_link_preview.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/services/user_cache.dart';
-import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
-import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
-import 'package:bitemates/features/chat/widgets/chat_participant_header.dart';
-import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
+import 'package:bitemates/features/chat/widgets/chat_header.dart';
+import 'package:bitemates/features/chat/widgets/chat_input_bar.dart';
+import 'package:bitemates/features/chat/widgets/chat_message_list.dart';
+import 'package:bitemates/features/chat/screens/chat_info_screen.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -239,53 +238,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           },
         )
         .subscribe();
-  }
-
-  Future<void> _verifyParticipant(String participantId) async {
-    // 1. Find my own status
-    final myStatus = _participants.firstWhere(
-      (p) => p['userId'] == _currentUserId,
-      orElse: () => {},
-    )['arrival_status'];
-
-    final isMe = participantId == _currentUserId;
-    final isHost = await _checkIfHostBoolean(); // Helper to check quickly
-
-    // 2. Logic Gate
-    if (!isMe) {
-      // Trying to verify someone else
-      // Rule: Only Verified users or Host can verify others
-      // "Host is automatically verified" via triggers/logic usually,
-      // but let's check explicit status or implicit host power.
-      final amIVerified = myStatus == 'verified' || isHost;
-
-      if (!amIVerified) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'You must be verified yourself before verifying others!',
-            ),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        return;
-      }
-    }
-
-    // 3. Open Sheet
-    if (mounted) {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (context) => VerificationSheet(
-          currentUserId: _currentUserId!,
-          targetUserId: participantId,
-          tableId: widget.tableId,
-          isMe: isMe,
-        ),
-      );
-    }
   }
 
   // Quick helper for synchronous-like check if needed, or reuse _checkIfHost
@@ -1343,116 +1295,41 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
         child: Column(
           children: [
-            // Drag Handle & Header
-            const SizedBox(height: 12),
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.tableTitle,
-                          style: TextStyle(
-                            color: Theme.of(context).textTheme.bodyLarge?.color,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Actions Menu
-                  PopupMenuButton<String>(
-                    icon: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        shape: BoxShape.circle,
+            ChatHeader(
+              title: widget.tableTitle,
+              onLeave: _leaveTable,
+              onClose: () => Navigator.pop(context),
+              onInfoTap: () {
+                if (widget.chatType == 'dm') {
+                  // Find the other user
+                  final otherUser = _participants.firstWhere(
+                    (p) => p['userId'] != _currentUserId,
+                    orElse: () => <String, dynamic>{}, // Provide type arguments
+                  );
+                  if (otherUser.isNotEmpty && otherUser['userId'] != null) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            UserProfileScreen(userId: otherUser['userId']),
                       ),
-                      child: const Icon(
-                        Icons.more_horiz,
-                        size: 18,
-                        color: Colors.black54,
-                      ),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    onSelected: (value) {
-                      if (value == 'leave') {
-                        _leaveTable();
-                      }
-                    },
-                    itemBuilder: (BuildContext context) =>
-                        <PopupMenuEntry<String>>[
-                          const PopupMenuItem<String>(
-                            value: 'leave',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.exit_to_app,
-                                  color: Colors.red,
-                                  size: 20,
-                                ),
-                                SizedBox(width: 12),
-                                Text(
-                                  'Leave Chat',
-                                  style: TextStyle(color: Colors.red),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                  ),
-                  const SizedBox(width: 8),
-                  // Close Button
-                  IconButton(
-                    icon: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.close,
-                        size: 18,
-                        color: Colors.black54,
-                      ),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-            ),
-
-            // --- EVENT COORDINATION HEADER ---
-            if (widget.chatType != 'trip')
-              ChatParticipantHeader(
-                participants: _participants,
-                onVerifyPressed: _verifyParticipant,
-                onReadyPressed: () {
-                  if (_currentUserId != null) {
-                    _verifyParticipant(_currentUserId!);
+                    );
                   }
-                },
-              ),
-
-            const Divider(height: 1, color: Colors.black12),
+                } else {
+                  // For tables and trips, show the participant list
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ChatInfoScreen(
+                        title: widget.tableTitle,
+                        chatType: widget.chatType,
+                        participants: _participants,
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
 
             // Connection Status Banner
             if (_showConnectionBanner)
@@ -1485,650 +1362,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
             // Messages Area
             Expanded(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(color: Colors.black),
-                    )
-                  : _messages.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.forum_outlined, // More conversational icon
-                            size: 64,
-                            color: Colors.grey[300],
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No messages yet',
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Say Hi! 👋',
-                            style: TextStyle(color: Colors.grey[400]),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      reverse: true, // Standard Chat UI: Bottom is start
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(20),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = _messages[index];
-                        final isMe = msg['isMe'] as bool;
-
-                        // Header Logic: Show if this message is the First (Oldest) of a block.
-                        // In Newest->Oldest list:
-                        // Next item (index + 1) is OLDER.
-                        // If Next item has different sender, then THIS item is the start of a new block (going up/chronologically down).
-                        // Visual Stack: [Next/Older] -> [This/Newer].
-                        // Header goes above [Next/Older] usually?
-                        // Wait. Header goes above the GROUP.
-                        // Group: [Older, ..., Newer].
-                        // Visual Top: Older.
-                        // Visual Bottom: Newer.
-                        // We iterate 0 (Newer) ... N (Older).
-                        // Header should appear on the OLDER message if the EVEN OLDER message is different.
-                        // So checking strict Index logic:
-                        // We want header on `msg` if `msg` is the "Top" of its group.
-                        // "Top" means Oldest in group.
-                        // So `msg` must be Older than `msg-1` (Newer). (Always true).
-                        // `msg` must be Newer than `msg+1` (Even Older).
-                        // If `msg+1` sender != `msg` sender. Then `msg` is the start of this group (from top).
-                        // So Check: index == last || messages[index+1].sender != msg.sender.
-
-                        final bool showHeader =
-                            index == _messages.length - 1 ||
-                            _messages[index + 1]['senderId'] != msg['senderId'];
-
-                        return Padding(
-                          padding: EdgeInsets.only(
-                            top: showHeader ? 16 : 4,
-                            bottom: 4,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: isMe
-                                ? MainAxisAlignment.end
-                                : MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              if (!isMe && showHeader)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    right: 8,
-                                    bottom: 4,
-                                  ),
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) =>
-                                              UserProfileScreen(
-                                                userId: msg['senderId'],
-                                              ),
-                                        ),
-                                      );
-                                    },
-                                    child: CircleAvatar(
-                                      radius: 16,
-                                      backgroundColor: Colors.grey[300],
-                                      backgroundImage:
-                                          msg['senderPhotoUrl'] != null
-                                          ? NetworkImage(msg['senderPhotoUrl'])
-                                          : null,
-                                      child: msg['senderPhotoUrl'] == null
-                                          ? Icon(
-                                              Icons.person,
-                                              size: 16,
-                                              color: Colors.grey[600],
-                                            )
-                                          : null,
-                                    ),
-                                  ),
-                                )
-                              else if (!isMe)
-                                const SizedBox(width: 40),
-
-                              Flexible(
-                                child: Column(
-                                  crossAxisAlignment: isMe
-                                      ? CrossAxisAlignment.end
-                                      : CrossAxisAlignment.start,
-                                  children: [
-                                    if (showHeader && !isMe)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          left: 12,
-                                          bottom: 4,
-                                        ),
-                                        child: Text(
-                                          msg['senderName'] ?? 'Unknown',
-                                          style: TextStyle(
-                                            color:
-                                                Theme.of(context).brightness ==
-                                                    Brightness.dark
-                                                ? Colors.grey[400]
-                                                : Colors.grey[600],
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-
-                                    // Message Bubble & Actions Wrapper
-                                    TweenAnimationBuilder<double>(
-                                      tween: Tween(begin: 0, end: 1),
-                                      duration: const Duration(
-                                        milliseconds: 300,
-                                      ),
-                                      curve: Curves.easeOut,
-                                      builder: (context, value, child) {
-                                        return Opacity(
-                                          opacity: value,
-                                          child: Transform.translate(
-                                            offset: Offset(0, 20 * (1 - value)),
-                                            child: child,
-                                          ),
-                                        );
-                                      },
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.end,
-                                        children: [
-                                          // Left Actions (for Other)
-                                          if (!isMe) ...[
-                                            // Hidden actions that appear on swipe?
-                                            // For simplicity, keeping actions logic but maybe simplified UI
-                                            // Or just tap bubble to act
-                                          ],
-
-                                          Flexible(
-                                            child: Dismissible(
-                                              key: Key(
-                                                msg['id'] ??
-                                                    UniqueKey().toString(),
-                                              ),
-                                              direction:
-                                                  DismissDirection.startToEnd,
-                                              confirmDismiss: (direction) async {
-                                                HapticFeedback.mediumImpact();
-                                                _handleReply(msg);
-                                                return false;
-                                              },
-                                              background: Container(
-                                                alignment: Alignment.centerLeft,
-                                                padding: const EdgeInsets.only(
-                                                  left: 20,
-                                                ),
-                                                child: Icon(
-                                                  Icons.reply,
-                                                  color: Theme.of(
-                                                    context,
-                                                  ).primaryColor,
-                                                ),
-                                              ),
-                                              child: GestureDetector(
-                                                onLongPress: () =>
-                                                    _showMessageActions(msg),
-                                                onDoubleTap: () {
-                                                  HapticFeedback.lightImpact();
-                                                  // Quick react with heart (like Instagram)
-                                                  if (msg['id'] != null) {
-                                                    _handleReaction(
-                                                      msg['id'],
-                                                      '❤️',
-                                                    );
-                                                  }
-                                                },
-                                                child: Stack(
-                                                  clipBehavior: Clip.none,
-                                                  children: [
-                                                    Padding(
-                                                      padding: EdgeInsets.only(
-                                                        bottom:
-                                                            _messageReactions[msg['id']]
-                                                                    ?.isNotEmpty ==
-                                                                true
-                                                            ? 12.0
-                                                            : 0,
-                                                      ),
-                                                      child: Container(
-                                                        padding:
-                                                            msg['contentType'] ==
-                                                                'gif'
-                                                            ? EdgeInsets.zero
-                                                            : const EdgeInsets.symmetric(
-                                                                horizontal: 12,
-                                                                vertical: 8,
-                                                              ),
-                                                        decoration: BoxDecoration(
-                                                          color:
-                                                              msg['contentType'] ==
-                                                                  'gif'
-                                                              ? Colors
-                                                                    .transparent
-                                                              : (isMe
-                                                                    ? Theme.of(
-                                                                                context,
-                                                                              ).brightness ==
-                                                                              Brightness.dark
-                                                                          ? Colors.blue[700] // My bubble in dark mode
-                                                                          : Colors
-                                                                                .black // My bubble in light mode
-                                                                    : Theme.of(
-                                                                            context,
-                                                                          ).brightness ==
-                                                                          Brightness
-                                                                              .dark
-                                                                    ? Colors
-                                                                          .grey[800] // Other bubble in dark mode
-                                                                    : Colors
-                                                                          .grey[100]), // Other bubble in light mode
-                                                          borderRadius: BorderRadius.only(
-                                                            topLeft:
-                                                                const Radius.circular(
-                                                                  16, // Slightly reduced radius
-                                                                ),
-                                                            topRight:
-                                                                const Radius.circular(
-                                                                  16,
-                                                                ),
-                                                            bottomLeft:
-                                                                Radius.circular(
-                                                                  isMe ? 16 : 4,
-                                                                ),
-                                                            bottomRight:
-                                                                Radius.circular(
-                                                                  isMe ? 4 : 16,
-                                                                ),
-                                                          ),
-                                                          // Add shadow to mine for pop
-                                                          boxShadow:
-                                                              isMe &&
-                                                                  msg['contentType'] !=
-                                                                      'gif'
-                                                              ? [
-                                                                  BoxShadow(
-                                                                    color: Colors
-                                                                        .black
-                                                                        .withValues(
-                                                                          alpha:
-                                                                              0.1,
-                                                                        ),
-                                                                    blurRadius:
-                                                                        4,
-                                                                    offset:
-                                                                        Offset(
-                                                                          0,
-                                                                          2,
-                                                                        ),
-                                                                  ),
-                                                                ]
-                                                              : null,
-                                                        ),
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            // Reply Preview Inside Bubble
-                                                            if (msg['reply_to_id'] !=
-                                                                null)
-                                                              Container(
-                                                                margin:
-                                                                    const EdgeInsets.only(
-                                                                      bottom: 6,
-                                                                    ),
-                                                                padding:
-                                                                    const EdgeInsets.all(
-                                                                      8,
-                                                                    ),
-                                                                decoration: BoxDecoration(
-                                                                  color: isMe
-                                                                      ? Colors.white.withValues(
-                                                                          alpha:
-                                                                              0.2,
-                                                                        )
-                                                                      : Colors.black.withValues(
-                                                                          alpha:
-                                                                              0.05,
-                                                                        ),
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        8,
-                                                                      ),
-                                                                  border: Border(
-                                                                    left: BorderSide(
-                                                                      color:
-                                                                          isMe
-                                                                          ? Colors.white
-                                                                          : Colors.black54,
-                                                                      width: 2,
-                                                                    ),
-                                                                  ),
-                                                                ),
-                                                                child: Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
-                                                                  children: [
-                                                                    Text(
-                                                                      _getReplySenderName(
-                                                                        msg['reply_to_id'],
-                                                                      ),
-                                                                      style: TextStyle(
-                                                                        color:
-                                                                            isMe
-                                                                            ? Colors.white
-                                                                            : Colors.black87,
-                                                                        fontSize:
-                                                                            11,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                      ),
-                                                                    ),
-                                                                    Text(
-                                                                      _getReplyContent(
-                                                                        msg['reply_to_id'],
-                                                                      ),
-                                                                      maxLines:
-                                                                          1,
-                                                                      overflow:
-                                                                          TextOverflow
-                                                                              .ellipsis,
-                                                                      style: TextStyle(
-                                                                        color:
-                                                                            isMe
-                                                                            ? Colors.white.withValues(
-                                                                                alpha: 0.8,
-                                                                              )
-                                                                            : Colors.black87.withValues(
-                                                                                alpha: 0.8,
-                                                                              ),
-                                                                        fontSize:
-                                                                            11,
-                                                                      ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                              ),
-
-                                                            // Content
-                                                            if (msg['contentType'] ==
-                                                                'gif')
-                                                              ClipRRect(
-                                                                borderRadius:
-                                                                    BorderRadius.circular(
-                                                                      16,
-                                                                    ),
-                                                                child: CachedNetworkImage(
-                                                                  imageUrl:
-                                                                      msg['content'],
-                                                                  width: 200,
-                                                                  fit: BoxFit
-                                                                      .cover,
-                                                                  placeholder: (context, url) => Container(
-                                                                    width: 200,
-                                                                    height: 200,
-                                                                    color: Colors
-                                                                        .grey[200],
-                                                                    child: const Center(
-                                                                      child: CircularProgressIndicator(
-                                                                        strokeWidth:
-                                                                            2,
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                  errorWidget:
-                                                                      (
-                                                                        context,
-                                                                        url,
-                                                                        error,
-                                                                      ) => const Icon(
-                                                                        Icons
-                                                                            .error,
-                                                                      ),
-                                                                ),
-                                                              )
-                                                            else
-                                                              Text(
-                                                                msg['deletedAt'] !=
-                                                                            null &&
-                                                                        (msg['deletedForEveryone'] ||
-                                                                            !isMe)
-                                                                    ? '[Message deleted]'
-                                                                    : '', // Handled below for non-deleted
-                                                                style: TextStyle(
-                                                                  color: isMe
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Theme.of(
-                                                                              context,
-                                                                            ).brightness ==
-                                                                            Brightness.dark
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Colors
-                                                                            .black87,
-                                                                  fontSize: 15,
-                                                                  fontStyle:
-                                                                      FontStyle
-                                                                          .italic,
-                                                                ),
-                                                              ),
-                                                            if (msg['deletedAt'] ==
-                                                                null)
-                                                              Linkify(
-                                                                onOpen:
-                                                                    _onOpenLink,
-                                                                text:
-                                                                    msg['content'],
-                                                                style: TextStyle(
-                                                                  color: isMe
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Theme.of(
-                                                                              context,
-                                                                            ).brightness ==
-                                                                            Brightness.dark
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Colors
-                                                                            .black87,
-                                                                  fontSize: 15,
-                                                                ),
-                                                                linkStyle: TextStyle(
-                                                                  color: isMe
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Colors
-                                                                            .blue,
-                                                                  decoration:
-                                                                      TextDecoration
-                                                                          .underline,
-                                                                  decorationColor:
-                                                                      isMe
-                                                                      ? Colors
-                                                                            .white
-                                                                      : Colors
-                                                                            .blue,
-                                                                ),
-                                                              ),
-                                                            Builder(
-                                                              builder: (context) {
-                                                                final urlRegExp = RegExp(
-                                                                  r'https?://[^\s/$.?#].[^\s]*',
-                                                                  caseSensitive:
-                                                                      false,
-                                                                );
-                                                                final match = urlRegExp
-                                                                    .firstMatch(
-                                                                      msg['content'],
-                                                                    );
-                                                                if (match !=
-                                                                    null) {
-                                                                  final url = msg['content']
-                                                                      .substring(
-                                                                        match
-                                                                            .start,
-                                                                        match
-                                                                            .end,
-                                                                      );
-                                                                  return Padding(
-                                                                    padding:
-                                                                        const EdgeInsets.only(
-                                                                          top:
-                                                                              8.0,
-                                                                        ),
-                                                                    child: AnyLinkPreview(
-                                                                      link: url,
-                                                                      displayDirection:
-                                                                          UIDirection
-                                                                              .uiDirectionVertical,
-                                                                      showMultimedia:
-                                                                          true,
-                                                                      bodyMaxLines:
-                                                                          3,
-                                                                      bodyTextOverflow:
-                                                                          TextOverflow
-                                                                              .ellipsis,
-                                                                      titleStyle: TextStyle(
-                                                                        color:
-                                                                            isMe
-                                                                            ? Colors.black87
-                                                                            : Theme.of(
-                                                                                    context,
-                                                                                  ).brightness ==
-                                                                                  Brightness.dark
-                                                                            ? Colors.white
-                                                                            : Colors.black87,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                        fontSize:
-                                                                            15,
-                                                                      ),
-                                                                      bodyStyle: TextStyle(
-                                                                        color:
-                                                                            isMe
-                                                                            ? Colors.black54
-                                                                            : Theme.of(
-                                                                                    context,
-                                                                                  ).brightness ==
-                                                                                  Brightness.dark
-                                                                            ? Colors.grey[300]
-                                                                            : Colors.grey,
-                                                                        fontSize:
-                                                                            12,
-                                                                      ),
-                                                                      backgroundColor:
-                                                                          isMe
-                                                                          ? Colors.white.withOpacity(
-                                                                              0.9,
-                                                                            )
-                                                                          : Theme.of(
-                                                                                  context,
-                                                                                ).brightness ==
-                                                                                Brightness.dark
-                                                                          ? Colors.grey[800]
-                                                                          : Colors.grey[200],
-                                                                      placeholderWidget:
-                                                                          const SizedBox.shrink(),
-                                                                      errorWidget:
-                                                                          const SizedBox.shrink(),
-                                                                      onTap: () {
-                                                                        _onOpenLink(
-                                                                          LinkableElement(
-                                                                            url,
-                                                                            url,
-                                                                          ),
-                                                                        );
-                                                                      },
-                                                                    ),
-                                                                  );
-                                                                }
-                                                                return const SizedBox.shrink();
-                                                              },
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    // Positioned Reactions
-                                                    if (_messageReactions[msg['id']]
-                                                            ?.isNotEmpty ==
-                                                        true)
-                                                      Positioned(
-                                                        bottom: -8,
-                                                        left: isMe ? null : 0,
-                                                        right: isMe ? 0 : null,
-                                                        child: Wrap(
-                                                          spacing: 4,
-                                                          children:
-                                                              _buildReactionChips(
-                                                                msg['id'],
-                                                              ),
-                                                        ),
-                                                      ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-
-                                          // Timestamp & Status (Reactions moved to Stack)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 4,
-                                              left: 4,
-                                              right: 4,
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                if (isMe) ...[
-                                                  _buildStatusIndicator(
-                                                    msg['status'] ?? 'sent',
-                                                  ),
-                                                  const SizedBox(width: 4),
-                                                ],
-                                                Text(
-                                                  DateFormat('h:mm a').format(
-                                                    DateTime.parse(
-                                                      msg['timestamp'],
-                                                    ).toLocal(),
-                                                  ),
-                                                  style: TextStyle(
-                                                    color: Colors.grey[400],
-                                                    fontSize: 10,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+              child: ChatMessageList(
+                isLoading: _isLoading,
+                messages: _messages,
+                scrollController: _scrollController,
+                messageReactions: _messageReactions,
+                getReplySenderName: _getReplySenderName,
+                getReplyContent: _getReplyContent,
+                buildStatusIndicator: (status) => _buildStatusIndicator(status),
+                buildReactionChips: (msgId) =>
+                    msgId != null ? _buildReactionChips(msgId) : [],
+                onReply: _handleReply,
+                onShowActions: _showMessageActions,
+                onReact: _handleReaction,
+                onOpenLink: _onOpenLink,
+              ),
             ),
 
             // Typing Indicator
@@ -2154,168 +1402,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               ),
 
             // Input Area
-            Container(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 12,
-                bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
-              ),
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? Colors.grey[900]
-                    : Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, -5),
-                  ),
-                ],
-              ),
-              child: SafeArea(
-                bottom: false,
-                child: Column(
-                  children: [
-                    if (_replyingTo != null)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? Colors.grey[850]
-                              : Colors.grey[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color:
-                                Theme.of(context).brightness == Brightness.dark
-                                ? Colors.grey[700]!
-                                : Colors.grey[200]!,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 3,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color:
-                                    Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? Colors.blue[400]
-                                    : Colors.black,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Replying to ${_replyingTo!['senderName']}',
-                                    style: TextStyle(
-                                      color: Theme.of(
-                                        context,
-                                      ).textTheme.bodyLarge?.color,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  Text(
-                                    _replyingTo!['content'],
-                                    style: TextStyle(
-                                      color: Theme.of(
-                                        context,
-                                      ).textTheme.bodyMedium?.color,
-                                      fontSize: 13,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.close,
-                                size: 20,
-                                color: Colors.black54,
-                              ),
-                              onPressed: _cancelReply,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    Row(
-                      children: [
-                        // GIF Button
-                        IconButton(
-                          icon: const Icon(
-                            Icons.gif_box_outlined,
-                            color: Colors.black54,
-                          ),
-                          onPressed: _showGifPicker,
-                        ),
-                        const SizedBox(width: 8),
-                        // Text Input
-                        Expanded(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            child: TextField(
-                              controller: _messageController,
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).textTheme.bodyLarge?.color,
-                              ),
-                              decoration: InputDecoration(
-                                hintText: 'Type a message...',
-                                hintStyle: TextStyle(
-                                  color: Theme.of(
-                                    context,
-                                  ).textTheme.bodyMedium?.color,
-                                ),
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 12,
-                                ),
-                              ),
-                              textCapitalization: TextCapitalization.sentences,
-                              onSubmitted: (_) => _sendMessage(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        // Send Button
-                        GestureDetector(
-                          onTap: () => _sendMessage(),
-                          child: Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: Theme.of(
-                                context,
-                              ).primaryColor, // Bright indigo
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.send,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+            ChatInputBar(
+              controller: _messageController,
+              replyingTo: _replyingTo,
+              onCancelReply: _cancelReply,
+              onShowGifPicker: _showGifPicker,
+              onSendMessage: _sendMessage,
             ),
           ],
         ),
@@ -2333,24 +1425,138 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('External Link Warning'),
-          content: Text(
-            'You are about to leave the app and open an external link:\n\n${link.url}',
+        barrierColor: Colors.black.withOpacity(0.3),
+        builder: (context) => Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 20,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Cute Icon
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6B7FFF).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text('🔗', style: TextStyle(fontSize: 32)),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Title
+                const Text(
+                  'Opening External Link',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+
+                // Description
+                Text(
+                  'You\'re about to leave the app and visit:',
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+
+                // URL Container
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey[200]!, width: 1),
+                  ),
+                  child: Text(
+                    link.url,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[700],
+                      fontFamily: 'monospace',
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Buttons
+                Row(
+                  children: [
+                    // Cancel Button
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          backgroundColor: Colors.grey[100],
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+
+                    // Open Button
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          launchUrl(uri, mode: LaunchMode.externalApplication);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          backgroundColor: const Color(0xFF6B7FFF),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Open Link',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                launchUrl(uri, mode: LaunchMode.externalApplication);
-              },
-              child: const Text('Open'),
-            ),
-          ],
         ),
       );
     } else {

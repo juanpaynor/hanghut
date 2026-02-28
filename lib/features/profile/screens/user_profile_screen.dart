@@ -1,27 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/settings/screens/settings_screen.dart';
-import 'package:bitemates/features/map/screens/map_screen.dart';
-import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
-
-import 'package:bitemates/features/profile/widgets/quest_card.dart';
-import 'package:bitemates/core/services/social_service.dart';
-import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
-// PHASE 2: New imports
-
-import 'package:bitemates/features/ticketing/screens/organizer_dashboard_screen.dart';
-import 'package:bitemates/features/profile/widgets/profile_completeness_indicator.dart';
+import 'package:bitemates/features/profile/widgets/profile_parallax_header.dart';
+import 'package:bitemates/features/profile/widgets/glass_stats_card.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+// Restored imports
+import 'package:bitemates/features/profile/widgets/quest_card.dart';
 import 'package:bitemates/features/profile/screens/connected_users_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
+import 'package:bitemates/core/services/host_service.dart';
+import 'package:bitemates/features/host/screens/host_apply_screen.dart';
+import 'package:bitemates/features/host/screens/host_pending_screen.dart';
+import 'package:bitemates/features/host/screens/host_dashboard_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -262,15 +260,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final chatId = await DirectChatService().startConversation(widget.userId);
 
       if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ChatScreen(
-              tableId: chatId,
-              tableTitle: _userData?['display_name'] ?? 'Direct Message',
-              channelId: 'direct_$chatId',
-              chatType: 'dm',
-            ),
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          enableDrag: true,
+          builder: (context) => ChatScreen(
+            tableId: chatId,
+            tableTitle: _userData?['display_name'] ?? 'Direct Message',
+            channelId: 'direct_$chatId',
+            chatType: 'dm',
           ),
         );
       }
@@ -288,24 +287,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       context,
       MaterialPageRoute(builder: (context) => const SettingsScreen()),
     );
-  }
-
-  Future<void> _launchInstagram(String username) async {
-    final cleanUsername = username.replaceAll('@', '').trim();
-    if (cleanUsername.isEmpty) return;
-
-    final appUrl = Uri.parse('instagram://user?username=$cleanUsername');
-    final webUrl = Uri.parse('https://www.instagram.com/$cleanUsername/');
-
-    try {
-      if (await canLaunchUrl(appUrl)) {
-        await launchUrl(appUrl);
-      } else {
-        await launchUrl(webUrl, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Error launching Instagram: $e');
-    }
   }
 
   // RPG Logic Helper
@@ -353,44 +334,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   // PHASE 1 FIX: Calculate actual level and XP
-  int _calculateLevel() {
-    int totalXP = _calculateTotalXP();
-    // Each level requires 100 XP more than the previous
-    // Level 1: 0-100 XP, Level 2: 100-300 XP, Level 3: 300-600 XP, etc.
-    int level = 1;
-    int xpNeeded = 0;
-    while (totalXP >= xpNeeded) {
-      xpNeeded += (level * 100);
-      if (totalXP >= xpNeeded) level++;
-    }
-    return level;
-  }
-
-  int _calculateTotalXP() {
-    int hosted = _stats?['hosted'] ?? 0;
-    int joined = _stats?['joined'] ?? 0;
-    return (hosted * 100) + (joined * 50);
-  }
-
-  Map<String, int> _getXPProgress() {
-    int level = _calculateLevel();
-    int totalXP = _calculateTotalXP();
-
-    // Calculate XP for current level
-    int xpForCurrentLevel = 0;
-    for (int i = 1; i < level; i++) {
-      xpForCurrentLevel += (i * 100);
-    }
-
-    int currentLevelXP = totalXP - xpForCurrentLevel;
-    int xpNeededForNextLevel = level * 100;
-
-    return {
-      'current': currentLevelXP,
-      'needed': xpNeededForNextLevel,
-      'total': totalXP,
-    };
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -447,7 +390,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
     final rpgStats = _calculateRpgStats();
     final charClass = _getCharacterClass(rpgStats);
-    final level = _calculateLevel();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
@@ -458,415 +400,179 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
-            // 1. RPG Header (SliverAppBar)
-            SliverAppBar(
-              pinned: true,
-              expandedHeight: 280,
-              leading: widget.isOwnProfile
-                  ? null
-                  : IconButton(
-                      icon: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: const BoxDecoration(
-                          color: Colors.black26,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.arrow_back,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                      onPressed: () => Navigator.pop(context),
+            // 1. RPG Header (Parallax)
+            ProfileParallaxHeader(
+              imageUrl: _userData?['avatar_url'],
+              displayName: _userData?['display_name'] ?? 'Unknown',
+              characterClass: charClass,
+              isOwnProfile: widget.isOwnProfile,
+              onEdit: () async {
+                final bool? result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => EditProfileScreen(
+                      userProfile: _userData ?? {},
+                      userPhotos: _userPhotos,
                     ),
-              actions: [
-                if (widget.isOwnProfile) ...[
-                  IconButton(
-                    icon: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Colors.black26,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.edit,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                    onPressed: () async {
-                      final bool? result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => EditProfileScreen(
-                            userProfile: _userData ?? {},
-                            userPhotos: _userPhotos,
-                          ),
-                        ),
-                      );
+                  ),
+                );
 
-                      if (result == true) {
-                        _loadUserProfile();
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (widget.isOwnProfile)
-                  IconButton(
-                    icon: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Colors.black26,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.settings_outlined,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                    onPressed: () => _showSettingsMenu(context),
-                  )
-                else
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      if (value == 'report') {
-                        showModalBottomSheet(
-                          context: context,
-                          isScrollControlled: true,
-                          backgroundColor: Colors.transparent,
-                          builder: (context) => ReportModal(
-                            entityType: 'user',
-                            entityId: widget.userId,
-                          ),
-                        );
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'report',
-                        child: Row(
-                          children: [
-                            Icon(Icons.flag, color: Colors.red),
-                            SizedBox(width: 8),
-                            Text(
-                              'Report User',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    child: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Colors.black26,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.more_vert,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                  ),
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                background: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: isDark
-                          ? [
-                              Colors.purple.shade900,
-                              Theme.of(context).scaffoldBackgroundColor,
-                            ]
-                          : [
-                              Colors.blue.shade100,
-                              Theme.of(context).scaffoldBackgroundColor,
-                            ],
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 100, 20, 0),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Avatar & Level
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: AppTheme.accentColor,
-                                  width: 3,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppTheme.accentColor.withOpacity(
-                                      0.5,
-                                    ),
-                                    blurRadius: 10,
-                                  ),
-                                ],
-                              ),
-                              child: CircleAvatar(
-                                radius: 40,
-                                backgroundImage: NetworkImage(
-                                  _userData?['avatar_url'] ?? '',
-                                ),
-                                backgroundColor: Colors.grey,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black87,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: AppTheme.accentColor.withOpacity(0.5),
-                                ),
-                              ),
-                              child: Text(
-                                'LVL $level',
-                                style: const TextStyle(
-                                  color: AppTheme.accentColor,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(width: 24),
-                        // Name & Class
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(height: 10),
-                              Text(
-                                _userData?['display_name'] ?? 'Unknown',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      color: isDark
-                                          ? Colors.white
-                                          : Colors.black87,
-                                    ),
-                              ),
-                              Text(
-                                charClass.toUpperCase(),
-                                style: const TextStyle(
-                                  color: AppTheme.accentColor,
-                                  letterSpacing: 1.2,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              if (_userData?['occupation'] != null &&
-                                  _userData!['occupation']
-                                      .toString()
-                                      .isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  _userData!['occupation'],
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: isDark
-                                            ? Colors.grey[400]
-                                            : Colors.grey[700],
-                                      ),
-                                ),
-                              ],
-                              if (_userData?['social_instagram'] != null &&
-                                  _userData!['social_instagram']
-                                      .toString()
-                                      .isNotEmpty) ...[
-                                const SizedBox(height: 6),
-                                GestureDetector(
-                                  onTap: () => _launchInstagram(
-                                    _userData!['social_instagram'],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.camera_alt_outlined,
-                                        size: 14,
-                                        color: AppTheme.accentColor,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        '@${_userData!['social_instagram'].toString().replaceAll('@', '')}',
-                                        style: const TextStyle(
-                                          color: AppTheme.accentColor,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ],
+                if (result == true) {
+                  _loadUserProfile();
+                }
+              },
+              onSettings: () => _showSettingsMenu(context),
+              onShare: () {
+                // Implement share
+              },
+            ),
+
+            // 2. Glass Stats Card (Floating Overlap)
+            SliverToBoxAdapter(
+              child: Transform.translate(
+                offset: const Offset(0, 0), // Removed overlap effect
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child:
+                      GlassStatsCard(
+                            stats: _stats ?? {},
+                            onFollowersTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ConnectedUsersScreen(
+                                    userId: widget.userId,
+                                    initialTabIndex: 0,
                                   ),
                                 ),
-                              ],
-                              const SizedBox(height: 16),
-                              // XP Bar - PHASE 1 FIX: Real XP Data
-                              Builder(
-                                builder: (context) {
-                                  final xpData = _getXPProgress();
-                                  final progress =
-                                      xpData['current']! / xpData['needed']!;
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: LinearProgressIndicator(
-                                          value: progress,
-                                          backgroundColor: isDark
-                                              ? Colors.black26
-                                              : Colors.white54,
-                                          valueColor:
-                                              const AlwaysStoppedAnimation(
-                                                AppTheme.accentColor,
-                                              ),
-                                          minHeight: 8,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '${xpData['current']} / ${xpData['needed']} XP to next level',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: isDark
-                                              ? Colors.white60
-                                              : Colors.black54,
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                              );
+                            },
+                            onFollowingTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ConnectedUsersScreen(
+                                    userId: widget.userId,
+                                    initialTabIndex: 1,
+                                  ),
+                                ),
+                              );
+                            },
+                          )
+                          .animate()
+                          .fadeIn(duration: 600.ms, delay: 300.ms)
+                          .slideY(begin: 0.2, end: 0),
                 ),
               ),
             ),
 
-            // 3. Stats Matrix (REMOVED per request)
-            // _buildStatsMatrix(rpgStats),
-
-            // 2. Action Buttons & Bio
+            // 3. Action Buttons & Bio
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Action Buttons
-                    // Stats Row
-                    _buildStatsRow(context),
-                    const SizedBox(height: 20),
-
                     // Action Buttons (Only for others)
                     if (!widget.isOwnProfile) ...[
                       Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: _toggleFollow,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _isFollowing
-                                    ? Colors.transparent
-                                    : AppTheme.primaryColor,
-                                foregroundColor: _isFollowing
-                                    ? Theme.of(
-                                        context,
-                                      ).textTheme.bodyLarge?.color
-                                    : Colors.white,
-                                elevation: 0,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: _isFollowing
-                                      ? BorderSide(
-                                          color: Theme.of(context).dividerColor,
-                                        )
-                                      : BorderSide.none,
-                                ),
-                              ),
-                              icon: Icon(
-                                _isFollowing ? Icons.check : Icons.person_add,
-                                size: 20,
-                              ),
-                              label: Text(
-                                _isFollowing ? 'Following' : 'Follow',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _openDirectMessage,
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: AppTheme.primaryColor,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                side: const BorderSide(
-                                  color: AppTheme.primaryColor,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: _toggleFollow,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _isFollowing
+                                        ? Colors.transparent
+                                        : AppTheme.primaryColor,
+                                    foregroundColor: _isFollowing
+                                        ? Theme.of(
+                                            context,
+                                          ).textTheme.bodyLarge?.color
+                                        : Colors.white,
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16, // Taller buttons
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                      side: _isFollowing
+                                          ? BorderSide(
+                                              color: Theme.of(
+                                                context,
+                                              ).dividerColor,
+                                            )
+                                          : BorderSide.none,
+                                    ),
+                                  ),
+                                  icon: Icon(
+                                    _isFollowing
+                                        ? Icons.check
+                                        : Icons.person_add,
+                                    size: 20,
+                                  ),
+                                  label: Text(
+                                    _isFollowing ? 'Following' : 'Follow',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ),
                               ),
-                              icon: const Icon(
-                                Icons.chat_bubble_outline,
-                                size: 20,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: _openDirectMessage,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppTheme.primaryColor,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16, // Taller buttons
+                                    ),
+                                    side: const BorderSide(
+                                      color: AppTheme.primaryColor,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.chat_bubble_outline,
+                                    size: 20,
+                                  ),
+                                  label: const Text(
+                                    'Message',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
                               ),
-                              label: const Text(
-                                'Message',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
+                            ],
+                          )
+                          .animate()
+                          .fadeIn(duration: 600.ms, delay: 400.ms)
+                          .slideY(begin: 0.2, end: 0),
+                      const SizedBox(height: 24),
+                    ],
+
+                    // Switch to Host Mode (own profile only)
+                    if (widget.isOwnProfile) ...[
+                      _HostModeButton(),
+                      const SizedBox(height: 16),
                     ],
 
                     // Bio
                     if (_userData?['bio'] != null) ...[
                       Text(
                         _userData!['bio'],
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          height: 1.5,
+                          color: isDark ? Colors.grey[300] : Colors.grey[800],
+                        ),
+                      ).animate().fadeIn(duration: 600.ms, delay: 500.ms),
                       const SizedBox(height: 16),
                     ],
 
-                    // Interests / Tags
+                    // Tags
                     if (_userData?['tags'] != null &&
                         (_userData!['tags'] as List).isNotEmpty) ...[
                       Wrap(
@@ -877,8 +583,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         ) {
                           return Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
+                              horizontal: 12,
+                              vertical: 6,
                             ),
                             decoration: BoxDecoration(
                               color: AppTheme.accentColor.withOpacity(0.1),
@@ -897,17 +603,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                             ),
                           );
                         }).toList(),
-                      ),
-                      const SizedBox(height: 24),
-                    ],
-
-                    // PHASE 2: Profile Completeness Indicator (only for own profile)
-                    if (widget.isOwnProfile) ...[
-                      ProfileCompletenessIndicator(
-                        userData: _userData ?? {},
-                        photos: _userPhotos,
-                      ),
-                      const SizedBox(height: 24),
+                      ).animate().fadeIn(duration: 600.ms, delay: 600.ms),
+                      const SizedBox(height: 32),
                     ],
 
                     // Photos Gallery
@@ -1221,61 +918,152 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       ],
     );
   }
+}
 
-  Widget _buildStatsRow(BuildContext context) {
-    if (_stats == null) return const SizedBox.shrink();
+// ─── Host Mode Entry Point Button ────────────────────────────────────────────
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
-      children: [
-        _buildStatItem('Hosted', _stats!['hosted'] ?? 0),
-        _buildStatItem('Joined', _stats!['joined'] ?? 0),
-        _buildStatItem(
-          'Followers',
-          _stats!['followers'] ?? 0,
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ConnectedUsersScreen(
-                  userId: widget.userId,
-                  initialTabIndex: 0,
-                ),
-              ),
-            );
-          },
-        ),
-        _buildStatItem(
-          'Following',
-          _stats!['following'] ?? 0,
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ConnectedUsersScreen(
-                  userId: widget.userId,
-                  initialTabIndex: 1,
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    );
+class _HostModeButton extends StatefulWidget {
+  const _HostModeButton();
+
+  @override
+  State<_HostModeButton> createState() => _HostModeButtonState();
+}
+
+class _HostModeButtonState extends State<_HostModeButton> {
+  final _hostService = HostService();
+  Map<String, dynamic>? _partner;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPartner();
   }
 
-  Widget _buildStatItem(String label, int count, {VoidCallback? onTap}) {
+  Future<void> _loadPartner() async {
+    final partner = await _hostService.getMyPartnerProfile();
+    if (mounted) {
+      setState(() {
+        _partner = partner;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _onTap() {
+    if (_partner == null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HostApplyScreen()),
+      ).then((_) => _loadPartner());
+    } else if (_partner!['status'] == 'approved') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => HostDashboardScreen(partner: _partner!),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HostPendingScreen()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) return const SizedBox(height: 52);
+
+    final isApproved = _partner?['status'] == 'approved';
+    final isPending = _partner != null && !isApproved;
+
     return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Text(
-            count.toString(),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      onTap: _onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        decoration: BoxDecoration(
+          gradient: isApproved
+              ? const LinearGradient(
+                  colors: [AppTheme.primaryColor, Color(0xFF8B5CF6)],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                )
+              : null,
+          color: isPending ? Colors.orange[50] : null,
+          border: Border.all(
+            color: isApproved
+                ? Colors.transparent
+                : isPending
+                ? Colors.orange
+                : AppTheme.primaryColor,
+            width: 1.5,
           ),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-        ],
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isApproved
+                  ? Icons.storefront_rounded
+                  : isPending
+                  ? Icons.hourglass_top_rounded
+                  : Icons.add_business_outlined,
+              color: isApproved
+                  ? Colors.white
+                  : isPending
+                  ? Colors.orange[700]
+                  : AppTheme.primaryColor,
+              size: 22,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isApproved
+                        ? 'Switch to Host Mode'
+                        : isPending
+                        ? 'Application Under Review'
+                        : 'Become a Host',
+                    style: GoogleFonts.inter(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: isApproved
+                          ? Colors.white
+                          : isPending
+                          ? Colors.orange[800]
+                          : AppTheme.primaryColor,
+                    ),
+                  ),
+                  Text(
+                    isApproved
+                        ? 'Manage experiences & earnings'
+                        : isPending
+                        ? 'We\'ll notify you when approved'
+                        : 'Create & sell your experiences',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: isApproved
+                          ? Colors.white70
+                          : isPending
+                          ? Colors.orange[600]
+                          : AppTheme.primaryColor.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 14,
+              color: isApproved ? Colors.white70 : Colors.grey[400],
+            ),
+          ],
+        ),
       ),
     );
   }

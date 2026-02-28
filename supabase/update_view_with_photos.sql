@@ -1,35 +1,41 @@
--- Update map_ready_tables view to include both marker_image_url and host_photo_url
+-- Drop the existing view thoroughly
 DROP VIEW IF EXISTS map_ready_tables;
 
-CREATE VIEW map_ready_tables AS
+-- Recreate properly mapping the new `tables` schema columns to what the Dart frontend expects
+CREATE OR REPLACE VIEW map_ready_tables AS
 SELECT 
     t.id,
     t.title,
     t.description,
-    t.activity_type,
-    t.venue_name,
+    t.cuisine_type as activity_type,
+    t.location_name as venue_name,
     t.venue_address,
-    t.location_lat,
-    t.location_lng,
-    t.scheduled_at,
-    t.duration_minutes,
-    t.budget_min_per_person,
-    t.budget_max_per_person,
-    t.max_capacity,
+    t.latitude as location_lat,
+    t.longitude as location_lng,
+    t.latitude,
+    t.longitude,
+    t.datetime,
+    t.datetime as scheduled_at,
+    t.datetime as scheduled_time,
+    t.max_guests as max_capacity,
     t.current_capacity,
     t.status,
-    t.goal_type,
-    t.gender_filter,
-    t.requires_approval,
-    t.ably_channel_id,
     t.marker_image_url,
+    t.price_per_person,
+    t.currency,
+    t.experience_type,
+    t.is_experience,
+    t.images,
+    t.requirements,
+    t.included_items,
+    t.verified_by_hanghut,
     
-    -- Host info
-    t.host_user_id as host_id,
+    -- Host info 
+    t.host_id,
     u.display_name as host_name,
-    u.bio as host_bio,
+    COALESCE(t.host_bio, u.bio) as host_bio,
     u.trust_score as host_trust_score,
-    up_photo.photo_url as host_photo_url,
+    COALESCE(t.host_avatar_url, u.avatar_url, up_photo.photo_url) as host_photo_url,
     
     -- Host personality traits (for matching algorithm)
     up.openness,
@@ -38,23 +44,29 @@ SELECT
     up.agreeableness,
     up.neuroticism,
     
-    -- Capacity info
-    COUNT(tm.id) FILTER (WHERE tm.status IN ('approved', 'joined', 'attended')) as member_count,
-    COUNT(tm.id) FILTER (WHERE tm.status = 'approved') as approved_count,
-    COUNT(tm.id) FILTER (WHERE tm.status = 'pending') as pending_count,
-    (t.max_capacity - t.current_capacity) as seats_left,
+    -- Capacity info 
+    COALESCE(tm_stats.member_count, 0) as member_count,
+    COALESCE(tm_stats.approved_count, 0) as approved_count,
+    COALESCE(tm_stats.pending_count, 0) as pending_count,
+    (t.max_guests - t.current_capacity) as seats_left,
     CASE 
-        WHEN t.current_capacity >= t.max_capacity THEN 'full'
-        WHEN t.current_capacity >= (t.max_capacity * 0.8) THEN 'filling_up'
+        WHEN t.current_capacity >= t.max_guests THEN 'full'
+        WHEN t.current_capacity >= (t.max_guests * 0.8) THEN 'filling_up'
         ELSE 'available'
     END as availability_state
     
 FROM tables t
-LEFT JOIN users u ON t.host_user_id = u.id
+LEFT JOIN users u ON t.host_id = u.id
 LEFT JOIN user_personality up ON u.id = up.user_id
 LEFT JOIN user_photos up_photo ON u.id = up_photo.user_id AND up_photo.is_primary = true
-LEFT JOIN table_members tm ON t.id = tm.table_id
+LEFT JOIN (
+    SELECT 
+        table_id,
+        COUNT(id) FILTER (WHERE status IN ('approved', 'joined')) as member_count,
+        COUNT(id) FILTER (WHERE status = 'approved') as approved_count,
+        COUNT(id) FILTER (WHERE status = 'pending') as pending_count
+    FROM table_members
+    GROUP BY table_id
+) tm_stats ON t.id = tm_stats.table_id
 WHERE t.status IN ('open', 'full')
-  AND t.scheduled_at > (NOW() - INTERVAL '1 hour')
-GROUP BY t.id, u.display_name, u.bio, u.trust_score, up_photo.photo_url,
-         up.openness, up.conscientiousness, up.extraversion, up.agreeableness, up.neuroticism;
+  AND t.datetime > (NOW() - INTERVAL '12 hours');

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
@@ -20,6 +21,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/core/services/app_location_service.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
@@ -50,6 +52,14 @@ void callbackDispatcher() {
 
     return Future.value(true);
   });
+}
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // If you're going to use other Firebase services in the background, such as Firestore,
+  // make sure you call `initializeApp` before using other Firebase services.
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  print("Handling a background message: ${message.messageId}");
 }
 
 Future<void> main() async {
@@ -88,6 +98,7 @@ Future<void> main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     await PushNotificationService().init();
   } catch (e) {
     print("❌ FIREBASE INIT ERROR: $e");
@@ -106,6 +117,9 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+// Global Navigator Key for Deep Linking
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -120,6 +134,7 @@ class MyApp extends StatelessWidget {
         builder: (context, themeProvider, child) {
           return MaterialApp(
             title: 'HangHut',
+            navigatorKey: navigatorKey, // Add Global Key
             debugShowCheckedModeBanner: false,
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
@@ -158,61 +173,34 @@ class _AuthGateState extends State<AuthGate> {
         final session = snapshot.hasData ? snapshot.data!.session : null;
 
         if (session != null) {
-          // Check account status FIRST before anything else
-          return FutureBuilder(
-            future: AccountStatusService.checkStatus(),
-            builder: (context, statusSnapshot) {
-              if (statusSnapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()),
-                );
-              }
-
-              final statusData = statusSnapshot.data as Map<String, dynamic>?;
-              final status = statusData?['status'] ?? 'active';
-
-              // If suspended, banned, or deleted, show account suspended screen
-              if (status == 'suspended' ||
-                  status == 'banned' ||
-                  status == 'deleted') {
-                return AccountSuspendedScreen(
-                  status: status,
-                  reason: statusData?['reason'],
-                );
-              }
-
-              // If active, check if profile exists before showing main screen
-              return FutureBuilder(
-                future: _checkProfileExists(session.user.id),
-                builder: (context, profileSnapshot) {
-                  if (profileSnapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return const Scaffold(
-                      body: Center(
-                        child: CircularProgressIndicator(color: Colors.black),
-                      ),
-                    );
-                  }
-
-                  if (profileSnapshot.hasError ||
-                      profileSnapshot.data != true) {
-                    // Profile doesn't exist - redirect to profile setup
-                    print(
-                      '⚠️ AUTH_GATE: No profile found, redirecting to setup',
-                    );
-                    return const ProfileSetupScreen();
-                  }
-
-                  return const MainNavigationScreen();
-                },
-              );
-            },
-          );
+          // Use a separate widget to hold the Future state
+          return SessionHandler(session: session);
         } else {
           return const LoginScreen();
         }
       },
     );
+  }
+}
+
+class SessionHandler extends StatefulWidget {
+  final Session session;
+
+  const SessionHandler({super.key, required this.session});
+
+  @override
+  State<SessionHandler> createState() => _SessionHandlerState();
+}
+
+class _SessionHandlerState extends State<SessionHandler> {
+  late Future<Map<String, dynamic>> _statusFuture;
+  late Future<bool> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _statusFuture = AccountStatusService.checkStatus();
+    _profileFuture = _checkProfileExists(widget.session.user.id);
   }
 
   Future<bool> _checkProfileExists(String userId) async {
@@ -231,5 +219,51 @@ class _AuthGateState extends State<AuthGate> {
       print('❌ Error checking profile: $e');
       return false;
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder(
+      future: _statusFuture,
+      builder: (context, statusSnapshot) {
+        if (statusSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final statusData = statusSnapshot.data as Map<String, dynamic>?;
+        final status = statusData?['status'] ?? 'active';
+
+        if (status == 'suspended' ||
+            status == 'banned' ||
+            status == 'deleted') {
+          return AccountSuspendedScreen(
+            status: status,
+            reason: statusData?['reason'],
+          );
+        }
+
+        return FutureBuilder(
+          future: _profileFuture,
+          builder: (context, profileSnapshot) {
+            if (profileSnapshot.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                body: Center(
+                  child: CircularProgressIndicator(color: Colors.black),
+                ),
+              );
+            }
+
+            if (profileSnapshot.hasError || profileSnapshot.data != true) {
+              print('⚠️ AUTH_GATE: No profile found, redirecting to setup');
+              return const ProfileSetupScreen();
+            }
+
+            return const MainNavigationScreen();
+          },
+        );
+      },
+    );
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
@@ -9,12 +10,21 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/home/widgets/event_attachment_card.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 
 class SocialPostCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final VoidCallback? onTap;
+  final ValueChanged<String>? onPostDeleted;
+  final ValueChanged<Map<String, dynamic>>? onPostEdited;
 
-  const SocialPostCard({super.key, required this.post, this.onTap});
+  const SocialPostCard({
+    super.key,
+    required this.post,
+    this.onTap,
+    this.onPostDeleted,
+    this.onPostEdited,
+  });
 
   @override
   State<SocialPostCard> createState() => _SocialPostCardState();
@@ -27,6 +37,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
   Map<String, dynamic>? _attachedEvent;
   bool _isLoadingEvent = false;
   late int _commentCount;
+  late bool _isBookmarked;
 
   @override
   void initState() {
@@ -34,6 +45,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
     _isLiked = widget.post['user_has_liked'] ?? false;
     _likeCount = widget.post['likes_count'] ?? 0;
     _commentCount = widget.post['comment_count'] ?? 0;
+    _isBookmarked = widget.post['user_has_bookmarked'] ?? false;
     _fetchAttachedEvent();
   }
 
@@ -73,6 +85,32 @@ class _SocialPostCardState extends State<SocialPostCard> {
     });
     // Call Service
     SocialService().togglePostLike(widget.post['id']);
+  }
+
+  void _handleBookmark() {
+    setState(() {
+      _isBookmarked = !_isBookmarked;
+    });
+    SocialService().toggleBookmark(widget.post['id']);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _isBookmarked
+              ? 'Post saved to bookmarks'
+              : 'Post removed from bookmarks',
+        ),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _handleShare() {
+    final content = widget.post['content'] as String? ?? '';
+    final userName = widget.post['user']?['display_name'] ?? 'Someone';
+    Share.share(
+      'Check out this post by $userName on HangHut:\n\n$content',
+      subject: 'Post by $userName',
+    );
   }
 
   @override
@@ -201,7 +239,53 @@ class _SocialPostCardState extends State<SocialPostCard> {
                       PopupMenuButton<String>(
                         icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
                         onSelected: (value) async {
-                          if (value == 'delete') {
+                          if (value == 'edit') {
+                            final result = await Navigator.of(context)
+                                .push<Map<String, dynamic>?>(
+                                  PageRouteBuilder(
+                                    opaque: false,
+                                    barrierDismissible: true,
+                                    barrierColor: Colors.black54,
+                                    transitionDuration: const Duration(
+                                      milliseconds: 300,
+                                    ),
+                                    reverseTransitionDuration: const Duration(
+                                      milliseconds: 250,
+                                    ),
+                                    pageBuilder:
+                                        (
+                                          context,
+                                          animation,
+                                          secondaryAnimation,
+                                        ) {
+                                          return EditPostModal(
+                                            post: widget.post,
+                                          );
+                                        },
+                                    transitionsBuilder:
+                                        (
+                                          context,
+                                          animation,
+                                          secondaryAnimation,
+                                          child,
+                                        ) {
+                                          return FadeTransition(
+                                            opacity: CurvedAnimation(
+                                              parent: animation,
+                                              curve: Curves.easeOut,
+                                            ),
+                                            child: child,
+                                          );
+                                        },
+                                  ),
+                                );
+                            if (result != null && mounted) {
+                              widget.onPostEdited?.call(result);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Post updated')),
+                              );
+                            }
+                          } else if (value == 'delete') {
                             final confirm = await showDialog<bool>(
                               context: context,
                               builder: (context) => AlertDialog(
@@ -228,21 +312,32 @@ class _SocialPostCardState extends State<SocialPostCard> {
                             );
 
                             if (confirm == true && context.mounted) {
-                              // Import SocialService at top of file
                               final success = await SocialService().deletePost(
                                 widget.post['id'],
                               );
                               if (success && context.mounted) {
+                                widget.onPostDeleted?.call(widget.post['id']);
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('Post deleted')),
                                 );
-                                // Notify parent to refresh
-                                if (widget.onTap != null) widget.onTap!();
                               }
                             }
                           }
                         },
                         itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'edit',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.edit_outlined,
+                                  color: Colors.black87,
+                                ),
+                                SizedBox(width: 8),
+                                Text('Edit Post'),
+                              ],
+                            ),
+                          ),
                           const PopupMenuItem(
                             value: 'delete',
                             child: Row(
@@ -419,6 +514,27 @@ class _SocialPostCardState extends State<SocialPostCard> {
                       },
                       color: Colors.grey[600],
                       activeColor: Colors.blueAccent,
+                    ),
+                    const Spacer(), // Push Share/Save to right
+                    // Share Button
+                    _buildActionButton(
+                      icon: Icons.share_rounded,
+                      label: '',
+                      onTap: _handleShare,
+                      color: Colors.grey[600],
+                    ),
+                    // Bookmark Button
+                    IconButton(
+                      icon: Icon(
+                        _isBookmarked
+                            ? Icons.bookmark_rounded
+                            : Icons.bookmark_border_rounded,
+                        color: _isBookmarked
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey[600],
+                      ),
+                      onPressed: _handleBookmark,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ],
                 ),

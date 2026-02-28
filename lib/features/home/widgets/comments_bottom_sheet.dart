@@ -35,6 +35,30 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     super.dispose();
   }
 
+  // Sort comments: Parents first, followed immediately by their replies (chronological)
+  List<Map<String, dynamic>> get _sortedComments {
+    final List<Map<String, dynamic>> sorted = [];
+    // Get all top-level comments
+    final parents = _comments.where((c) => c['parent_id'] == null).toList();
+
+    for (var parent in parents) {
+      sorted.add(parent);
+      // Find replies for this parent
+      final replies = _comments
+          .where((c) => c['parent_id'] == parent['id'])
+          .toList();
+      // Add replies immediately after parent
+      sorted.addAll(replies);
+    }
+
+    // Safety fallback: Add any orphans (shouldn't happen often)
+    final usedIds = sorted.map((c) => c['id']).toSet();
+    final orphans = _comments.where((c) => !usedIds.contains(c['id'])).toList();
+    sorted.addAll(orphans);
+
+    return sorted;
+  }
+
   Future<void> _loadComments() async {
     setState(() => _isLoading = true);
     try {
@@ -138,9 +162,9 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 ? _buildEmptyState()
                 : ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _comments.length,
+                    itemCount: _sortedComments.length,
                     itemBuilder: (context, index) {
-                      final comment = _comments[index];
+                      final comment = _sortedComments[index];
                       final isReply = comment['parent_id'] != null;
                       return _buildCommentCard(comment, isReply);
                     },
@@ -393,19 +417,29 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
   Widget _buildReplyInput(String parentId) {
     final controller = _replyControllers[parentId]!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Row(
       children: [
         Expanded(
           child: TextField(
             controller: controller,
+            style: TextStyle(
+              color: Theme.of(context).textTheme.bodyMedium?.color,
+            ),
             decoration: InputDecoration(
               hintText: 'Write a reply...',
-              hintStyle: TextStyle(fontSize: 14, color: Colors.grey[400]),
+              hintStyle: TextStyle(
+                fontSize: 14,
+                color: isDark ? Colors.grey[400] : Colors.grey[400],
+              ),
               filled: true,
-              fillColor: Colors.white,
+              fillColor: isDark ? Colors.grey[800] : Colors.white,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(20),
-                borderSide: BorderSide(color: Colors.grey[300]!),
+                borderSide: BorderSide(
+                  color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+                ),
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 16,
@@ -426,6 +460,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     final currentUser = SupabaseConfig.client.auth.currentUser;
     final userMetadata = currentUser?.userMetadata;
     final avatarUrl = userMetadata?['avatar_url'];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       padding: EdgeInsets.fromLTRB(
@@ -435,28 +470,42 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
         16 + MediaQuery.of(context).viewInsets.bottom,
       ),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey[200]!)),
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+          ),
+        ),
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 18,
-            backgroundColor: Colors.grey[300],
+            backgroundColor: isDark ? Colors.grey[700] : Colors.grey[300],
             backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
             child: avatarUrl == null
-                ? const Icon(Icons.person, size: 20)
+                ? Icon(
+                    Icons.person,
+                    size: 20,
+                    color: isDark ? Colors.grey[300] : Colors.grey[600],
+                  )
                 : null,
           ),
           const SizedBox(width: 12),
           Expanded(
             child: TextField(
               controller: _commentController,
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyMedium?.color,
+              ),
               decoration: InputDecoration(
                 hintText: 'Write a comment...',
-                hintStyle: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                hintStyle: TextStyle(
+                  fontSize: 14,
+                  color: isDark ? Colors.grey[400] : Colors.grey[500],
+                ),
                 filled: true,
-                fillColor: Colors.grey[100],
+                fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,

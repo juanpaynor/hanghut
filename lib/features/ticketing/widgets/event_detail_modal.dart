@@ -1,7 +1,9 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -16,6 +18,52 @@ class EventDetailModal extends StatefulWidget {
 
 class _EventDetailModalState extends State<EventDetailModal> {
   bool _isExpanded = false;
+  bool _isSoldOut = false;
+  bool _isLoadingTiers = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAvailability();
+  }
+
+  Future<void> _fetchAvailability() async {
+    try {
+      // Count ACTUAL sold tickets via RPC (bypasses RLS on tickets table)
+      // events.tickets_sold is stale and unreliable per web team guidance
+      final int actualSold = await SupabaseConfig.client.rpc(
+        'get_event_sold_count',
+        params: {'p_event_id': widget.event.id},
+      );
+
+      final int capacity = widget.event.capacity;
+      final bool eventSoldOut = actualSold >= capacity;
+
+      // Also check ticket tiers
+      final tierResponse = await SupabaseConfig.client
+          .from('ticket_tiers')
+          .select()
+          .eq('event_id', widget.event.id)
+          .eq('is_active', true);
+
+      final tiers = (tierResponse as List)
+          .map((json) => TicketTier.fromJson(json))
+          .toList();
+
+      final bool allTiersSoldOut =
+          tiers.isNotEmpty && tiers.every((t) => t.isSoldOut);
+
+      if (mounted) {
+        setState(() {
+          _isSoldOut = eventSoldOut || allTiersSoldOut;
+          _isLoadingTiers = false;
+        });
+      }
+    } catch (e) {
+      print('🎟️ ERROR fetching availability: $e');
+      if (mounted) setState(() => _isLoadingTiers = false);
+    }
+  }
 
   // Category design configurations
   static const Map<String, Map<String, dynamic>> categoryDesigns = {
@@ -358,15 +406,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
           ],
         ),
         Text(
-          widget.event.isSoldOut
-              ? 'Sold Out'
-              : '${widget.event.ticketsAvailable} tickets left',
+          _isSoldOut ? 'Sold Out' : 'Available',
           style: TextStyle(
-            color: widget.event.isSoldOut
-                ? Colors.red
-                : widget.event.isLowAvailability
-                ? Colors.orange
-                : Colors.grey[600],
+            color: _isSoldOut ? Colors.red : Colors.green[700],
             fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
@@ -473,14 +515,10 @@ class _EventDetailModalState extends State<EventDetailModal> {
       height: 52,
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: widget.event.isSoldOut ? null : _onBuyTickets,
+        onPressed: (_isLoadingTiers || _isSoldOut) ? null : _onBuyTickets,
         style: ElevatedButton.styleFrom(
-          backgroundColor: widget.event.isSoldOut
-              ? Colors.grey[300]
-              : Colors.black,
-          foregroundColor: widget.event.isSoldOut
-              ? Colors.grey[600]
-              : Colors.white,
+          backgroundColor: _isSoldOut ? Colors.grey[300] : Colors.black,
+          foregroundColor: _isSoldOut ? Colors.grey[600] : Colors.white,
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
@@ -489,7 +527,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
           disabledForegroundColor: Colors.grey[600],
         ),
         child: Text(
-          widget.event.isSoldOut ? 'Sold Out' : 'Buy Tickets',
+          _isSoldOut ? 'Sold Out' : 'Buy Tickets',
           style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,

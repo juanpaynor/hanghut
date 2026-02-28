@@ -293,8 +293,33 @@ class GeofenceEngine {
     // 1. Notify UI (if App is Open)
     _eventStreamController.add({'id': id, 'title': title});
 
-    // 2. Show Notification
-    _showNotification('You are near $title!', 'Open app to check in.');
+    // 2. Show Notification (Smart Copy)
+    String notifTitle = 'You are near $title!';
+    String notifBody = 'Open app to check in.';
+
+    try {
+      final bool isTicketHolder = event['is_user_ticket_holder'] ?? false;
+      final bool isJoined = event['is_user_joined'] ?? false;
+      final num price = event['ticket_price'] ?? 0;
+
+      if (isTicketHolder) {
+        notifTitle = "Welcome Back! 🎟️";
+        notifBody = "Show your ticket for $title at the entrance.";
+      } else if (isJoined) {
+        notifTitle = "You've Arrived! 👋";
+        notifBody = "Join your table at $title.";
+      } else if (price > 0) {
+        notifTitle = "Nearby Event! 🎫";
+        notifBody = "Tickets available from \$${price}. Tap to view.";
+      } else {
+        notifTitle = "Nearby Event! 🎉";
+        notifBody = "Check out $title happening now.";
+      }
+    } catch (e) {
+      print('⚠️ Error generating smart copy: $e');
+    }
+
+    _showNotification(notifTitle, notifBody);
   }
 
   /// Call this when app opens or background fetch runs

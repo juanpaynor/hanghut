@@ -8,12 +8,15 @@ RETURNS TRIGGER AS $$
 DECLARE
   participant_record RECORD;
   sender_name TEXT;
+  sender_photo TEXT;
   rate_limit_interval INTERVAL := '5 minutes';
 BEGIN
-  -- Get sender's display name
-  SELECT display_name INTO sender_name
-  FROM users
-  WHERE id = NEW.sender_id;
+  -- Get sender's display name AND photo
+  SELECT u.display_name, up.photo_url 
+  INTO sender_name, sender_photo
+  FROM users u
+  LEFT JOIN user_photos up ON up.user_id = u.id AND up.is_primary = true
+  WHERE u.id = NEW.sender_id;
 
   -- OPTIMIZED: Fetch all eligible participants in ONE batched query
   -- This eliminates the N+1 query problem
@@ -26,7 +29,7 @@ BEGIN
     INNER JOIN users u ON u.id = p.user_id
     WHERE p.table_id = NEW.table_id
       AND p.user_id != NEW.sender_id
-      AND p.status = 'approved'
+      AND p.status = 'confirmed'
       -- Check notification preference in JOIN (faster than separate query)
       AND (u.notification_preferences->>'chat_messages')::boolean = true
       AND u.fcm_token IS NOT NULL
@@ -39,6 +42,10 @@ BEGIN
     -- Send notification via Edge Function
     PERFORM net.http_post(
       url := 'https://rahhezqtkpvkialnduft.supabase.co/functions/v1/send-push',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || (SELECT value FROM secrets.decrypted_secrets WHERE name = 'SUPABASE_SERVICE_ROLE_KEY')
+      ),
       body := jsonb_build_object(
         'user_id', participant_record.user_id,
         'title', sender_name,
@@ -46,6 +53,7 @@ BEGIN
           WHEN LENGTH(NEW.content) > 100 THEN SUBSTRING(NEW.content, 1, 100) || '...'
           ELSE NEW.content
         END,
+        'image', sender_photo, -- Add Image URL
         'data', jsonb_build_object(
           'type', 'chat_message',
           'table_id', NEW.table_id::TEXT,

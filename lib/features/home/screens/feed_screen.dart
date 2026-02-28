@@ -28,6 +28,7 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+  late TabController _tabController;
   final ScrollController _scrollController = ScrollController();
   final SocialService _socialService = SocialService();
   final TableService _tableService = TableService();
@@ -64,11 +65,27 @@ class _FeedScreenState extends State<FeedScreen>
   @override
   void initState() {
     super.initState();
+    print('🔄 FeedScreen: initState called');
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onTabChanged);
     _scrollController.addListener(_onScroll);
     _getUserLocation();
 
     // Start listening for notifications (Realtime Red Dot)
     NotificationService().subscribeToNotifications();
+  }
+
+  @override
+  void dispose() {
+    print('🗑️ FeedScreen: dispose called');
+    _tabController.dispose();
+    _scrollController.dispose();
+    _scrollDebounce?.cancel();
+    NotificationService().unsubscribeNotifications();
+    for (var sub in _ablySubscriptions) {
+      sub.cancel();
+    }
+    super.dispose();
   }
 
   Future<void> _getUserLocation() async {
@@ -143,17 +160,6 @@ class _FeedScreenState extends State<FeedScreen>
     }
   }
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    _scrollDebounce?.cancel();
-    NotificationService().unsubscribeNotifications();
-    for (var sub in _ablySubscriptions) {
-      sub.cancel();
-    }
-    super.dispose();
-  }
-
   Future<void> _loadTrendingTables() async {
     try {
       final tables = await _tableService.getMapReadyTables(
@@ -200,6 +206,7 @@ class _FeedScreenState extends State<FeedScreen>
         useCursor: true, // Use cursor pagination
         userLat: _userPosition?.latitude,
         userLng: _userPosition?.longitude,
+        followingOnly: _tabController.index == 1,
       );
 
       if (mounted) {
@@ -237,6 +244,7 @@ class _FeedScreenState extends State<FeedScreen>
         useCursor: true,
         userLat: _userPosition?.latitude,
         userLng: _userPosition?.longitude,
+        followingOnly: _tabController.index == 1,
       );
 
       if (mounted) {
@@ -322,7 +330,9 @@ class _FeedScreenState extends State<FeedScreen>
     super.build(context); // Required for AutomaticKeepAliveClientMixin
 
     // Determine list to show
-    final postsToShow = _filteredPosts;
+    final postsToShow = _tabController.index == 0
+        ? _filteredPosts
+        : _socialPosts;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -464,98 +474,116 @@ class _FeedScreenState extends State<FeedScreen>
                         },
                       ),
                     ],
-                  ),
-
-                  // 2. Context Header
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _userPosition != null
-                                ? 'Activities Nearby'
-                                : 'Discover Activities',
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: Color.fromARGB(255, 120, 49, 227),
-                              letterSpacing: -1,
-                              height: 1.2,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Find your next activity with friends & strangers.',
-                            style: TextStyle(
-                              fontSize: 15,
-                              color: Theme.of(
-                                context,
-                              ).primaryColor, // Bright indigo
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
+                    bottom: TabBar(
+                      controller: _tabController,
+                      labelColor: Theme.of(context).primaryColor,
+                      unselectedLabelColor: Colors.grey,
+                      indicatorColor: Theme.of(context).primaryColor,
+                      indicatorSize: TabBarIndicatorSize.label,
+                      labelStyle: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
+                      tabs: const [
+                        Tab(text: 'For You'),
+                        Tab(text: 'Following'),
+                      ],
                     ),
                   ),
 
-                  // 3. Category Filter Chips (NEW)
-                  SliverToBoxAdapter(
-                    child: Container(
-                      height: 40,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        scrollDirection: Axis.horizontal,
-                        itemCount: _categories.length,
-                        separatorBuilder: (c, i) => const SizedBox(width: 8),
-                        itemBuilder: (context, index) {
-                          final category = _categories[index];
-                          final isSelected = category == _selectedCategory;
-                          return GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _selectedCategory = category;
-                              });
-                            },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
+                  // 2. Context Header (Only in For You)
+                  if (_tabController.index == 0)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _userPosition != null
+                                  ? 'Activities Nearby'
+                                  : 'Discover Activities',
+                              style: const TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: Color.fromARGB(255, 120, 49, 227),
+                                letterSpacing: -1,
+                                height: 1.2,
                               ),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? Theme.of(context).primaryColor
-                                    : Colors.grey[100],
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Find your next activity with friends & strangers.',
+                              style: TextStyle(
+                                fontSize: 15,
+                                color: Theme.of(
+                                  context,
+                                ).primaryColor, // Bright indigo
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // 3. Category Filter Chips (Only in For You)
+                  if (_tabController.index == 0)
+                    SliverToBoxAdapter(
+                      child: Container(
+                        height: 40,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _categories.length,
+                          separatorBuilder: (c, i) => const SizedBox(width: 8),
+                          itemBuilder: (context, index) {
+                            final category = _categories[index];
+                            final isSelected = category == _selectedCategory;
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedCategory = category;
+                                });
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
                                   color: isSelected
                                       ? Theme.of(context).primaryColor
-                                      : Colors.grey[300]!,
+                                      : Colors.grey[100],
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Theme.of(context).primaryColor
+                                        : Colors.grey[300]!,
+                                  ),
+                                ),
+                                child: Text(
+                                  category,
+                                  style: TextStyle(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
-                              child: Text(
-                                category,
-                                style: TextStyle(
-                                  color: isSelected
-                                      ? Colors.white
-                                      : Colors.black87,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
 
-                  // 4. Trending Carousel (NEW)
-                  if (_trendingTables.isNotEmpty &&
+                  // 4. Trending Carousel (Only in For You)
+                  if (_tabController.index == 0 &&
+                      _trendingTables.isNotEmpty &&
                       _selectedCategory != 'Discussions')
                     SliverToBoxAdapter(
                       child: Padding(
@@ -670,6 +698,19 @@ class _FeedScreenState extends State<FeedScreen>
                                   );
                                 });
                               },
+                              onPostEdited: (updatedPost) {
+                                setState(() {
+                                  final idx = _socialPosts.indexWhere(
+                                    (p) => p['id'] == updatedPost['id'],
+                                  );
+                                  if (idx >= 0) {
+                                    _socialPosts[idx] = {
+                                      ..._socialPosts[idx],
+                                      ...updatedPost,
+                                    };
+                                  }
+                                });
+                              },
                             );
                           }
 
@@ -678,7 +719,29 @@ class _FeedScreenState extends State<FeedScreen>
                               horizontal: 16,
                               vertical: 8,
                             ),
-                            child: SocialPostCard(post: post),
+                            child: SocialPostCard(
+                              post: post,
+                              onPostDeleted: (postId) {
+                                setState(() {
+                                  _socialPosts.removeWhere(
+                                    (p) => p['id'] == postId,
+                                  );
+                                });
+                              },
+                              onPostEdited: (updatedPost) {
+                                setState(() {
+                                  final idx = _socialPosts.indexWhere(
+                                    (p) => p['id'] == updatedPost['id'],
+                                  );
+                                  if (idx >= 0) {
+                                    _socialPosts[idx] = {
+                                      ..._socialPosts[idx],
+                                      ...updatedPost,
+                                    };
+                                  }
+                                });
+                              },
+                            ),
                           );
                         },
                         childCount:
@@ -732,6 +795,25 @@ class _FeedScreenState extends State<FeedScreen>
         ),
       ),
     );
+  }
+
+  void _onTabChanged() {
+    if (_tabController.indexIsChanging) {
+      // Clear posts and reload when switching tabs
+      setState(() {
+        _socialPosts = [];
+        _isLoading = true;
+        _hasMore = true;
+        _errorMessage = null;
+        _lastFetchTime = null; // Force refresh
+      });
+      _loadSocialPosts();
+    } else {
+      // Called when tab selection settles (e.g. after swipe)
+      // We handle the reload in indexIsChanging for immediate feedback,
+      // but setState update is needed to hide/show headers if not already done.
+      if (mounted) setState(() {});
+    }
   }
 
   Widget _buildThreadCreationBar() {

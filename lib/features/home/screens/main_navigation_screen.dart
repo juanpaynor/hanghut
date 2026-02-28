@@ -14,8 +14,13 @@ import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
+  final String? initialTableId; // Add this
 
-  const MainNavigationScreen({super.key, this.initialIndex = 0});
+  const MainNavigationScreen({
+    super.key,
+    this.initialIndex = 0,
+    this.initialTableId,
+  });
 
   @override
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
@@ -33,6 +38,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     _selectedIndex = widget.initialIndex;
     _setupGeofenceListener();
     WidgetsBinding.instance.addObserver(this);
+
+    // Handle Deep Link for Table
+    if (widget.initialTableId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _mapScreenKey.currentState?.showTableDetails(widget.initialTableId!);
+      });
+    }
   }
 
   @override

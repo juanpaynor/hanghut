@@ -61,42 +61,52 @@ serve(async (req) => {
             throw new Error('Invalid bank account')
         }
 
-        // 5. BALANCE CHECK (Revenue - Payouts)
-        // A. Total Revenue (Completed transactions)
-        const { data: revenueData, error: revenueError } = await supabaseClient
+        // 5. FETCH ELIGIBLE TRANSACTIONS (Accounting Reconciliation)
+        // Fetch Event Transactions
+        const { data: eventTransactions, error: eventTxError } = await supabaseClient
             .from('transactions')
-            .select('organizer_payout')
+            .select('id, organizer_payout')
             .eq('partner_id', partner.id)
             .eq('status', 'completed')
+            .is('payout_id', null)
 
-        if (revenueError) throw new Error('Failed to calculate revenue')
+        if (eventTxError) throw new Error('Failed to fetch eligible event transactions')
 
-        // Sum revenue
-        const totalRevenue = revenueData.reduce((sum, tx) => sum + (Number(tx.organizer_payout) || 0), 0)
-
-        // B. Total Payouts (Non-failed requests)
-        const { data: payoutsData, error: payoutsError } = await supabaseClient
-            .from('payouts')
-            .select('amount')
+        // Fetch Experience Transactions
+        const { data: expTransactions, error: expTxError } = await supabaseClient
+            .from('experience_transactions')
+            .select('id, host_payout')
             .eq('partner_id', partner.id)
-            .neq('status', 'failed') // Count pending, processing, completed
-            .neq('status', 'rejected')
+            .eq('status', 'completed')
+            .is('payout_id', null)
 
-        if (payoutsError) throw new Error('Failed to calculate past payouts')
+        if (expTxError) throw new Error('Failed to fetch eligible experience transactions')
 
-        // Sum payouts
-        const totalPayouts = payoutsData.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+        // 6. CALCULATE PAYOUT AMOUNT (Sweep Model)
+        // sum event earnings
+        // @ts-ignore
+        const eventSum = (eventTransactions || []).reduce((sum, tx) => sum + (Number(tx.organizer_payout) || 0), 0)
+        // sum experience earnings
+        // @ts-ignore
+        const expSum = (expTransactions || []).reduce((sum, tx) => sum + (Number(tx.host_payout) || 0), 0)
 
-        // C. Available Balance
-        const availableBalance = totalRevenue - totalPayouts
+        const calculatedAmount = eventSum + expSum;
 
-        if (availableBalance < amount) {
-            throw new Error(`Insufficient balance. Available: ${availableBalance}, Requested: ${amount}`)
+        // Validate Balance
+        if (calculatedAmount <= 0) {
+            throw new Error('No funds available for payout')
+        }
+
+        // Optional: Check if requested amount matches (or use calculated amount as truth)
+        // We will use calculatedAmount as the source of truth for the "Sweep"
+        if (amount > calculatedAmount) {
+            throw new Error(`Insufficient balance. Available: ${calculatedAmount}, Requested: ${amount}`)
         }
 
         // 6. AUTO-APPROVAL CHECK
+        // 7. CHECK AUTO-APPROVAL
         const limit = Number(partner.payout_limit) || 50000 // Default 50k
-        const isAutoApprovable = partner.auto_approve_enabled && amount <= limit
+        const isAutoApprovable = partner.auto_approve_enabled && calculatedAmount <= limit
         const initialStatus = isAutoApprovable ? 'processing' : 'pending_request'
 
         // 7. Insert Payout Record (Immutable Lock)
@@ -104,7 +114,7 @@ serve(async (req) => {
             .from('payouts')
             .insert({
                 partner_id: partner.id,
-                amount: amount,
+                amount: calculatedAmount, // Use the precise calculated sum
                 currency: 'PHP', // Defaulting to PHP for now
                 bank_name: bankAccount.bank_code, // e.g. PH_BDO
                 bank_account_number: bankAccount.account_number,
@@ -116,6 +126,39 @@ serve(async (req) => {
             .single()
 
         if (insertError) throw new Error('Failed to create payout record: ' + insertError.message)
+
+        // 9. RECONCILIATION: LINK TRANSACTIONS (CRITICAL)
+        let linkFailed = false;
+
+        const eventTxIds = (eventTransactions || []).map((tx: any) => tx.id)
+        if (eventTxIds.length > 0) {
+            const { error: linkError } = await supabaseClient
+                .from('transactions')
+                .update({ payout_id: payout.id })
+                .in('id', eventTxIds)
+
+            if (linkError) {
+                console.error('CRITICAL: Failed to link event transactions to payout', linkError)
+                linkFailed = true;
+            }
+        }
+
+        const expTxIds = (expTransactions || []).map((tx: any) => tx.id)
+        if (expTxIds.length > 0) {
+            const { error: linkError } = await supabaseClient
+                .from('experience_transactions')
+                .update({ payout_id: payout.id })
+                .in('id', expTxIds)
+
+            if (linkError) {
+                console.error('CRITICAL: Failed to link experience transactions to payout', linkError)
+                linkFailed = true;
+            }
+        }
+
+        if (linkFailed) {
+            await supabaseClient.from('payouts').update({ admin_notes: 'WARNING: Transaction linking failed. Manual reconciliation needed.' }).eq('id', payout.id)
+        }
 
         // 8. EXECUTE XENDIT PAYOUT (If Auto-Approved)
         let xenditResponse = null
@@ -184,7 +227,7 @@ serve(async (req) => {
             JSON.stringify({
                 success: true,
                 payout: payout,
-                balance_after: availableBalance - amount
+                balance_after: 0 // Sweep model always clears balance
             }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )

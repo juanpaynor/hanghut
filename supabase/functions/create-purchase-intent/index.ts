@@ -121,13 +121,37 @@ serve(async (req) => {
         if (organizerId) {
             const { data: partner } = await supabaseClient
                 .from('partners')
-                .select('custom_percentage')
+                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket')
                 .eq('id', organizerId)
                 .single()
 
             // Check if distinct custom_percentage exists (it might be 0, so check undefined/null)
             if (partner && partner.custom_percentage !== null && partner.custom_percentage !== undefined) {
                 platformFeePercentage = partner.custom_percentage
+            }
+
+            // --- PASS FEES LOGIC ---
+            if (partner && partner.pass_fees_to_customer) {
+                // Split Fee Model: Customer pays Ticket Price + Fixed Fee
+                // Organizer absorbs Percentage Fee + Processing Fee
+                const subtotal = unitPrice * quantity
+
+                // Fixed Fee (what customer pays on top of ticket price)
+                const fixedFee = (partner.fixed_fee_per_ticket || 15.00) * quantity
+
+                // Deductible Fees (calculated on BASE price, absorbed by organizer)
+                const platformFee = subtotal * (platformFeePercentage / 100)
+                const processingFee = subtotal * 0.04 // 4% of BASE PRICE (updated from 3%)
+
+                // Store calculation specifics for later use
+                // @ts-ignore
+                req.feeDetails = {
+                    passFees: true,
+                    fixedFee,
+                    platformFee,
+                    processingFee,
+                    basePrice: subtotal
+                }
             }
         }
 
@@ -201,9 +225,40 @@ serve(async (req) => {
 
         // --- UPDATE INTENT WITH PRICING & TIER INFO ---
         const subtotal = unitPrice * quantity
-        // Calculate Platform Fee (default 10% or custom)
-        const platformFee = (subtotal - discountAmount) * (platformFeePercentage / 100)
-        const totalAmount = (subtotal - discountAmount) + platformFee
+        let platformFee = (subtotal - discountAmount) * (platformFeePercentage / 100)
+        let totalAmount = (subtotal - discountAmount) + platformFee
+        let feeMetadata = {}
+
+        // Override if Pass Fees is enabled
+        // @ts-ignore
+        if (req.feeDetails?.passFees) {
+            // @ts-ignore
+            const details = req.feeDetails
+
+            // Split Fee Model: 
+            // - Customer pays: Subtotal + Fixed Fee
+            // - Organizer absorbs: Platform Fee + Processing Fee
+            // 
+            // NOTE: Even though the Total Amount (Gross) is `ticketPrice + FixedFee`,
+            // we calculate the Deductible Fees based on the **BASE Ticket Price**
+            // to match the organizer's simplified view.
+            // The Platform (HangHut) will absorb the small variance incurred by 
+            // Xendit charging on the Gross Amount.
+
+            // Total = Subtotal + Fixed Fees ONLY (what customer pays)
+            totalAmount = subtotal + details.fixedFee
+
+            // Platform Fee is what the platform earns (deducted from organizer payout)
+            platformFee = details.platformFee
+
+            feeMetadata = {
+                pass_fees: true,
+                platform_fee: details.platformFee,
+                fixed_fee: details.fixedFee,
+                processing_fee: details.processingFee,
+                base_price: subtotal
+            }
+        }
 
         console.log(`Updating Intent ${intentId}: Tier=${tierName}, Promo=${promo_code}, Total=${totalAmount}, Fee%=${platformFeePercentage}`)
 
@@ -219,7 +274,9 @@ serve(async (req) => {
                 total_amount: totalAmount,
                 pricing_note: `Tier: ${tierName}${promo_code ? ' | Promo: ' + promo_code : ''}`,
                 fee_percentage: platformFeePercentage,
-                subscribed_to_newsletter: subscribed_to_newsletter ?? false
+                subscribed_to_newsletter: subscribed_to_newsletter ?? false,
+                // @ts-ignore
+                metadata: Object.keys(feeMetadata).length > 0 ? feeMetadata : null
             })
             .eq('id', intentId)
 

@@ -17,6 +17,7 @@ class SocialService {
     String? cursor, // Cursor timestamp for cursor-based pagination
     String? cursorId, // Cursor ID for tie-breaking
     bool useCursor = true, // Default to cursor mode
+    bool followingOnly = false, // New: Filter by following
     double? userLat,
     double? userLng,
   }) async {
@@ -25,16 +26,27 @@ class SocialService {
       final String rpcName;
 
       if (useCursor) {
-        // ✅ Use Philippines-wide RPC (no H3 filtering)
-        params = {
-          'p_limit': limit + 1,
-          'p_cursor': cursor,
-          'p_cursor_id': cursorId,
-          'p_user_lat': userLat,
-          'p_user_lng': userLng,
-          // No H3 filter - Philippines-wide!
-        };
-        rpcName = 'get_philippines_feed'; // ✅ Nationwide coverage
+        if (followingOnly) {
+          // ✅ Use Following Feed RPC
+          params = {
+            'p_limit': limit + 1,
+            'p_cursor': cursor,
+            'p_cursor_id': cursorId,
+            'p_user_lat': userLat,
+            'p_user_lng': userLng,
+          };
+          rpcName = 'get_following_feed';
+        } else {
+          // ✅ Use Philippines-wide RPC (no H3 filtering)
+          params = {
+            'p_limit': limit + 1,
+            'p_cursor': cursor,
+            'p_cursor_id': cursorId,
+            'p_user_lat': userLat,
+            'p_user_lng': userLng,
+          };
+          rpcName = 'get_philippines_feed'; // ✅ Nationwide coverage
+        }
       } else {
         // Offset-based pagination (backwards compatibility with H3)
         List<String>? h3Cells;
@@ -311,6 +323,110 @@ class SocialService {
     } catch (e) {
       print('❌ Error toggling like: $e');
       return false;
+    }
+  }
+
+  /// Toggle Bookmark on a Post
+  Future<bool> toggleBookmark(String postId) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return false;
+
+      // Check if already bookmarked
+      final existing = await _client
+          .from('post_bookmarks')
+          .select()
+          .eq('post_id', postId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+      if (existing != null) {
+        // Un-bookmark
+        await _client
+            .from('post_bookmarks')
+            .delete()
+            .eq('post_id', postId)
+            .eq('user_id', userId);
+        return false;
+      } else {
+        // Bookmark
+        await _client.from('post_bookmarks').insert({
+          'post_id': postId,
+          'user_id': userId,
+        });
+        return true;
+      }
+    } catch (e) {
+      print('❌ Error toggling bookmark: $e');
+      return false;
+    }
+  }
+
+  /// Get Bookmarked Posts
+  Future<List<Map<String, dynamic>>> getBookmarkedPosts() async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return [];
+
+      final response = await _client
+          .from('post_bookmarks')
+          .select('''
+            post:posts!inner(
+              *,
+              post_likes(count),
+              comments(count)
+            )
+          ''')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      // Transform to match Feed format
+      // Note: This is a simpler fetch than the main feed, might lack user_datajoin if not careful
+      // We need to fetch user data manually or via join if we want rich cards
+      // For now, let's keep it simple or use a dedicated view/RPC if needed.
+      // Actually, let's just do a manual fetch/transform loop to match `getFeed` output structure
+      // or better, create an RPC for this too?
+      // For simplicity, let's reuse get_philippines_feed logic or similar client-side join.
+
+      // Better approach: Just use standard select with joins
+      final data = await _client
+          .from('post_bookmarks')
+          .select('''
+            created_at,
+            post:posts!inner (
+              *,
+              user:users!user_id (
+                id,
+                display_name,
+                avatar_url,
+                username
+              ),
+              post_likes (user_id),
+              comments (count)
+            )
+          ''')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      final List<Map<String, dynamic>> posts = [];
+      for (var item in data) {
+        final post = item['post'] as Map<String, dynamic>;
+        final likes = post['post_likes'] as List;
+
+        posts.add({
+          ...post,
+          'user': post['user'], // mapped correctly
+          'likes_count': likes.length,
+          'is_liked': likes.any((l) => l['user_id'] == userId),
+          'user_has_liked': likes.any((l) => l['user_id'] == userId),
+          'user_has_bookmarked': true, // Obviously
+          'comment_count': (post['comments'] as List).length,
+        });
+      }
+      return posts;
+    } catch (e) {
+      print('❌ Error getting bookmarks: $e');
+      return [];
     }
   }
 
@@ -616,8 +732,46 @@ class SocialService {
   }
 
   // -----------------------------------------------------------------------------
-  // Delete Operations
+  // Edit & Delete Operations
   // -----------------------------------------------------------------------------
+
+  /// Edit a post (only content and gif_url; images are immutable after creation)
+  Future<Map<String, dynamic>?> editPost({
+    required String postId,
+    required String content,
+    String? gifUrl,
+  }) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return null;
+
+      final updateData = <String, dynamic>{'content': content};
+
+      // Allow clearing or changing gif
+      if (gifUrl != null) {
+        updateData['gif_url'] = gifUrl;
+      }
+
+      final response = await _client
+          .from('posts')
+          .update(updateData)
+          .match({'id': postId, 'user_id': userId})
+          .select('''
+            *,
+            user:user_id (
+              id,
+              display_name,
+              avatar_url
+            )
+          ''')
+          .single();
+
+      return response;
+    } catch (e) {
+      print('❌ Error editing post: $e');
+      return null;
+    }
+  }
 
   /// Delete a post (only if user is the owner)
   Future<bool> deletePost(String postId) async {

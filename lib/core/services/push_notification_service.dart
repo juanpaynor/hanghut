@@ -1,5 +1,10 @@
+import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/notification_service.dart';
+import 'package:bitemates/main.dart'; // For navigatorKey
+import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -45,25 +50,73 @@ class PushNotificationService {
         // 5. Message Listeners
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
           print('🔔 FCM Foreground Message: ${message.notification?.title}');
-          // TODO: Integrate local notifications for robust foreground UI if needed
+
+          if (message.notification != null) {
+            NotificationService().showNotification(
+              id: message.hashCode,
+              title: message.notification!.title ?? 'New Notification',
+              body: message.notification!.body ?? '',
+              payload: message.data.toString(), // Pass data for routing on tap
+            );
+          } else if (message.data.isNotEmpty) {
+            // Data-only message
+            NotificationService().showNotification(
+              id: message.hashCode,
+              title: 'Bitemates',
+              body: 'You have a new message', // Generic fallback
+              payload: message.data.toString(),
+            );
+          }
         });
 
         FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
           print('🔔 FCM Notification Tapped: ${message.data}');
-          // TODO: Handle navigation based on data
+          handleNotificationTap(message.data);
         });
 
         // Check if app was opened from a terminated state
         RemoteMessage? initialMessage = await _fcm.getInitialMessage();
         if (initialMessage != null) {
           print('🔔 FCM Initial Message: ${initialMessage.data}');
-          // TODO: Handle navigation
+          handleNotificationTap(initialMessage.data);
         }
       } else {
         print('🔔 FCM: Permission Declined');
       }
     } catch (e) {
       print('❌ FCM Error: $e');
+    }
+  }
+
+  void handleNotificationTap(Map<String, dynamic> data) {
+    print('🔔 Handling Tap: $data');
+    if (data['type'] == 'chat_message') {
+      final tableId = data['table_id']?.toString();
+      if (tableId != null) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              channelId: 'table_$tableId',
+              tableId: tableId,
+              tableTitle: 'Chat',
+              chatType: 'table',
+            ),
+          ),
+        );
+      }
+    } else if (data['type'] == 'table_join') {
+      final tableId = data['table_id']?.toString();
+      if (tableId != null) {
+        navigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) => MainNavigationScreen(
+              initialIndex: 1, // Map Tab
+              initialTableId: tableId,
+            ),
+          ),
+          (route) => false,
+        );
+      }
     }
   }
 

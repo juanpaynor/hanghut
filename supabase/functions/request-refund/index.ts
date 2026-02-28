@@ -48,7 +48,7 @@ serve(async (req: Request) => {
             })
         }
 
-        const { intent_id, amount, reason } = await req.json()
+        const { intent_id, amount, reason, intent_type } = await req.json()
 
         if (!intent_id || !reason) {
             return new Response(JSON.stringify({ error: 'Missing intent_id or reason', code: 'MISSING_FIELD' }), {
@@ -57,30 +57,52 @@ serve(async (req: Request) => {
             })
         }
 
-        // 1. Fetch Purchase Intent & Event to verify ownership
-        // Join through partners to get the actual user_id for authorization
-        const { data: intent, error: intentError } = await supabaseClient
-            .from('purchase_intents')
-            .select('*, event:events(organizer_id, organizer:partners!organizer_id(user_id)), transactions(xendit_transaction_id, status)')
-            .eq('id', intent_id)
-            .single()
+        const isExperience = intent_type === 'experience';
+
+        // 1. Fetch Purchase Intent & Event/Experience to verify ownership
+        let intent;
+        let intentError;
+        let organizerUserId;
+        let eventOrExperienceTitle;
+
+        if (isExperience) {
+            const { data, error } = await supabaseClient
+                .from('experience_purchase_intents')
+                .select('*, experience:tables!table_id(title, host_id), transactions:experience_transactions(xendit_transaction_id, status)')
+                .eq('id', intent_id)
+                .single();
+
+            intent = data;
+            intentError = error;
+            organizerUserId = intent?.experience?.host_id;
+            eventOrExperienceTitle = intent?.experience?.title;
+        } else {
+            const { data, error } = await supabaseClient
+                .from('purchase_intents')
+                .select('*, event:events(title, organizer_id, organizer:partners!organizer_id(user_id)), transactions(xendit_transaction_id, status)')
+                .eq('id', intent_id)
+                .single();
+
+            intent = data;
+            intentError = error;
+            organizerUserId = intent?.event?.organizer?.user_id;
+            eventOrExperienceTitle = intent?.event?.title;
+        }
 
         if (intentError || !intent) {
-            return new Response(JSON.stringify({ error: 'Purchase intent not found' }), {
+            return new Response(JSON.stringify({ error: `${isExperience ? 'Experience' : 'Event'} Purchase intent not found` }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: 404,
             })
         }
 
         // 2. Authorization Check: Only Organizer can refund (unless Admin)
-        const organizerUserId = intent.event.organizer?.user_id
-
         // Check if user is admin/service_role/superuser
         const isAdmin = user.app_metadata?.role === 'admin' || user.app_metadata?.role === 'service_role' || user.user_metadata?.is_admin === true;
 
         if (organizerUserId !== user.id && !isAdmin) {
             console.error(`Auth mismatch: organizer.user_id=${organizerUserId}, caller=${user.id}`)
-            return new Response(JSON.stringify({ error: 'Unauthorized: Only event organizer can refund' }), {
+            return new Response(JSON.stringify({ error: `Unauthorized: Only ${isExperience ? 'host' : 'event organizer'} can refund` }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: 403,
             })
@@ -208,9 +230,15 @@ serve(async (req: Request) => {
                 if (fetchedMethod) {
                     console.log(`✅ Backfilled payment method: ${fetchedMethod}`);
                     // Update DB
-                    await supabaseAdmin.from('purchase_intents')
-                        .update({ payment_method: fetchedMethod })
-                        .eq('id', intent.id);
+                    if (isExperience) {
+                        await supabaseAdmin.from('experience_purchase_intents')
+                            .update({ payment_method: fetchedMethod })
+                            .eq('id', intent.id);
+                    } else {
+                        await supabaseAdmin.from('purchase_intents')
+                            .update({ payment_method: fetchedMethod })
+                            .eq('id', intent.id);
+                    }
 
                     // Update local object for email
                     intent.payment_method = fetchedMethod;
@@ -280,7 +308,8 @@ serve(async (req: Request) => {
             metadata: {
                 intent_id: intent_id,
                 user_id: user.id,
-                custom_reason: reason // Store original specific reason here
+                custom_reason: reason, // Store original specific reason here
+                intent_type: isExperience ? 'experience' : 'event'
             }
         }
 
@@ -313,13 +342,23 @@ serve(async (req: Request) => {
         // 5. Success - Update Refund Tracking
         try {
             const refundAmount = amount || intent.total_amount;
-            await supabaseAdmin
-                .from('purchase_intents')
-                .update({
-                    refunded_amount: refundAmount,
-                    refunded_at: new Date().toISOString()
-                })
-                .eq('id', intent_id)
+            if (isExperience) {
+                await supabaseAdmin
+                    .from('experience_purchase_intents')
+                    .update({
+                        refunded_amount: refundAmount,
+                        refunded_at: new Date().toISOString()
+                    })
+                    .eq('id', intent_id)
+            } else {
+                await supabaseAdmin
+                    .from('purchase_intents')
+                    .update({
+                        refunded_amount: refundAmount,
+                        refunded_at: new Date().toISOString()
+                    })
+                    .eq('id', intent_id)
+            }
             console.log(`Updated refund tracking for ${intent_id}: ${refundAmount}`)
         } catch (updateError) {
             console.error('Failed to update refund tracking:', updateError)
@@ -346,7 +385,7 @@ serve(async (req: Request) => {
                         body: JSON.stringify({
                             from: 'HangHut Refunds <support@hanghut.com>',
                             to: [recipientEmail],
-                            subject: `Refund Initiated for ${intent.event?.title || 'Your Event'} 💸`,
+                            subject: `Refund Initiated for ${eventOrExperienceTitle || 'Your Booking'} 💸`,
                             html: `
                               <div style="font-family: sans-serif; padding: 20px;">
                                 <h2>Refund Initiated</h2>
