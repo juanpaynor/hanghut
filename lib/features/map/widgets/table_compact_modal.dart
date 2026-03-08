@@ -28,6 +28,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
   List<String> _memberPhotoUrls = [];
   int _totalMembers = 0;
   int _pendingCount = 0;
+  String? _hostName;
+  String? _hostPhotoUrl;
 
   void initState() {
     super.initState();
@@ -38,6 +40,39 @@ class _TableCompactModalState extends State<TableCompactModal> {
     _checkMembershipStatus();
     _fetchMembers();
     _fetchPendingCount();
+    _fetchHostInfo();
+  }
+
+  Future<void> _fetchHostInfo() async {
+    final hostId = widget.table['host_id'];
+    if (hostId == null) return;
+
+    try {
+      final result = await SupabaseConfig.client
+          .from('users')
+          .select('display_name, user_photos(photo_url, is_primary)')
+          .eq('id', hostId)
+          .maybeSingle();
+
+      if (result != null && mounted) {
+        String? photoUrl;
+        if (result['user_photos'] != null) {
+          final photos = List<Map<String, dynamic>>.from(result['user_photos']);
+          final primary = photos.firstWhere(
+            (p) => p['is_primary'] == true,
+            orElse: () => photos.isNotEmpty ? photos.first : {},
+          );
+          if (primary.isNotEmpty) photoUrl = primary['photo_url'];
+        }
+
+        setState(() {
+          _hostName = result['display_name'];
+          _hostPhotoUrl = photoUrl;
+        });
+      }
+    } catch (e) {
+      print('❌ Error fetching host info: $e');
+    }
   }
 
   Future<void> _fetchPendingCount() async {
@@ -177,9 +212,13 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(24),
                     ),
-                    child: widget.table['image_url'] != null
+                    child:
+                        (widget.table['image_url'] != null ||
+                            widget.table['marker_image_url'] != null)
                         ? CachedNetworkImage(
-                            imageUrl: widget.table['image_url'],
+                            imageUrl:
+                                widget.table['image_url'] ??
+                                widget.table['marker_image_url'],
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Container(
                               color: Colors.grey[200],
@@ -213,7 +252,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
                               child: Icon(
                                 Icons.restaurant_menu,
                                 color: Colors.white54,
-                                size: 56,
+                                size: 48,
                               ),
                             ),
                           ),
@@ -443,11 +482,19 @@ class _TableCompactModalState extends State<TableCompactModal> {
                           child: CircleAvatar(
                             radius: 20,
                             backgroundImage:
-                                widget.table['host_photo_url'] != null
-                                ? NetworkImage(widget.table['host_photo_url'])
+                                (_hostPhotoUrl ??
+                                        widget.table['host_photo_url']) !=
+                                    null
+                                ? NetworkImage(
+                                    _hostPhotoUrl ??
+                                        widget.table['host_photo_url'],
+                                  )
                                 : null,
                             backgroundColor: Colors.grey[300],
-                            child: widget.table['host_photo_url'] == null
+                            child:
+                                (_hostPhotoUrl ??
+                                        widget.table['host_photo_url']) ==
+                                    null
                                 ? const Icon(Icons.person, color: Colors.white)
                                 : null,
                           ),
@@ -459,7 +506,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                widget.table['host_name'] ?? 'Unknown Host',
+                                _hostName ??
+                                    widget.table['host_name'] ??
+                                    'Loading...',
                                 style: const TextStyle(
                                   color: Colors.black87,
                                   fontSize: 15,
@@ -732,10 +781,30 @@ class _TableCompactModalState extends State<TableCompactModal> {
     if (mounted) {
       setState(() => _isLoading = false);
       if (result['success']) {
+        // Data Fallbacks (same as build method)
+        final venueName =
+            widget.table['venue_name'] ??
+            widget.table['title'] ??
+            widget.table['location_name'] ??
+            'Unknown Venue';
+
         Navigator.pop(context, true); // Return true to refresh
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(result['message'])));
+
+        // Open chat automatically after joining
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          enableDrag: true,
+          builder: (context) => ChatScreen(
+            channelId: 'table_${widget.table['id']}',
+            tableId: widget.table['id'],
+            tableTitle: venueName,
+          ),
+        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

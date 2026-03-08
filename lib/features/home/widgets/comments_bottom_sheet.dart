@@ -14,11 +14,27 @@ class CommentsBottomSheet extends StatefulWidget {
 
 class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   final TextEditingController _commentController = TextEditingController();
-  final Map<String, TextEditingController> _replyControllers = {};
+  final FocusNode _inputFocusNode = FocusNode();
   List<Map<String, dynamic>> _comments = [];
   bool _isLoading = true;
   bool _isPosting = false;
-  String? _replyingTo; // Comment ID we're replying to
+
+  // Reply state
+  String? _replyingToId;
+  String? _replyingToName;
+
+  // Expand/collapse state for reply threads
+  final Set<String> _expandedThreads = {};
+
+  // Available emoji reactions
+  static const List<String> _reactionEmojis = [
+    '❤️',
+    '😂',
+    '😮',
+    '😢',
+    '🔥',
+    '👏',
+  ];
 
   @override
   void initState() {
@@ -29,40 +45,32 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   @override
   void dispose() {
     _commentController.dispose();
-    for (var controller in _replyControllers.values) {
-      controller.dispose();
-    }
+    _inputFocusNode.dispose();
     super.dispose();
   }
 
-  // Sort comments: Parents first, followed immediately by their replies (chronological)
-  List<Map<String, dynamic>> get _sortedComments {
-    final List<Map<String, dynamic>> sorted = [];
-    // Get all top-level comments
-    final parents = _comments.where((c) => c['parent_id'] == null).toList();
+  // --- Data: Build thread tree ---
 
-    for (var parent in parents) {
-      sorted.add(parent);
-      // Find replies for this parent
-      final replies = _comments
-          .where((c) => c['parent_id'] == parent['id'])
-          .toList();
-      // Add replies immediately after parent
-      sorted.addAll(replies);
-    }
-
-    // Safety fallback: Add any orphans (shouldn't happen often)
-    final usedIds = sorted.map((c) => c['id']).toSet();
-    final orphans = _comments.where((c) => !usedIds.contains(c['id'])).toList();
-    sorted.addAll(orphans);
-
-    return sorted;
+  /// Group comments into parent → children map.
+  /// Returns top-level parents in chronological order.
+  List<Map<String, dynamic>> get _parentComments {
+    return _comments.where((c) => c['parent_id'] == null).toList();
   }
 
+  /// Get replies for a given parent comment.
+  List<Map<String, dynamic>> _getReplies(String parentId) {
+    return _comments.where((c) => c['parent_id'] == parentId).toList();
+  }
+
+  // --- Data: Load & Post ---
+
   Future<void> _loadComments() async {
+    final postId = widget.post['id']?.toString();
+    if (postId == null || postId.isEmpty) return;
+
     setState(() => _isLoading = true);
     try {
-      final comments = await SocialService().getComments(widget.post['id']);
+      final comments = await SocialService().getComments(postId);
       if (mounted) {
         setState(() {
           _comments = comments;
@@ -82,64 +90,152 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     setState(() => _isPosting = true);
 
     try {
+      final postId = widget.post['id']?.toString();
+      if (postId == null || postId.isEmpty) return;
+
       final comment = await SocialService().addComment(
-        postId: widget.post['id'],
+        postId: postId,
         content: text,
+        parentId: _replyingToId,
       );
 
       if (comment != null && mounted) {
-        setState(() {
-          _comments.insert(0, comment);
-          _isPosting = false;
-        });
         _commentController.clear();
+        _clearReplyState();
+        // If posting a reply, auto-expand that thread
+        if (comment['parent_id'] != null) {
+          _expandedThreads.add(comment['parent_id']);
+        }
+        _loadComments(); // Refresh to get full data with joins
       }
     } catch (e) {
       print('Error posting comment: $e');
+    } finally {
       if (mounted) setState(() => _isPosting = false);
     }
   }
 
-  Future<void> _postReply(String parentId) async {
-    final controller = _replyControllers[parentId];
-    if (controller == null) return;
+  Future<void> _toggleLike(String commentId) async {
+    // Optimistic update
+    final index = _comments.indexWhere((c) => c['id'] == commentId);
+    if (index != -1) {
+      final comment = _comments[index];
+      final wasLiked = comment['is_liked'] ?? false;
+      setState(() {
+        _comments[index] = {
+          ...comment,
+          'is_liked': !wasLiked,
+          'like_count': (comment['like_count'] ?? 0) + (wasLiked ? -1 : 1),
+        };
+      });
+    }
+    await SocialService().toggleCommentLike(commentId);
+  }
 
-    final text = controller.text.trim();
-    if (text.isEmpty) return;
-
-    try {
-      final reply = await SocialService().addComment(
-        postId: widget.post['id'],
-        content: text,
-        parentId: parentId,
+  Future<void> _toggleReaction(String commentId, String emoji) async {
+    // Optimistic update
+    final index = _comments.indexWhere((c) => c['id'] == commentId);
+    if (index != -1) {
+      final comment = Map<String, dynamic>.from(_comments[index]);
+      final reactions = Map<String, Map<String, dynamic>>.from(
+        (comment['reactions'] as Map<String, dynamic>?)?.map(
+              (k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)),
+            ) ??
+            {},
       );
 
-      if (reply != null && mounted) {
-        setState(() {
-          // Find parent and add to replies (This assumes simplistic flat list or nesting)
-          // For now, just add to the list and rely on UI to thread or re-fetch
-          // Actually, adding to _comments list is flat.
-          // Since UI iterates _comments, we should just load comments again or insert it gracefully?
-          // Adding it flatly is fine for now if UI handles threading or we just refresh.
-          // Correct implementation would insert it at right index or as nested property.
-          // Let's simplified re-fetch or add to bottom for now.
-          _comments.add(reply);
-          _replyingTo = null;
-        });
-        controller.clear();
-        _replyControllers.remove(parentId);
-        _loadComments(); // Refresh to sort correctly or handle threading
+      if (reactions.containsKey(emoji) &&
+          reactions[emoji]!['is_reacted'] == true) {
+        // Remove reaction
+        reactions[emoji]!['count'] = (reactions[emoji]!['count'] as int) - 1;
+        reactions[emoji]!['is_reacted'] = false;
+        if (reactions[emoji]!['count'] <= 0) {
+          reactions.remove(emoji);
+        }
+      } else {
+        // Add reaction
+        if (reactions.containsKey(emoji)) {
+          reactions[emoji]!['count'] = (reactions[emoji]!['count'] as int) + 1;
+          reactions[emoji]!['is_reacted'] = true;
+        } else {
+          reactions[emoji] = {'count': 1, 'is_reacted': true};
+        }
       }
-    } catch (e) {
-      print('Error posting reply: $e');
+
+      setState(() {
+        comment['reactions'] = reactions;
+        _comments[index] = comment;
+      });
     }
+
+    await SocialService().toggleCommentReaction(commentId, emoji);
   }
 
-  Future<void> _toggleLike(String commentId) async {
-    await SocialService().toggleCommentLike(commentId);
-    // Optimistic update logic could go here
-    _loadComments();
+  void _startReply(String commentId, String userName) {
+    setState(() {
+      // If the comment being replied to is itself a reply, reply to the parent instead
+      final comment = _comments.firstWhere(
+        (c) => c['id'] == commentId,
+        orElse: () => {},
+      );
+      _replyingToId = comment['parent_id'] ?? commentId;
+      _replyingToName = userName;
+    });
+    _inputFocusNode.requestFocus();
   }
+
+  void _clearReplyState() {
+    setState(() {
+      _replyingToId = null;
+      _replyingToName = null;
+    });
+  }
+
+  void _showEmojiPicker(String commentId) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'React',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: _reactionEmojis.map((emoji) {
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.pop(context);
+                    _toggleReaction(commentId, emoji);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                  ),
+                );
+              }).toList(),
+            ),
+            SizedBox(height: MediaQuery.of(context).viewPadding.bottom + 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Build ---
 
   @override
   Widget build(BuildContext context) {
@@ -147,14 +243,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       height: MediaQuery.of(context).size.height * 0.75,
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Column(
         children: [
-          // Header
           _buildHeader(),
-
-          // Comments List
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -162,16 +255,13 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 ? _buildEmptyState()
                 : ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _sortedComments.length,
+                    itemCount: _parentComments.length,
                     itemBuilder: (context, index) {
-                      final comment = _sortedComments[index];
-                      final isReply = comment['parent_id'] != null;
-                      return _buildCommentCard(comment, isReply);
+                      final parent = _parentComments[index];
+                      return _buildCommentThread(parent);
                     },
                   ),
           ),
-
-          // Input Area
           _buildInputArea(),
         ],
       ),
@@ -179,6 +269,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   }
 
   Widget _buildHeader() {
+    final commentCount = _comments.length;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -187,10 +278,10 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       child: Row(
         children: [
           const SizedBox(width: 40),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Comments',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              commentCount > 0 ? 'Comments ($commentCount)' : 'Comments',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
           ),
@@ -224,7 +315,96 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     );
   }
 
-  Widget _buildCommentCard(Map<String, dynamic> comment, bool isReply) {
+  // --- Comment Thread (Parent + Replies) ---
+
+  Widget _buildCommentThread(Map<String, dynamic> parent) {
+    final replies = _getReplies(parent['id']);
+    final isExpanded = _expandedThreads.contains(parent['id']);
+    final hasReplies = replies.isNotEmpty;
+    final showExpandButton = replies.length > 2 && !isExpanded;
+    final displayedReplies = isExpanded ? replies : replies.take(2).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Parent comment
+        _buildCommentCard(parent, isReply: false),
+
+        // Replies
+        if (hasReplies)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(color: Colors.grey[300]!, width: 2),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ...displayedReplies.map(
+                    (reply) => Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: _buildCommentCard(reply, isReply: true),
+                    ),
+                  ),
+
+                  // "View N more replies" expand button
+                  if (showExpandButton)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 16, bottom: 8),
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _expandedThreads.add(parent['id']);
+                          });
+                        },
+                        child: Text(
+                          '── View ${replies.length - 2} more ${replies.length - 2 == 1 ? 'reply' : 'replies'}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Collapse button
+                  if (isExpanded && replies.length > 2)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 16, bottom: 8),
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _expandedThreads.remove(parent['id']);
+                          });
+                        },
+                        child: Text(
+                          '── Hide replies',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // --- Single Comment Card ---
+
+  Widget _buildCommentCard(
+    Map<String, dynamic> comment, {
+    required bool isReply,
+  }) {
     final timestamp = DateTime.tryParse(comment['created_at'] ?? '');
     final timeAgo = timestamp != null ? timeago.format(timestamp) : '';
     final user = comment['user'] as Map<String, dynamic>?;
@@ -232,229 +412,255 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     final userAvatar = user?['avatar_url'] as String?;
     final isLiked = comment['is_liked'] ?? false;
     final likeCount = comment['like_count'] ?? 0;
+    final reactions =
+        (comment['reactions'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)),
+        ) ??
+        {};
+    final isOwner =
+        comment['user_id'] == SupabaseConfig.client.auth.currentUser?.id;
 
-    return Padding(
-      padding: EdgeInsets.only(left: isReply ? 48.0 : 0, bottom: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Avatar
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: Colors.grey[300],
-            backgroundImage: userAvatar != null
-                ? NetworkImage(userAvatar)
-                : null,
-            child: userAvatar == null
-                ? Text(
-                    userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+    return GestureDetector(
+      onLongPress: () => _showEmojiPicker(comment['id']),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Avatar
+            CircleAvatar(
+              radius: isReply ? 14 : 18,
+              backgroundColor: Colors.grey[300],
+              backgroundImage: userAvatar != null
+                  ? NetworkImage(userAvatar)
+                  : null,
+              child: userAvatar == null
+                  ? Text(
+                      userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
+                      style: TextStyle(
+                        fontSize: isReply ? 11 : 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 10),
+
+            // Content
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Comment bubble
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
                     ),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          userName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          comment['content'] ?? '',
+                          style: const TextStyle(fontSize: 14, height: 1.3),
+                        ),
+                      ],
+                    ),
+                  ),
 
-          // Content
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Comment bubble
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 4),
+
+                  // Emoji reaction bubbles
+                  if (reactions.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: reactions.entries.map((entry) {
+                          final emoji = entry.key;
+                          final count = entry.value['count'] as int;
+                          final isReacted = entry.value['is_reacted'] as bool;
+                          return GestureDetector(
+                            onTap: () => _toggleReaction(comment['id'], emoji),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isReacted
+                                    ? Colors.blue.withValues(alpha: 0.1)
+                                    : Colors.grey[100],
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isReacted
+                                      ? Colors.blue.withValues(alpha: 0.4)
+                                      : Colors.grey[300]!,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    emoji,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                  if (count > 1) ...[
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '$count',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: isReacted
+                                            ? Colors.blue
+                                            : Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+
+                  // Actions row
+                  Row(
                     children: [
-                      Text(
-                        userName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        comment['content'] ?? '',
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 4),
-
-                // Actions row (Like, Reply, timestamp)
-                Row(
-                  children: [
-                    const SizedBox(width: 12),
-                    Text(
-                      timeAgo,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                    const SizedBox(width: 16),
-                    GestureDetector(
-                      onTap: () => _toggleLike(comment['id']),
-                      child: Text(
-                        isLiked ? 'Liked' : 'Like',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: isLiked ? Colors.blue : Colors.grey[700],
-                        ),
-                      ),
-                    ),
-                    if (likeCount > 0) ...[
                       const SizedBox(width: 4),
-                      Icon(Icons.thumb_up, size: 12, color: Colors.blue),
-                      const SizedBox(width: 2),
                       Text(
-                        '$likeCount',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        timeAgo,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                       ),
-                    ],
-                    const SizedBox(width: 16),
-                    if (!isReply)
+                      const SizedBox(width: 16),
+
+                      // Like
                       GestureDetector(
-                        onTap: () => setState(() {
-                          _replyingTo = comment['id'];
-                          _replyControllers[comment['id']] =
-                              TextEditingController();
-                        }),
+                        onTap: () => _toggleLike(comment['id']),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              isLiked ? Icons.favorite : Icons.favorite_border,
+                              size: 14,
+                              color: isLiked ? Colors.red : Colors.grey[600],
+                            ),
+                            if (likeCount > 0) ...[
+                              const SizedBox(width: 3),
+                              Text(
+                                '$likeCount',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isLiked
+                                      ? Colors.red
+                                      : Colors.grey[600],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+
+                      // Reply
+                      GestureDetector(
+                        onTap: () => _startReply(comment['id'], userName),
                         child: Text(
                           'Reply',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: Colors.grey[700],
+                            color: Colors.grey[600],
                           ),
                         ),
                       ),
-                    // Delete option (only for comment owner)
-                    if (comment['user_id'] ==
-                        SupabaseConfig.client.auth.currentUser?.id) ...[
+
+                      // React (emoji button)
                       const SizedBox(width: 16),
                       GestureDetector(
-                        onTap: () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Delete Comment'),
-                              content: const Text(
-                                'Are you sure you want to delete this comment?',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                  ),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (confirm == true && mounted) {
-                            final success = await SocialService().deleteComment(
-                              comment['id'],
-                            );
-                            if (success && mounted) {
-                              setState(() {
-                                _comments.removeWhere(
-                                  (c) => c['id'] == comment['id'],
-                                );
-                              });
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Comment deleted'),
-                                  ),
-                                );
-                              }
-                            }
-                          }
-                        },
-                        child: Text(
-                          'Delete',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.red[400],
-                          ),
+                        onTap: () => _showEmojiPicker(comment['id']),
+                        child: Icon(
+                          Icons.add_reaction_outlined,
+                          size: 16,
+                          color: Colors.grey[500],
                         ),
                       ),
-                    ],
-                  ],
-                ),
 
-                // Reply input (if replying to this comment)
-                if (_replyingTo == comment['id'])
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: _buildReplyInput(comment['id']),
+                      // Delete (only for owner)
+                      if (isOwner) ...[
+                        const SizedBox(width: 16),
+                        GestureDetector(
+                          onTap: () => _deleteComment(comment['id']),
+                          child: Text(
+                            'Delete',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.red[400],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildReplyInput(String parentId) {
-    final controller = _replyControllers[parentId]!;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: controller,
-            style: TextStyle(
-              color: Theme.of(context).textTheme.bodyMedium?.color,
-            ),
-            decoration: InputDecoration(
-              hintText: 'Write a reply...',
-              hintStyle: TextStyle(
-                fontSize: 14,
-                color: isDark ? Colors.grey[400] : Colors.grey[400],
-              ),
-              filled: true,
-              fillColor: isDark ? Colors.grey[800] : Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(20),
-                borderSide: BorderSide(
-                  color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
-                ),
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 8,
-              ),
-            ),
+  Future<void> _deleteComment(String commentId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Comment'),
+        content: const Text('Are you sure you want to delete this comment?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
           ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.send, color: Colors.blue),
-          onPressed: () => _postReply(parentId),
-        ),
-      ],
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
     );
+
+    if (confirm == true && mounted) {
+      final success = await SocialService().deleteComment(commentId);
+      if (success && mounted) {
+        setState(() {
+          _comments.removeWhere((c) => c['id'] == commentId);
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Comment deleted')));
+      }
+    }
   }
+
+  // --- Input Area with Reply Banner ---
 
   Widget _buildInputArea() {
     final currentUser = SupabaseConfig.client.auth.currentUser;
@@ -462,72 +668,120 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     final avatarUrl = userMetadata?['avatar_url'];
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        16,
-        16,
-        16 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(
-          top: BorderSide(
-            color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Reply-to banner
+        if (_replyingToId != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: isDark ? Colors.grey[850] : Colors.grey[100],
+            child: Row(
+              children: [
+                Icon(Icons.reply, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 8),
+                Text(
+                  'Replying to ',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                ),
+                Text(
+                  _replyingToName ?? 'User',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: _clearReplyState,
+                  child: Icon(Icons.close, size: 18, color: Colors.grey[500]),
+                ),
+              ],
+            ),
+          ),
+
+        // Input
+        Container(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            12 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            border: Border(
+              top: BorderSide(
+                color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: isDark ? Colors.grey[700] : Colors.grey[300],
+                backgroundImage: avatarUrl != null
+                    ? NetworkImage(avatarUrl)
+                    : null,
+                child: avatarUrl == null
+                    ? Icon(
+                        Icons.person,
+                        size: 18,
+                        color: isDark ? Colors.grey[300] : Colors.grey[600],
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _commentController,
+                  focusNode: _inputFocusNode,
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyMedium?.color,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: _replyingToId != null
+                        ? 'Write a reply...'
+                        : 'Write a comment...',
+                    hintStyle: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? Colors.grey[400] : Colors.grey[500],
+                    ),
+                    filled: true,
+                    fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                  ),
+                  onSubmitted: (_) => _postComment(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _isPosting ? null : _postComment,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _isPosting ? Colors.grey[300] : Colors.blue,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.arrow_upward,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: isDark ? Colors.grey[700] : Colors.grey[300],
-            backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-            child: avatarUrl == null
-                ? Icon(
-                    Icons.person,
-                    size: 20,
-                    color: isDark ? Colors.grey[300] : Colors.grey[600],
-                  )
-                : null,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              controller: _commentController,
-              style: TextStyle(
-                color: Theme.of(context).textTheme.bodyMedium?.color,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Write a comment...',
-                hintStyle: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.grey[400] : Colors.grey[500],
-                ),
-                filled: true,
-                fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-              ),
-              onSubmitted: (_) => _postComment(),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: Icon(
-              Icons.send,
-              color: _isPosting ? Colors.grey : Colors.blue,
-            ),
-            onPressed: _isPosting ? null : _postComment,
-          ),
-        ],
-      ),
+      ],
     );
   }
 }

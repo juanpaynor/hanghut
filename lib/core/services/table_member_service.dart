@@ -1,4 +1,5 @@
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/notification_service.dart';
 
 class TableMemberService {
   // Join a table (sends pending request for host approval)
@@ -24,19 +25,16 @@ class TableMemberService {
           await SupabaseConfig.client
               .from('table_members')
               .update({
-                'status': 'pending',
+                'status': 'joined',
                 'requested_at': DateTime.now().toIso8601String(),
-                'approved_at': null,
-                'joined_at': null,
+                'approved_at': DateTime.now().toIso8601String(),
+                'joined_at': DateTime.now().toIso8601String(),
                 'left_at': null,
               })
               .eq('table_id', tableId)
               .eq('user_id', user.id);
 
-          return {
-            'success': true,
-            'message': 'Request sent! Waiting for host approval.',
-          };
+          return {'success': true, 'message': 'Successfully joined the table!'};
         }
 
         if (status == 'pending') {
@@ -55,7 +53,7 @@ class TableMemberService {
       // Get table info to check status and capacity
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests, title, location_name, host_id')
+          .select('status, max_guests, title, location_name, host_id, datetime')
           .eq('id', tableId)
           .single();
 
@@ -80,21 +78,26 @@ class TableMemberService {
         return {'success': false, 'message': 'This table is full'};
       }
 
-      // Add member with pending status (host must approve)
+      // Add member with joined status (bypassing host approval for now)
       await SupabaseConfig.client.from('table_members').insert({
         'table_id': tableId,
         'user_id': user.id,
         'role': 'member',
-        'status': 'pending',
-        'requested_at': DateTime.now().toIso8601String(),
+        'status': 'joined', // Changed from 'pending' to 'joined'
+        'joined_at': DateTime.now().toIso8601String(), // Set joined_at
       });
 
-      // Notification handled by database trigger (handle_table_join)
+      // Schedule a reminder notification for 30 min before event
+      if (table['datetime'] != null) {
+        NotificationService().scheduleEventReminder(
+          tableId: tableId,
+          title: table['title'] ?? 'Event',
+          venueName: table['location_name'] ?? '',
+          eventTime: DateTime.parse(table['datetime']),
+        );
+      }
 
-      return {
-        'success': true,
-        'message': 'Request sent! Waiting for host approval.',
-      };
+      return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
       print('❌ Error joining table: $e');
       return {
@@ -121,6 +124,9 @@ class TableMemberService {
           })
           .eq('table_id', tableId)
           .eq('user_id', user.id);
+
+      // Cancel any scheduled reminder
+      NotificationService().cancelEventReminder(tableId);
 
       return {'success': true, 'message': 'You have left the table'};
     } catch (e) {
@@ -150,6 +156,26 @@ class TableMemberService {
           .eq('status', 'pending');
 
       // Notification now handled by database trigger (handle_join_approval)
+
+      // Schedule a reminder for the approved user
+      try {
+        final table = await SupabaseConfig.client
+            .from('tables')
+            .select('title, location_name, datetime')
+            .eq('id', tableId)
+            .single();
+
+        if (table['datetime'] != null) {
+          NotificationService().scheduleEventReminder(
+            tableId: tableId,
+            title: table['title'] ?? 'Event',
+            venueName: table['location_name'] ?? '',
+            eventTime: DateTime.parse(table['datetime']),
+          );
+        }
+      } catch (_) {
+        // Non-critical — don't fail the approval if reminder fails
+      }
 
       return {'success': true, 'message': 'Request approved'};
     } catch (e) {

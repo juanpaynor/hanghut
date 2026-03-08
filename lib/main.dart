@@ -20,6 +20,7 @@ import 'package:bitemates/core/services/location_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/app_location_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
@@ -99,6 +100,11 @@ Future<void> main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // Initialize local notifications FIRST (required for foreground FCM)
+    await NotificationService().initialize();
+    await NotificationService().requestPermissions();
+
     await PushNotificationService().init();
   } catch (e) {
     print("❌ FIREBASE INIT ERROR: $e");

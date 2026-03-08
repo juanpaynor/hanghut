@@ -23,8 +23,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/features/splash/screens/cloud_opening_screen.dart';
-import 'package:bitemates/features/map/widgets/event_cluster_sheet.dart';
+import 'package:bitemates/features/map/widgets/map_cluster_sheet.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
+import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
+import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
+import 'package:bitemates/core/services/story_service.dart';
+import 'package:bitemates/core/services/ably_service.dart';
+import 'package:ably_flutter/ably_flutter.dart' as ably;
 
 // Filter enum for toggling between tables and events
 enum MapFilter { all, tables, events }
@@ -44,14 +49,17 @@ class MapScreenState extends State<MapScreen>
   final _tableService = TableService();
   final _matchingService = MatchingService();
   final _eventService = EventService();
+  final StoryService _storyService = StoryService();
 
   List<Map<String, dynamic>> _tables = [];
   List<Event> _events = [];
+  List<Map<String, dynamic>> _stories = [];
   Map<String, dynamic>? _currentUserData;
   Timer? _debounceTimer;
   CameraState? _lastFetchCameraState;
 
   Timer? _heartbeatTimer;
+  StreamSubscription<ably.Message>? _feedSubscription;
   int _activeUserCount = 0;
   bool _isFetching = false;
   bool _showCloudIntro = true;
@@ -79,6 +87,28 @@ class MapScreenState extends State<MapScreen>
     _getUserLocation();
     _loadCurrentUserData();
     _startHeartbeat();
+    _subscribeToFeed();
+  }
+
+  void _subscribeToFeed() {
+    _feedSubscription = AblyService().subscribeToCityFeed('philippines')?.listen((
+      message,
+    ) {
+      if (message.name == 'post_deleted' && mounted) {
+        final data = message.data;
+        if (data is Map && data['post_id'] != null) {
+          final deletedPostId = data['post_id'];
+          setState(() {
+            final initialLength = _stories.length;
+            _stories.removeWhere((story) => story['id'] == deletedPostId);
+            if (_stories.length < initialLength) {
+              // Re-fetch map markers to instantly remove the deleted story marker
+              _fetchTablesInViewport();
+            }
+          });
+        }
+      }
+    });
   }
 
   @override
@@ -86,6 +116,7 @@ class MapScreenState extends State<MapScreen>
     _debounceTimer?.cancel();
     // _popAnimationTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _feedSubscription?.cancel();
     super.dispose();
   }
 
@@ -129,7 +160,24 @@ class MapScreenState extends State<MapScreen>
         table: table,
       );
 
-      // 4. Open Modal
+      // 4. Pan camera to the table's location
+      final lat = (table['location_lat'] ?? table['latitude']) as num?;
+      final lng = (table['location_lng'] ?? table['longitude']) as num?;
+
+      if (lat != null && lng != null && _mapboxMap != null) {
+        _mapboxMap?.flyTo(
+          CameraOptions(
+            center: Point(
+              coordinates: Position(lng.toDouble(), lat.toDouble()),
+            ),
+            zoom: 16.0,
+            pitch: 50.0,
+          ),
+          MapAnimationOptions(duration: 1200),
+        );
+      }
+
+      // 5. Open Modal
       if (mounted) {
         // Center of screen for morph effect
         final size = MediaQuery.of(context).size;
@@ -517,6 +565,24 @@ class MapScreenState extends State<MapScreen>
                   onPressed: _onFocusLocationTapped,
                   child: const Icon(Icons.my_location),
                 ),
+                const SizedBox(height: 12),
+
+                // Camera/Story Button
+                FloatingActionButton(
+                  heroTag: 'map_story_camera_btn',
+                  backgroundColor: Colors.indigo,
+                  foregroundColor: Colors.white,
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const StoryCameraScreen(),
+                        fullscreenDialog: true,
+                      ),
+                    );
+                  },
+                  child: const Icon(Icons.add_a_photo),
+                ),
               ],
             ),
           ),
@@ -662,7 +728,6 @@ class MapScreenState extends State<MapScreen>
                   index != null &&
                   index is int &&
                   index < _events.length) {
-                // Convert Event to Map for Cluster Sheet
                 final event = _events[index];
                 stackedItems.add({
                   'id': event.id,
@@ -674,15 +739,17 @@ class MapScreenState extends State<MapScreen>
                   'type': 'event',
                   'original_object': event,
                 });
+              } else if (type == 'story' &&
+                  index != null &&
+                  index is int &&
+                  index < _stories.length) {
+                final story = _stories[index];
+                stackedItems.add({...story, 'type': 'story'});
               } else if (index != null &&
                   index is int &&
                   index < _tables.length) {
-                // Add Table
                 final table = _tables[index];
-                stackedItems.add({
-                  ...table,
-                  'type': 'table', // specific marker for sheet to know
-                });
+                stackedItems.add({...table, 'type': 'table'});
               }
             }
 
@@ -691,7 +758,11 @@ class MapScreenState extends State<MapScreen>
                 context: context,
                 backgroundColor: Colors.transparent,
                 isScrollControlled: true,
-                builder: (context) => EventClusterSheet(events: stackedItems),
+                builder: (context) => MapClusterSheet(
+                  items: stackedItems,
+                  currentUserData: _currentUserData,
+                  matchingService: _matchingService,
+                ),
               );
               return; // Stop processing single tap
             }
@@ -700,13 +771,15 @@ class MapScreenState extends State<MapScreen>
           // Single Marker Tap (Fallback)
           final properties =
               feature?.queriedFeature.feature['properties'] as Map?;
-          final index = properties?['index'];
+          final rawIndex = properties?['index'];
+          final index = rawIndex != null
+              ? int.tryParse(rawIndex.toString())
+              : null;
           final markerType =
               properties?['type']; // Check if it's an event marker
 
           if (markerType == 'event' &&
               index != null &&
-              index is int &&
               index < _events.length) {
             // Event marker tapped
             final event = _events[index];
@@ -718,7 +791,28 @@ class MapScreenState extends State<MapScreen>
                 builder: (context) => EventDetailModal(event: event),
               );
             }
-          } else if (index != null && index is int && index < _tables.length) {
+          } else if (markerType == 'story' &&
+              index != null &&
+              index < _stories.length) {
+            // Story marker tapped
+            final story = _stories[index];
+            if (mounted) {
+              print('📸 Opening Location Story Viewer for: ${story['id']}');
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (context) => LocationStoryViewerScreen(
+                  initialStory: story,
+                  clusterId:
+                      story['external_place_id'] ??
+                      story['event_id'] ??
+                      story['table_id'],
+                ),
+              );
+            }
+            return; // STOP processing
+          } else if (index != null && index < _tables.length) {
             // Table marker tapped
             final table = _tables[index];
             final matchData = _matchingService.calculateMatch(
@@ -750,7 +844,10 @@ class MapScreenState extends State<MapScreen>
         final feature = features.first;
         final properties =
             feature?.queriedFeature.feature['properties'] as Map?;
-        final index = properties?['index'];
+        final rawIndex = properties?['index'];
+        final index = rawIndex != null
+            ? int.tryParse(rawIndex.toString())
+            : null;
         final markerType = properties?['type'];
 
         print('🔍 Marker properties: index=$index, type=$markerType');
@@ -758,9 +855,7 @@ class MapScreenState extends State<MapScreen>
           '📊 _events.length=${_events.length}, _tables.length=${_tables.length}',
         );
 
-        if ((markerType == 'event' || markerType == 'stack') &&
-            index != null &&
-            index is int) {
+        if ((markerType == 'event' || markerType == 'stack') && index != null) {
           // Handle Event or Stack
           if (markerType == 'stack') {
             // Stack Tap -> Open Cluster Sheet
@@ -794,7 +889,11 @@ class MapScreenState extends State<MapScreen>
                 context: context,
                 backgroundColor: Colors.transparent,
                 isScrollControlled: true,
-                builder: (context) => EventClusterSheet(events: stackedItems),
+                builder: (context) => MapClusterSheet(
+                  items: stackedItems,
+                  currentUserData: _currentUserData,
+                  matchingService: _matchingService,
+                ),
               );
             }
           } else {
@@ -814,7 +913,27 @@ class MapScreenState extends State<MapScreen>
               }
             }
           }
-        } else if (index != null && index is int && index < _tables.length) {
+        } else if (markerType == 'story' &&
+            index != null &&
+            index < _stories.length) {
+          final story = _stories[index];
+          if (mounted) {
+            print('📸 Opening Location Story Viewer for: ${story['id']}');
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (context) => LocationStoryViewerScreen(
+                initialStory: story,
+                clusterId:
+                    story['external_place_id'] ??
+                    story['event_id'] ??
+                    story['table_id'],
+              ),
+            );
+          }
+          return; // STOP processing
+        } else if (index != null && index < _tables.length) {
           // Table marker tapped
           final table = _tables[index]; // Use index to get full table data
           final matchData = _matchingService.calculateMatch(
@@ -1017,11 +1136,20 @@ class MapScreenState extends State<MapScreen>
 
       // Show bottom sheet with events
       if (mounted) {
+        // Add type info for MapClusterSheet
+        final clusterItems = eventsInCluster
+            .map((t) => {...t, 'type': t['type'] ?? 'table'})
+            .toList();
+
         showModalBottomSheet(
           context: context,
           backgroundColor: Colors.transparent,
           isScrollControlled: true,
-          builder: (context) => EventClusterSheet(events: eventsInCluster),
+          builder: (context) => MapClusterSheet(
+            items: clusterItems,
+            currentUserData: _currentUserData,
+            matchingService: _matchingService,
+          ),
         );
       }
     } catch (e) {
@@ -1136,7 +1264,7 @@ class MapScreenState extends State<MapScreen>
         return;
       }
 
-      // Parallel Fetch: Get Tables and Events concurrently
+      // Parallel Fetch: Get Tables, Events, and Stories concurrently
       final results = await Future.wait([
         _tableService.getMapReadyTables(
           userLat: _currentPosition?.latitude,
@@ -1153,13 +1281,21 @@ class MapScreenState extends State<MapScreen>
           minLng: minLng,
           maxLng: maxLng,
         ),
+        _storyService.getStoriesInViewport(
+          minLat: minLat,
+          maxLat: maxLat,
+          minLng: minLng,
+          maxLng: maxLng,
+        ),
       ]);
 
       var fetchedTables = results[0] as List<Map<String, dynamic>>;
       final fetchedEvents = results[1] as List<Event>;
+      final fetchedStories = results[2] as List<Map<String, dynamic>>;
 
       print('📍 Found ${fetchedTables.length} tables in viewport');
       print('📅 Found ${fetchedEvents.length} events in viewport');
+      print('📸 Found ${fetchedStories.length} live stories in viewport');
 
       // 4. Relevance Filtering: Sort by Match Score and Cap
       if (_currentUserData != null) {
@@ -1205,27 +1341,12 @@ class MapScreenState extends State<MapScreen>
       });
       */
 
-      // DUMMY DATA FOR TESTING EXPERIENCES
-      fetchedTables.add({
-        'id': '123e4567-e89b-12d3-a456-426614174000', // Valid UUID format
-        'location_lat': 14.5547,
-        'location_lng': 121.0244, // Makati
-        'venue_name': 'Pottery Workshop',
-        'description': 'Learn to make your own mugs!',
-        'is_experience': true,
-        'experience_type': 'workshop',
-        'price_per_person': 2500,
-        'currency': 'PHP',
-        'images': [
-          'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80',
-        ],
-        'marker_image_url':
-            'https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?ixlib=rb-4.0.3&auto=format&fit=crop&w=200&q=80',
-      });
+      // DUMMY DATA FOR TESTING EXPERIENCES removed here to fix map indices
 
       setState(() {
         _tables = fetchedTables;
         _events = fetchedEvents;
+        _stories = fetchedStories;
       });
 
       // 5. Clustering & Native Layers Implementation
@@ -1295,10 +1416,12 @@ class MapScreenState extends State<MapScreen>
                 );
               }
 
+              final int imgHeight = table['is_experience'] == true ? 136 : 120;
+
               await style.addStyleImage(
                 imageId,
                 2.0,
-                MbxImage(width: 120, height: 120, data: markerImage),
+                MbxImage(width: 120, height: imgHeight, data: markerImage),
                 false,
                 [],
                 [],
@@ -1327,6 +1450,7 @@ class MapScreenState extends State<MapScreen>
             'icon_id': imageId,
             'description': table['venue_name'],
             'index': i,
+            'type': 'table',
           },
         });
       }
@@ -1479,6 +1603,107 @@ class MapScreenState extends State<MapScreen>
             },
           });
         }
+      }
+
+      // --- Parallel Marker Generation: Stories ---
+      final storiesNeedImages = _stories.where((story) {
+        final imageId = 'story_img_${story['id']}';
+        return !_addedImages.contains(imageId);
+      }).toList();
+
+      if (storiesNeedImages.isNotEmpty) {
+        print(
+          '📸 Generating ${storiesNeedImages.length} story markers in parallel...',
+        );
+        await Future.wait(
+          storiesNeedImages.map((story) async {
+            try {
+              final imageId = 'story_img_${story['id']}';
+              final markerImage = await _createStoryMarkerImage(story: story);
+
+              await style.addStyleImage(
+                imageId,
+                2.0,
+                MbxImage(width: 120, height: 120, data: markerImage),
+                false,
+                [],
+                [],
+                null,
+              );
+              _addedImages.add(imageId);
+            } catch (e) {
+              print('❌ Error generating story marker for ${story['id']}: $e');
+            }
+          }),
+        );
+      }
+
+      // Add story features
+      for (var i = 0; i < _stories.length; i++) {
+        final story = _stories[i];
+        final imageId = 'story_img_${story['id']}';
+        features.add({
+          'type': 'Feature',
+          'id': 'story_${story['id']}',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [story['longitude'], story['latitude']],
+          },
+          'properties': {
+            'icon_id': imageId,
+            'description': story['caption'] ?? 'Live Story',
+            'index': i,
+            'type': 'story',
+          },
+        });
+      }
+
+      // ─── Cross-Type Spiderfying ───
+      // Group ALL features by rounded coordinate to detect overlaps across types.
+      // Events already handle same-type overlap, so we only spiderfy when
+      // DIFFERENT types share the same location (e.g. event + table + story).
+      final Map<String, List<int>> coordGroups = {};
+      for (var i = 0; i < features.length; i++) {
+        final coords = features[i]['geometry']?['coordinates'] as List?;
+        if (coords == null || coords.length < 2) continue;
+        // Round to ~11m precision for grouping
+        final key =
+            '${(coords[1] as num).toStringAsFixed(4)},${(coords[0] as num).toStringAsFixed(4)}';
+        coordGroups.putIfAbsent(key, () => []).add(i);
+      }
+
+      // Fan out groups that have mixed types overlapping
+      for (final group in coordGroups.values) {
+        if (group.length <= 1) continue;
+
+        // Check if this group has multiple different types
+        final types = group
+            .map((i) => features[i]['properties']?['type'])
+            .toSet();
+        if (types.length <= 1)
+          continue; // Same-type overlaps handled by their own logic
+
+        // Fan them out in a circle
+        final first = features[group.first];
+        final centerCoords = first['geometry']?['coordinates'] as List;
+        final centerLng = (centerCoords[0] as num).toDouble();
+        final centerLat = (centerCoords[1] as num).toDouble();
+        const radius = 0.00025; // ~25 meters
+
+        for (var i = 0; i < group.length; i++) {
+          final angle = (2 * pi * i) / group.length;
+          final offsetLat = radius * cos(angle);
+          final offsetLng = radius * sin(angle);
+
+          features[group[i]]['geometry'] = {
+            'type': 'Point',
+            'coordinates': [centerLng + offsetLng, centerLat + offsetLat],
+          };
+        }
+
+        print(
+          '🕸️ Spiderfied ${group.length} mixed markers (${types.join(", ")})',
+        );
       }
 
       // B. Update/Create Source
@@ -1740,6 +1965,91 @@ class MapScreenState extends State<MapScreen>
     final ui.Image markerImg = await pictureRecorder.endRecording().toImage(
       size,
       totalHeight.toInt(),
+    );
+    final ByteData? byteData = await markerImg.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+
+    return byteData!.buffer.asUint8List();
+  }
+
+  // --- STORY MARKER (Round Avatar/Image with Purple Gradient Ring) ---
+  Future<Uint8List> _createStoryMarkerImage({
+    required Map<String, dynamic> story,
+  }) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    final int size = 120;
+    final double padding = 8.0;
+
+    // 1. Draw solid white background
+    final Paint bgPaint = Paint()..color = Colors.white;
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 4, bgPaint);
+
+    // 2. Draw thick purple "Stories" ring
+    final Paint ringPaint = Paint()
+      ..color = Colors.indigo.shade400
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 4, ringPaint);
+
+    // 3. Draw image content (clipped to inner circle)
+    String? imageUrl;
+
+    // First try to get the user's profile picture from the joined user_photos array
+    if (story['user_photos'] != null &&
+        (story['user_photos'] as List).isNotEmpty) {
+      imageUrl = (story['user_photos'] as List).first.toString();
+    }
+    // Fallback to avatar_url, image_url, or the story's own thumbnail/media
+    imageUrl ??=
+        story['avatar_url'] ??
+        story['image_url'] ??
+        story['thumbnail_url'] ??
+        story['media_url'];
+
+    try {
+      if (imageUrl != null) {
+        final response = await http.get(Uri.parse(imageUrl));
+        if (response.statusCode == 200) {
+          final Uint8List bytes = response.bodyBytes;
+          final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+          final ui.FrameInfo frameInfo = await codec.getNextFrame();
+          final ui.Image image = frameInfo.image;
+
+          final double imgSize = size - (padding * 2);
+
+          canvas.save();
+          canvas.clipPath(
+            Path()..addOval(
+              Rect.fromCircle(
+                center: Offset(size / 2, size / 2),
+                radius: imgSize / 2,
+              ),
+            ),
+          );
+          paintImage(
+            canvas: canvas,
+            rect: Rect.fromLTWH(padding, padding, imgSize, imgSize),
+            image: image,
+            fit: BoxFit.cover,
+          );
+          canvas.restore();
+        } else {
+          _drawPlaceholder(canvas, size, 'social');
+        }
+      } else {
+        _drawPlaceholder(canvas, size, 'social');
+      }
+    } catch (e) {
+      print('❌ Error loading story image: $e');
+      _drawPlaceholder(canvas, size, 'social');
+    }
+
+    // Convert to image
+    final ui.Image markerImg = await pictureRecorder.endRecording().toImage(
+      size,
+      size,
     );
     final ByteData? byteData = await markerImg.toByteData(
       format: ui.ImageByteFormat.png,
@@ -2268,15 +2578,70 @@ class MapScreenState extends State<MapScreen>
             );
           }
         } else {
-          final index = properties?['index'];
+          // CHECK FOR STACKED MARKERS (Overlap)
+          // If multiple markers overlap at same location, show unified picker
+          if (features.length > 1) {
+            print('📚 Stacked markers tapped! Count: ${features.length}');
+            final List<Map<String, dynamic>> stackedItems = [];
+
+            for (final stackedFeature in features) {
+              final props =
+                  stackedFeature?.queriedFeature.feature['properties'] as Map?;
+              final rawIdx = props?['index'];
+              final idx = rawIdx != null
+                  ? int.tryParse(rawIdx.toString())
+                  : null;
+              final type = props?['type'];
+
+              if (type == 'event' && idx != null && idx < _events.length) {
+                final event = _events[idx];
+                stackedItems.add({
+                  'id': event.id,
+                  'title': event.title,
+                  'datetime': event.startDatetime.toIso8601String(),
+                  'current_capacity': event.ticketsSold,
+                  'max_guests': event.capacity,
+                  'location_name': event.venueName,
+                  'type': 'event',
+                  'original_object': event,
+                });
+              } else if (type == 'story' &&
+                  idx != null &&
+                  idx < _stories.length) {
+                final story = _stories[idx];
+                stackedItems.add({...story, 'type': 'story'});
+              } else if (idx != null && idx < _tables.length) {
+                final table = _tables[idx];
+                stackedItems.add({...table, 'type': 'table'});
+              }
+            }
+
+            if (stackedItems.isNotEmpty && mounted) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (context) => MapClusterSheet(
+                  items: stackedItems,
+                  currentUserData: _currentUserData,
+                  matchingService: _matchingService,
+                ),
+              );
+              return;
+            }
+          }
+
+          // Single Marker Tap
+          final rawIndex = properties?['index'];
+          final index = rawIndex != null
+              ? int.tryParse(rawIndex.toString())
+              : null;
           final markerType = properties?['type'];
           print('🔖 Marker tapped with index: $index, type: $markerType');
 
           if (markerType == 'event' &&
               index != null &&
-              index is int &&
               index < _events.length) {
-            // Event marker tapped
             final event = _events[index];
             print('🎟️ Opening event: ${event.title}');
 
@@ -2288,7 +2653,27 @@ class MapScreenState extends State<MapScreen>
                 builder: (context) => EventDetailModal(event: event),
               );
             }
-          } else if (index != null && index is int && index < _tables.length) {
+          } else if (markerType == 'story' &&
+              index != null &&
+              index < _stories.length) {
+            final story = _stories[index];
+            if (mounted) {
+              print('📸 Opening Location Story Viewer for: ${story['id']}');
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (context) => LocationStoryViewerScreen(
+                  initialStory: story,
+                  clusterId:
+                      story['external_place_id'] ??
+                      story['event_id'] ??
+                      story['table_id'],
+                ),
+              );
+            }
+            return;
+          } else if (index != null && index < _tables.length) {
             final table = _tables[index];
             print('🍽️ Opening table: ${table['title']}');
 

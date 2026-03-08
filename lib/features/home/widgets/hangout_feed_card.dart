@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 
@@ -34,6 +35,8 @@ class HangoutFeedCard extends StatefulWidget {
 class _HangoutFeedCardState extends State<HangoutFeedCard> {
   late bool _isLiked;
   late int _likeCount;
+  String? _asyncTitle;
+  String? _asyncDescription;
 
   @override
   void initState() {
@@ -41,6 +44,34 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     _isLiked =
         widget.post['is_liked'] ?? widget.post['user_has_liked'] ?? false;
     _likeCount = widget.post['like_count'] ?? widget.post['likes_count'] ?? 0;
+    _fetchTableDetailsIfNeeded();
+  }
+
+  /// Fetch the real title/description from the `tables` row
+  /// when the post metadata doesn't have them (old posts).
+  Future<void> _fetchTableDetailsIfNeeded() async {
+    final metadata = widget.post['metadata'] as Map<String, dynamic>? ?? {};
+    final tableId = metadata['table_id'];
+
+    // Only fetch if metadata is missing title AND we have a table_id
+    if (tableId != null && metadata['title'] == null) {
+      try {
+        final result = await SupabaseConfig.client
+            .from('tables')
+            .select('title, description')
+            .eq('id', tableId)
+            .maybeSingle();
+
+        if (result != null && mounted) {
+          setState(() {
+            _asyncTitle = result['title'];
+            _asyncDescription = result['description'];
+          });
+        }
+      } catch (e) {
+        print('Error fetching table details for feed card: $e');
+      }
+    }
   }
 
   void _handleLike() {
@@ -73,6 +104,8 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     final metadata = widget.post['metadata'] as Map<String, dynamic>? ?? {};
 
     final venueName = metadata['venue_name'] ?? 'Unknown Venue';
+    final customTitle = _asyncTitle ?? metadata['title'] ?? venueName;
+    final currentDesc = _asyncDescription ?? metadata['description'];
     final activityType = metadata['activity_type'] ?? 'Hangout';
     final imageUrl = metadata['image_url'];
     final scheduledTimeStr = metadata['scheduled_time'];
@@ -105,14 +138,27 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
             padding: const EdgeInsets.all(12.0),
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundImage: user?['avatar_url'] != null
-                      ? NetworkImage(user!['avatar_url']) as ImageProvider
-                      : null,
-                  child: user?['avatar_url'] == null
-                      ? const Icon(Icons.person, size: 20)
-                      : null,
+                GestureDetector(
+                  onTap: () {
+                    if (user != null && user['id'] != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              UserProfileScreen(userId: user['id']),
+                        ),
+                      );
+                    }
+                  },
+                  child: CircleAvatar(
+                    radius: 20,
+                    backgroundImage: user?['avatar_url'] != null
+                        ? NetworkImage(user!['avatar_url']) as ImageProvider
+                        : null,
+                    child: user?['avatar_url'] == null
+                        ? const Icon(Icons.person, size: 20)
+                        : null,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -133,8 +179,8 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                           fontSize: 13,
                         ),
                       ),
-                      if (metadata['description'] != null &&
-                          (metadata['description'] as String).isNotEmpty) ...[
+                      if (currentDesc != null &&
+                          currentDesc.toString().isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Linkify(
                           onOpen: (link) async {
@@ -146,7 +192,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                               );
                             }
                           },
-                          text: metadata['description'] as String,
+                          text: currentDesc.toString(),
                           style: TextStyle(
                             color: Theme.of(
                               context,
@@ -332,23 +378,28 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(16),
-                        image:
-                            (imageUrl != null ||
-                                _getStaticMapUrl(metadata) != null)
+                        image: imageUrl != null
                             ? DecorationImage(
-                                image: imageUrl != null
-                                    ? CachedNetworkImageProvider(imageUrl)
-                                    : CachedNetworkImageProvider(
-                                        _getStaticMapUrl(metadata)!,
-                                      ),
+                                image: CachedNetworkImageProvider(imageUrl),
                                 fit: BoxFit.cover,
+                              )
+                            : null,
+                        // Beautiful elegant gradient for the invitation card
+                        gradient: imageUrl == null
+                            ? const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Color(0xFF2A0845), // Deep Purple
+                                  Color(0xFF6441A5), // Vibrant Purple
+                                ],
                               )
                             : null,
                       ),
                     ),
                   ),
                 ),
-                // Gradient Overlay (Darker at bottom for text readability)
+                // Gradient Overlay for text readability
                 IgnorePointer(
                   child: Container(
                     decoration: BoxDecoration(
@@ -358,81 +409,175 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                         end: Alignment.bottomCenter,
                         colors: [
                           Colors.transparent,
-                          Colors.black.withOpacity(0.6),
+                          Colors.black.withOpacity(0.7),
                         ],
                       ),
                     ),
                   ),
                 ),
 
-                // Center Content if no image
+                // Center Content: Beautiful Dynamic Emoji/Icon
                 if (imageUrl == null)
                   Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 40,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          venueName,
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontWeight: FontWeight.bold,
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.1),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.2),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.2),
+                                blurRadius: 20,
+                                spreadRadius: 5,
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            metadata['marker_emoji'] ??
+                                _getEmojiForActivity(activityType),
+                            style: const TextStyle(fontSize: 48),
                           ),
                         ),
                       ],
                     ),
                   ),
 
-                // Bottom Details inside image
+                // Top Left Badge (Activity Type)
+                if (imageUrl == null)
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        activityType.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 10,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Bottom Left Details
                 Positioned(
                   bottom: 12,
                   left: 12,
-                  right: 12,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  right: 100, // Leave room for Join button
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
+                      Text(
+                        customTitle,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20,
+                          shadows: [
+                            Shadow(color: Colors.black54, blurRadius: 4),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (currentDesc != null &&
+                          currentDesc.toString().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2.0, bottom: 4.0),
+                          child: Text(
+                            currentDesc,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.85),
+                              fontSize: 13,
+                              shadows: const [
+                                Shadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on,
+                            color: Colors.white.withOpacity(0.9),
+                            size: 14,
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
                               venueName,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                                shadows: [
-                                  Shadow(color: Colors.black, blurRadius: 4),
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.9),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                shadows: const [
+                                  Shadow(color: Colors.black54, blurRadius: 4),
                                 ],
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            if (scheduledTime != null)
-                              Text(
-                                DateFormat(
-                                  'h:mm a • EEE, MMM d',
-                                ).format(scheduledTime),
-                                style: TextStyle(
-                                  color: Colors.white, // Standard white
-                                  fontSize: 14,
-                                  shadows: [
-                                    Shadow(color: Colors.black, blurRadius: 4),
-                                  ],
-                                ),
+                          ),
+                        ],
+                      ),
+                      if (scheduledTime != null) ...[
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.access_time,
+                              color: Colors.white.withOpacity(0.9),
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              DateFormat(
+                                'EEE, MMM d • h:mm a',
+                              ).format(scheduledTime),
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.9),
+                                fontSize: 13,
+                                shadows: const [
+                                  Shadow(color: Colors.black54, blurRadius: 4),
+                                ],
                               ),
+                            ),
                           ],
                         ),
-                      ),
+                      ],
+                    ],
+                  ),
+                ),
 
-                      // Join Button
-                      if (metadata['status'] == 'ended')
-                        Container(
+                // Join Button
+                Positioned(
+                  bottom: 12,
+                  right: 12,
+                  child: metadata['status'] == 'ended'
+                      ? Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
                             vertical: 8,
@@ -449,29 +594,24 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                             ),
                           ),
                         )
-                      else
-                        GestureDetector(
-                          onTap: widget.onTap,
-                          child: Container(
+                      : ElevatedButton(
+                          onPressed: widget.onTap,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 8,
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: const Text(
-                              'Join',
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
+                          ),
+                          child: const Text(
+                            'Join',
+                            style: TextStyle(fontWeight: FontWeight.bold),
                           ),
                         ),
-                    ],
-                  ),
                 ),
               ],
             ),
@@ -516,27 +656,25 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     );
   }
 
-  String? _getStaticMapUrl(Map<String, dynamic> metadata) {
-    try {
-      // Temporary token from Info.plist - TODO: Move to Env config
-      const mapboxToken =
-          'sk.eyJ1Ijoiam9obmlub3BhdGluIiwiYSI6ImNtaWoyeDJ0bzBvYWIzZXIxZ3NuNGVtY2cifQ.klu_T_fIF06R96z5MGDsMw';
-
-      final lat = widget.post['latitude']; // Post table has these
-      final lng = widget.post['longitude'];
-
-      if (lat == null || lng == null) return null;
-
-      // Construct Mapbox Static Image URL
-      return 'https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/$lng,$lat,15,0,0/600x320?access_token=$mapboxToken';
-    } catch (e) {
-      print('Error generating static map URL: $e');
-      return null;
-    }
-  }
-
   String _getActivityDescription(String type) {
     return 'created an event';
+  }
+
+  String _getEmojiForActivity(String activityType) {
+    final lower = activityType.toLowerCase();
+    if (lower.contains('coffee')) return '☕';
+    if (lower.contains('drink') || lower.contains('bar')) return '🍸';
+    if (lower.contains('dine') ||
+        lower.contains('food') ||
+        lower.contains('eat'))
+      return '🍽️';
+    if (lower.contains('movie') || lower.contains('film')) return '🍿';
+    if (lower.contains('music') || lower.contains('concert')) return '🎵';
+    if (lower.contains('sport') || lower.contains('active')) return '🏃';
+    if (lower.contains('party') || lower.contains('club')) return '🪩';
+    if (lower.contains('game')) return '🎲';
+    if (lower.contains('explore') || lower.contains('walk')) return '🌆';
+    return '👋'; // Default
   }
 
   Widget _buildActionButton({

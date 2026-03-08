@@ -473,6 +473,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const SizedBox(height: 24), // Added vertical spacing
                     // Action Buttons (Only for others)
                     if (!widget.isOwnProfile) ...[
                       Row(

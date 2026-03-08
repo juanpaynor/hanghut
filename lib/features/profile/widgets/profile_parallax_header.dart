@@ -114,16 +114,16 @@ class ProfileParallaxHeader extends StatelessWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withOpacity(0.2),
-                    Colors.black.withOpacity(0.7),
+                    Colors.black.withOpacity(0.3),
+                    Colors.black.withOpacity(0.8),
                     Theme.of(context).scaffoldBackgroundColor,
                   ],
                   stops: const [
-                    0.0,
-                    0.5,
-                    0.85,
+                    0.3,
+                    0.6,
+                    0.95,
                     1.0,
-                  ], // Fade out before the edge
+                  ], // Darken the lower half more aggressively
                 ),
               ),
             ),
@@ -146,8 +146,13 @@ class ProfileParallaxHeader extends StatelessWidget {
                           letterSpacing: 2,
                           shadows: [
                             Shadow(
-                              color: Colors.black45,
+                              color: Colors.black87,
                               offset: Offset(0, 2),
+                              blurRadius: 10,
+                            ),
+                            Shadow(
+                              color: Colors.black54,
+                              offset: Offset(0, 1),
                               blurRadius: 4,
                             ),
                           ],
@@ -167,9 +172,14 @@ class ProfileParallaxHeader extends StatelessWidget {
                           letterSpacing: -1,
                           shadows: [
                             Shadow(
-                              color: Colors.black54,
+                              color: Colors.black,
                               offset: Offset(0, 4),
-                              blurRadius: 10,
+                              blurRadius: 20,
+                            ),
+                            Shadow(
+                              color: Colors.black87,
+                              offset: Offset(0, 2),
+                              blurRadius: 6,
                             ),
                           ],
                         ),

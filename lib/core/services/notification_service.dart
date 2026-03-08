@@ -5,6 +5,8 @@ import 'package:workmanager/workmanager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'dart:convert';
 
 // Top-level function for Workmanager
@@ -27,16 +29,14 @@ class NotificationService {
   Future<void> initialize() async {
     // Android Config
     const AndroidInitializationSettings androidSettings =
-        AndroidInitializationSettings(
-          '@mipmap/ic_launcher',
-        ); // Ensure icon exists
+        AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // iOS Config
+    // iOS Config — MUST be true to show alerts
     const DarwinInitializationSettings iosSettings =
         DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
         );
 
     final InitializationSettings settings = InitializationSettings(
@@ -50,8 +50,6 @@ class NotificationService {
         print('Notification tapped: ${details.payload}');
         if (details.payload != null) {
           try {
-            // Note: The payload from FCM might be a stringified map depending on how we structured it
-            // Assuming PushNotificationService passes the raw data map as a string
             final dynamic parsed = jsonDecode(details.payload!);
             if (parsed is Map<String, dynamic>) {
               PushNotificationService().handleNotificationTap(parsed);
@@ -62,6 +60,51 @@ class NotificationService {
         }
       },
     );
+
+    // Create Android notification channels
+    final androidPlugin = _notificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (androidPlugin != null) {
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'bitemates_push',
+          'Push Notifications',
+          description: 'Remote push notifications from FCM',
+          importance: Importance.max,
+        ),
+      );
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'bitemates_events',
+          'Event Reminders',
+          description: 'Scheduled reminders for upcoming events',
+          importance: Importance.high,
+        ),
+      );
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'bitemates_geofence',
+          'Nearby Events',
+          description: 'Alerts when you are near an event',
+          importance: Importance.high,
+        ),
+      );
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'bitemates_social',
+          'Social Activity',
+          description: 'Likes, comments, and join requests',
+          importance: Importance.defaultImportance,
+        ),
+      );
+    }
+
+    print('✅ NotificationService initialized');
+
+    // Initialize timezone data for scheduled notifications
+    tz_data.initializeTimeZones();
   }
 
   Future<void> requestPermissions() async {
@@ -87,22 +130,89 @@ class NotificationService {
     required String title,
     required String body,
     String? payload,
+    String channelId = 'bitemates_push',
+    String channelName = 'Push Notifications',
   }) async {
-    const AndroidNotificationDetails androidDetails =
+    final AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
-          'bitemates_channel_main',
-          'Bitemates Notifications',
-          channelDescription: 'Main channel for app notifications',
+          channelId,
+          channelName,
           importance: Importance.max,
           priority: Priority.high,
         );
 
-    const NotificationDetails details = NotificationDetails(
+    final NotificationDetails details = NotificationDetails(
       android: androidDetails,
-      iOS: DarwinNotificationDetails(),
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
     );
 
     await _notificationsPlugin.show(id, title, body, details, payload: payload);
+  }
+
+  // --- Scheduled Event Reminders ---
+
+  /// Schedule a reminder notification 30 minutes before the event.
+  /// Uses `tableId.hashCode` as the notification ID for deterministic cancellation.
+  Future<void> scheduleEventReminder({
+    required String tableId,
+    required String title,
+    required String venueName,
+    required DateTime eventTime,
+  }) async {
+    final reminderTime = eventTime.subtract(const Duration(minutes: 30));
+
+    // Don't schedule if the reminder time is already in the past
+    if (reminderTime.isBefore(DateTime.now())) {
+      print('⏰ Reminder time already passed for $title, skipping.');
+      return;
+    }
+
+    final int notifId = tableId.hashCode.abs() % 100000; // Deterministic ID
+    final scheduledDate = tz.TZDateTime.from(reminderTime, tz.local);
+
+    final AndroidNotificationDetails androidDetails =
+        const AndroidNotificationDetails(
+          'bitemates_events',
+          'Event Reminders',
+          importance: Importance.high,
+          priority: Priority.high,
+        );
+
+    final NotificationDetails details = NotificationDetails(
+      android: androidDetails,
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+    );
+
+    try {
+      await _notificationsPlugin.zonedSchedule(
+        notifId,
+        'Starting Soon! ⏰',
+        '$title at $venueName starts in 30 minutes!',
+        scheduledDate,
+        details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        matchDateTimeComponents: null,
+        payload: jsonEncode({'type': 'event_reminder', 'table_id': tableId}),
+      );
+      print('⏰ Scheduled reminder for "$title" at $reminderTime');
+    } catch (e) {
+      print('❌ Error scheduling reminder: $e');
+    }
+  }
+
+  /// Cancel a previously scheduled event reminder.
+  Future<void> cancelEventReminder(String tableId) async {
+    final int notifId = tableId.hashCode.abs() % 100000;
+    await _notificationsPlugin.cancel(notifId);
+    print('❌ Cancelled reminder for table $tableId (notif ID: $notifId)');
   }
 
   // --- Database (Supabase) Integration ---
@@ -182,7 +292,25 @@ class NotificationService {
             print('🔔 New notification received! Refreshing count...');
             _refreshUnreadCount();
 
-            // Optional: Show local notification snackbar or toast here if app is in foreground
+            // Show a local notification toast for social activity
+            try {
+              final newRecord = payload.newRecord;
+              if (newRecord != null) {
+                final title = newRecord['title'] as String? ?? 'Bitemates';
+                final body =
+                    newRecord['body'] as String? ??
+                    'You have a new notification';
+                showNotification(
+                  id: DateTime.now().millisecondsSinceEpoch % 100000,
+                  title: title,
+                  body: body,
+                  channelId: 'bitemates_social',
+                  channelName: 'Social Activity',
+                );
+              }
+            } catch (e) {
+              print('⚠️ Error showing social toast: $e');
+            }
           },
         )
         .subscribe();

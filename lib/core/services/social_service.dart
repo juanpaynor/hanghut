@@ -138,10 +138,11 @@ class SocialService {
     }
   }
 
-  /// Create a new post with up to 5 images
+  /// Create a new post with up to 5 images or 1 video
   Future<Map<String, dynamic>?> createPost({
     required String content,
     List<File>? imageFiles,
+    File? videoFile,
     String? gifUrl,
     double? latitude,
     double? longitude,
@@ -162,11 +163,11 @@ class SocialService {
       }
 
       List<String>? imageUrls;
+      String? videoUrl;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
 
       // 1. Upload Images in parallel (much faster!)
       if (imageFiles != null && imageFiles.isNotEmpty) {
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-
         // Create upload futures for all images
         final uploadFutures = imageFiles.asMap().entries.map((entry) async {
           final index = entry.key;
@@ -193,6 +194,26 @@ class SocialService {
         imageUrls = await Future.wait(uploadFutures);
       }
 
+      // 1b. Upload Video (if provided)
+      if (videoFile != null) {
+        final fileExt = videoFile.path.split('.').last;
+        final fileName = '${timestamp}_${userId}_video.$fileExt';
+        final filePath = 'posts/$fileName';
+
+        await _client.storage
+            .from('social_videos') // Using the new bucket for videos
+            .upload(
+              filePath,
+              videoFile,
+              fileOptions: const FileOptions(
+                cacheControl: '3600',
+                upsert: false,
+              ),
+            );
+
+        videoUrl = _client.storage.from('social_videos').getPublicUrl(filePath);
+      }
+
       // 2. Insert Post
       final response = await _client
           .from('posts')
@@ -206,6 +227,7 @@ class SocialService {
             'image_url': imageUrls?.isNotEmpty == true
                 ? imageUrls!.first
                 : null,
+            'video_url': videoUrl,
             'gif_url': gifUrl,
           })
           .select('''
@@ -448,6 +470,8 @@ class SocialService {
           .eq('post_id', postId)
           .order('created_at', ascending: true);
 
+      final currentUserId = _client.auth.currentUser?.id;
+
       return List<Map<String, dynamic>>.from(response).map((comment) {
         // Enrich user avatar logic (same as feed)
         final userData = comment['user'] as Map<String, dynamic>?;
@@ -466,14 +490,14 @@ class SocialService {
         }
 
         final likes = comment['comment_likes'] as List;
-        final currentUserId = _client.auth.currentUser?.id;
 
         return {
           ...comment,
           'user': {...userData ?? {}, 'avatar_url': avatarUrl},
           'like_count': likes.length,
           'is_liked': likes.any((l) => l['user_id'] == currentUserId),
-          'replies': [], // Will be populated by UI or recursive logic if needed
+          'reactions': <String, Map<String, dynamic>>{},
+          'replies': [],
         };
       }).toList();
     } catch (e) {
@@ -612,6 +636,43 @@ class SocialService {
       }
     } catch (e) {
       print('❌ Error toggling comment like: $e');
+      return false;
+    }
+  }
+
+  /// Toggle an emoji reaction on a comment.
+  /// Returns true if reaction was added, false if removed.
+  Future<bool> toggleCommentReaction(String commentId, String emoji) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return false;
+
+      final existing = await _client
+          .from('comment_reactions')
+          .select()
+          .eq('comment_id', commentId)
+          .eq('user_id', userId)
+          .eq('emoji', emoji)
+          .maybeSingle();
+
+      if (existing != null) {
+        await _client
+            .from('comment_reactions')
+            .delete()
+            .eq('comment_id', commentId)
+            .eq('user_id', userId)
+            .eq('emoji', emoji);
+        return false;
+      } else {
+        await _client.from('comment_reactions').insert({
+          'comment_id': commentId,
+          'user_id': userId,
+          'emoji': emoji,
+        });
+        return true;
+      }
+    } catch (e) {
+      print('❌ Error toggling comment reaction: $e');
       return false;
     }
   }

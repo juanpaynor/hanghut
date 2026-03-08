@@ -142,7 +142,7 @@ class ChatMessageBubble extends StatelessWidget {
                               children: [
                                 Padding(
                                   padding: EdgeInsets.only(
-                                    bottom: hasReactions ? 12.0 : 0,
+                                    bottom: hasReactions ? 6.0 : 0,
                                   ),
                                   child: Container(
                                     padding: msg['contentType'] == 'gif'
@@ -286,13 +286,11 @@ class ChatMessageBubble extends StatelessWidget {
                                                       const Icon(Icons.error),
                                             ),
                                           )
-                                        else
+                                        else if (msg['deletedAt'] != null &&
+                                            (msg['deletedForEveryone'] ||
+                                                !isMe))
                                           Text(
-                                            msg['deletedAt'] != null &&
-                                                    (msg['deletedForEveryone'] ||
-                                                        !isMe)
-                                                ? '[Message deleted]'
-                                                : '', // Handled below for non-deleted
+                                            '[Message deleted]',
                                             style: TextStyle(
                                               color: isMe
                                                   ? Colors.white
@@ -305,8 +303,8 @@ class ChatMessageBubble extends StatelessWidget {
                                               fontSize: 15,
                                               fontStyle: FontStyle.italic,
                                             ),
-                                          ),
-                                        if (msg['deletedAt'] == null)
+                                          )
+                                        else
                                           Linkify(
                                             onOpen: onOpenLink,
                                             text: msg['content'] ?? '',
@@ -332,82 +330,87 @@ class ChatMessageBubble extends StatelessWidget {
                                                   : Colors.blue,
                                             ),
                                           ),
-                                        Builder(
-                                          builder: (context) {
-                                            if (msg['content'] == null)
-                                              return const SizedBox.shrink();
-                                            final urlRegExp = RegExp(
-                                              r'https?://[^\s/$.?#].[^\s]*',
-                                              caseSensitive: false,
-                                            );
-                                            final match = urlRegExp.firstMatch(
-                                              msg['content'],
-                                            );
-                                            if (match != null) {
-                                              final url = msg['content']
-                                                  .substring(
-                                                    match.start,
-                                                    match.end,
-                                                  );
-                                              return Padding(
-                                                padding: const EdgeInsets.only(
-                                                  top: 8.0,
-                                                ),
-                                                child: AnyLinkPreview(
-                                                  link: url,
-                                                  displayDirection: UIDirection
-                                                      .uiDirectionVertical,
-                                                  showMultimedia: true,
-                                                  bodyMaxLines: 3,
-                                                  bodyTextOverflow:
-                                                      TextOverflow.ellipsis,
-                                                  titleStyle: TextStyle(
-                                                    color: isMe
-                                                        ? Colors.black87
-                                                        : Theme.of(
-                                                                context,
-                                                              ).brightness ==
-                                                              Brightness.dark
-                                                        ? Colors.white
-                                                        : Colors.black87,
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 15,
-                                                  ),
-                                                  bodyStyle: TextStyle(
-                                                    color: isMe
-                                                        ? Colors.black54
-                                                        : Theme.of(
-                                                                context,
-                                                              ).brightness ==
-                                                              Brightness.dark
-                                                        ? Colors.grey[300]
-                                                        : Colors.grey,
-                                                    fontSize: 12,
-                                                  ),
-                                                  backgroundColor: isMe
-                                                      ? Colors.white
-                                                            .withOpacity(0.9)
-                                                      : Theme.of(
-                                                              context,
-                                                            ).brightness ==
-                                                            Brightness.dark
-                                                      ? Colors.grey[800]
-                                                      : Colors.grey[200],
-                                                  placeholderWidget:
-                                                      const SizedBox.shrink(),
-                                                  errorWidget:
-                                                      const SizedBox.shrink(),
-                                                  onTap: () {
-                                                    onOpenLink(
-                                                      LinkableElement(url, url),
-                                                    );
-                                                  },
-                                                ),
+                                        if (msg['contentType'] != 'gif')
+                                          Builder(
+                                            builder: (context) {
+                                              if (msg['content'] == null)
+                                                return const SizedBox.shrink();
+                                              final urlRegExp = RegExp(
+                                                r'https?://[^\s/$.?#].[^\s]*',
+                                                caseSensitive: false,
                                               );
-                                            }
-                                            return const SizedBox.shrink();
-                                          },
-                                        ),
+                                              final match = urlRegExp
+                                                  .firstMatch(msg['content']);
+                                              if (match != null) {
+                                                final url = msg['content']
+                                                    .substring(
+                                                      match.start,
+                                                      match.end,
+                                                    );
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        top: 8.0,
+                                                      ),
+                                                  child: AnyLinkPreview(
+                                                    link: url,
+                                                    displayDirection: UIDirection
+                                                        .uiDirectionVertical,
+                                                    showMultimedia: true,
+                                                    bodyMaxLines: 3,
+                                                    bodyTextOverflow:
+                                                        TextOverflow.ellipsis,
+                                                    titleStyle: TextStyle(
+                                                      color: isMe
+                                                          ? Colors.black87
+                                                          : Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
+                                                          ? Colors.white
+                                                          : Colors.black87,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 15,
+                                                    ),
+                                                    bodyStyle: TextStyle(
+                                                      color: isMe
+                                                          ? Colors.black54
+                                                          : Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
+                                                          ? Colors.grey[300]
+                                                          : Colors.grey,
+                                                      fontSize: 12,
+                                                    ),
+                                                    backgroundColor: isMe
+                                                        ? Colors.white
+                                                              .withOpacity(0.9)
+                                                        : Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
+                                                        ? Colors.grey[800]
+                                                        : Colors.grey[200],
+                                                    placeholderWidget:
+                                                        const SizedBox.shrink(),
+                                                    errorWidget:
+                                                        const SizedBox.shrink(),
+                                                    onTap: () {
+                                                      onOpenLink(
+                                                        LinkableElement(
+                                                          url,
+                                                          url,
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                );
+                                              }
+                                              return const SizedBox.shrink();
+                                            },
+                                          ),
                                       ],
                                     ),
                                   ),

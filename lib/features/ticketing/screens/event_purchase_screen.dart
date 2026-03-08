@@ -377,14 +377,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   void _startPaymentPolling() {
     showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true, // Allow tapping outside to cancel
       builder: (_) => _ProcessingDialog(
         onCancel: () {
-          _pollingTimer?.cancel();
           Navigator.pop(context);
         },
       ),
-    );
+    ).then((_) {
+      // Cancel the timer whether they clicked 'Cancel' or tapped outside
+      _pollingTimer?.cancel();
+    });
 
     int pollCount = 0;
     _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
@@ -429,6 +431,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
       if (pollCount > 100) {
         timer.cancel();
         if (mounted) {
+          // Check if dialog is still open before popping
+          // Actually, we just pop the current route, which might be dangerous if they navigated away.
+          // A safer way is using a GlobalKey, but we will just ensure they timeout safely.
           Navigator.pop(context);
           _showTimeoutDialog();
         }
@@ -1106,20 +1111,44 @@ class _ProcessingDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 20),
-          const Text('Confirming payment...', style: TextStyle(fontSize: 16)),
-          const SizedBox(height: 8),
+          const CircularProgressIndicator(color: Colors.deepPurple),
+          const SizedBox(height: 24),
+          const Text(
+            'Waiting for Payment',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
           Text(
-            'This may take a few moments',
+            'We are waiting for Xendit to confirm your payment. This usually takes a few seconds.',
+            textAlign: TextAlign.center,
             style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: onCancel,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey[200],
+                foregroundColor: Colors.black87,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: const Text(
+                'Cancel & Go Back',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
           ),
         ],
       ),
-      actions: [TextButton(onPressed: onCancel, child: const Text('Cancel'))],
     );
   }
 }

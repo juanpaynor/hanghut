@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:collection';
 import 'package:bitemates/core/services/location_service.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:bitemates/core/services/notification_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -13,8 +13,6 @@ class GeofenceEngine {
   GeofenceEngine._internal();
 
   final LocationService _locationService = LocationService();
-  final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
 
   // Cache: List of Table Locations {id, lat, lng, title, datetime, current_capacity, max_guests}
   List<Map<String, dynamic>> _activeGeofences = [];
@@ -319,7 +317,7 @@ class GeofenceEngine {
       print('⚠️ Error generating smart copy: $e');
     }
 
-    _showNotification(notifTitle, notifBody);
+    _showGeofenceNotification(notifTitle, notifBody);
   }
 
   /// Call this when app opens or background fetch runs
@@ -453,14 +451,13 @@ class GeofenceEngine {
     }
   }
 
-  Future<void> _showNotification(String title, String body) async {
-    const androidDetails = AndroidNotificationDetails(
-      'geofence_channel',
-      'Geofence Alerts',
-      importance: Importance.high,
-      priority: Priority.high,
+  Future<void> _showGeofenceNotification(String title, String body) async {
+    await NotificationService().showNotification(
+      id: DateTime.now().millisecondsSinceEpoch % 100000,
+      title: title,
+      body: body,
+      channelId: 'bitemates_geofence',
+      channelName: 'Nearby Events',
     );
-    const details = NotificationDetails(android: androidDetails);
-    await _notificationsPlugin.show(0, title, body, details);
   }
 }

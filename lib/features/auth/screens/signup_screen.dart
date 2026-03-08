@@ -125,40 +125,6 @@ class _SignupScreenState extends State<SignupScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Logo
-                      Hero(
-                            tag: 'app_logo',
-                            child: Container(
-                              height: 80,
-                              width: 80,
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryColor,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppTheme.primaryColor.withOpacity(
-                                      0.3,
-                                    ),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Image.asset(
-                                  'assets/images/Hanghut.png',
-                                  fit: BoxFit.contain,
-                                ),
-                              ),
-                            ),
-                          )
-                          .animate()
-                          .fadeIn(duration: 600.ms)
-                          .moveY(begin: 30, end: 0),
-
-                      const SizedBox(height: 32),
-
                       // Glass Card
                       ClipRRect(
                         borderRadius: BorderRadius.circular(24),

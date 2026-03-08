@@ -42,12 +42,37 @@ class TableService {
 
       final response = await builder;
 
-      // final response = await SupabaseConfig.client
-      //     .from('map_ready_tables')
-      //     .select()
-      //     .order('scheduled_time', ascending: true);
-
       final tables = List<Map<String, dynamic>>.from(response);
+
+      // Enrich with fields not in the view
+      // The map_ready_tables view may not include marker_image_url, marker_emoji,
+      // or image_url, so fetch them from the actual tables table and merge.
+      if (tables.isNotEmpty) {
+        final ids = tables.map((t) => t['id'] as String).toList();
+        try {
+          final markerData = await SupabaseConfig.client
+              .from('tables')
+              .select('id, marker_image_url, marker_emoji, image_url')
+              .inFilter('id', ids);
+
+          final markerMap = <String, Map<String, dynamic>>{};
+          for (final m in markerData) {
+            markerMap[m['id'] as String] = m;
+          }
+
+          for (int i = 0; i < tables.length; i++) {
+            final id = tables[i]['id'] as String;
+            if (markerMap.containsKey(id)) {
+              tables[i]['marker_image_url'] ??=
+                  markerMap[id]!['marker_image_url'];
+              tables[i]['marker_emoji'] ??= markerMap[id]!['marker_emoji'];
+              tables[i]['image_url'] ??= markerMap[id]!['image_url'];
+            }
+          }
+        } catch (e) {
+          print('⚠️ Could not enrich marker data: $e');
+        }
+      }
 
       // Optional: filter by distance client-side if provided (and bounds not used, or as extra check)
       if (userLat != null && userLng != null && radiusKm != null) {
@@ -266,6 +291,7 @@ class TableService {
             'venue_address': venueAddress,
             'scheduled_time': scheduledTime.toIso8601String(),
             'activity_type': activityType,
+            'title': title ?? venueName,
             'description': description, // Pass to Feed Metadata
             'image_url': markerImageUrl ?? imageUrl,
             'marker_emoji': markerEmoji,
