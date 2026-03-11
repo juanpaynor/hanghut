@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -5,6 +7,7 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/main.dart'; // For navigatorKey
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -38,7 +41,27 @@ class PushNotificationService {
         );
 
         // 3. Get & Save Token
-        String? token = await _fcm.getToken();
+        String? token;
+
+        if (Platform.isIOS) {
+          // On iOS, we must get the APNs token first before FCM token
+          String? apnsToken = await _fcm.getAPNSToken();
+          print('🔔 APNs Token: $apnsToken');
+          if (apnsToken != null) {
+            token = await _fcm.getToken();
+          } else {
+            // Wait a bit and try again, it sometimes takes a moment
+            await Future.delayed(const Duration(seconds: 2));
+            apnsToken = await _fcm.getAPNSToken();
+            print('🔔 APNs Token (Retry): $apnsToken');
+            if (apnsToken != null) {
+              token = await _fcm.getToken();
+            }
+          }
+        } else {
+          token = await _fcm.getToken();
+        }
+
         if (token != null) {
           print('🔔 FCM Token: $token');
           await _saveTokenToSupabase(token);
@@ -56,7 +79,7 @@ class PushNotificationService {
               id: message.hashCode,
               title: message.notification!.title ?? 'New Notification',
               body: message.notification!.body ?? '',
-              payload: message.data.toString(), // Pass data for routing on tap
+              payload: jsonEncode(message.data), // Pass data for routing on tap
             );
           } else if (message.data.isNotEmpty) {
             // Data-only message
@@ -64,7 +87,7 @@ class PushNotificationService {
               id: message.hashCode,
               title: 'Bitemates',
               body: 'You have a new message', // Generic fallback
-              payload: message.data.toString(),
+              payload: jsonEncode(message.data),
             );
           }
         });
@@ -88,21 +111,44 @@ class PushNotificationService {
     }
   }
 
-  void handleNotificationTap(Map<String, dynamic> data) {
+  Future<void> handleNotificationTap(Map<String, dynamic> data) async {
     print('🔔 Handling Tap: $data');
-    if (data['type'] == 'chat_message') {
-      final tableId = data['table_id']?.toString();
+    if (data['type'] == 'chat_message' || data['type'] == 'chat') {
+      final String chatType = data['chat_type'] ?? 'table';
+      var tableId =
+          data['table_id']?.toString() ?? data['chat_id']?.toString();
+
       if (tableId != null) {
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => ChatScreen(
-              channelId: 'table_$tableId',
-              tableId: tableId,
-              tableTitle: 'Chat',
-              chatType: 'table',
+        String channelId = '${chatType}_$tableId';
+        if (chatType == 'dm' || chatType == 'direct') {
+          // For DM push notifications, tableId IS the direct_chats.id (confirmed from schema).
+          // No extra DB lookups needed.
+          channelId = tableId!.startsWith('direct_')
+              ? tableId
+              : 'direct_$tableId';
+        } else if (chatType == 'trip') {
+          // Provide basic fallback for Trip Group name until it loads inside ChatScreen
+          channelId = data['ably_channel_id'] ?? channelId;
+        }
+
+        // Normalize 'direct' -> 'dm' so ChatScreen queries the right tables
+        final normalizedChatType = (chatType == 'direct') ? 'dm' : chatType;
+
+        final navContext = navigatorKey.currentContext;
+        if (navContext != null) {
+          showModalBottomSheet(
+            context: navContext,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            enableDrag: true,
+            builder: (context) => ChatScreen(
+              channelId: channelId,
+              tableId: tableId!,
+              tableTitle: data['sender_name'] ?? 'Chat',
+              chatType: normalizedChatType,
             ),
-          ),
-        );
+          );
+        }
       }
     } else if (data['type'] == 'table_join') {
       final tableId = data['table_id']?.toString();

@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/ticketing/screens/ticket_success_screen.dart';
 import 'package:bitemates/core/services/event_service.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
+import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
 
 class EventPurchaseScreen extends StatefulWidget {
@@ -46,6 +48,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
+  String _completePhoneNumber = '';
   final _formKey = GlobalKey<FormState>();
 
   @override
@@ -148,17 +151,17 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
         // Pre-fill email from Auth
         _emailController.text = user.email ?? '';
 
-        // Fetch profile for name/phone
+        // Fetch profile for name
         final data = await SupabaseConfig.client
             .from('users')
-            .select('display_name, phone')
+            .select('display_name')
             .eq('id', user.id)
             .single();
 
         if (mounted) {
           setState(() {
             _nameController.text = data['display_name'] ?? '';
-            if (data['phone'] != null) _phoneController.text = data['phone'];
+            // Phone number must be entered manually since we don't store it in users table
           });
         }
       } catch (e) {
@@ -268,7 +271,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
     final guestDetails = {
       'name': _nameController.text.trim(),
       'email': _emailController.text.trim(),
-      'phone': _phoneController.text.trim(),
+      'phone': _completePhoneNumber.isNotEmpty
+          ? _completePhoneNumber
+          : _phoneController.text.trim(),
     };
 
     final body = {
@@ -588,17 +593,43 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
                           : (!value.contains('@') ? 'Invalid email' : null),
                     ),
                     const SizedBox(height: 16),
-                    TextFormField(
+                    IntlPhoneField(
                       controller: _phoneController,
-                      keyboardType: TextInputType.phone,
                       decoration: const InputDecoration(
                         labelText: 'Phone Number',
                         border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.phone_outlined),
-                        hintText: '+63',
                       ),
-                      validator: (value) =>
-                          value == null || value.isEmpty ? 'Required' : null,
+                      initialCountryCode: 'PH',
+                      dropdownIconPosition: IconPosition.trailing,
+                      flagsButtonPadding: const EdgeInsets.only(left: 8),
+                      dropdownTextStyle: const TextStyle(fontSize: 16),
+                      pickerDialogStyle: PickerDialogStyle(
+                        backgroundColor: Colors.white,
+                        countryCodeStyle: const TextStyle(
+                          color: Colors.black54,
+                        ),
+                        countryNameStyle: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 16,
+                        ),
+                        searchFieldInputDecoration: InputDecoration(
+                          hintText: 'Search country',
+                          hintStyle: const TextStyle(color: Colors.black38),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: Colors.black54,
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[100],
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      onChanged: (phone) {
+                        _completePhoneNumber = phone.completeNumber;
+                      },
                     ),
 
                     const SizedBox(height: 32),
@@ -668,7 +699,11 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.black,
                             foregroundColor: Colors.white,
-                            fixedSize: const Size.fromHeight(48),
+                            minimumSize: const Size(88, 48),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
                           ),
                           child: _isCheckingPromo
                               ? const SizedBox(

@@ -71,6 +71,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
               'created_at',
               DateTime.now()
                   .subtract(const Duration(hours: 24))
+                  .toUtc()
                   .toIso8601String(),
             )
             .order('created_at', ascending: false);
@@ -93,6 +94,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
                 'created_at',
                 DateTime.now()
                     .subtract(const Duration(hours: 24))
+                    .toUtc()
                     .toIso8601String(),
               )
               .gte('latitude', (lat as num).toDouble() - 0.001)
@@ -185,7 +187,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
 
       final countsFuture = Supabase.instance.client
           .from('posts')
-          .select('id, like_count, comment_count')
+          .select('id, post_likes(count), comments(count)')
           .inFilter('id', postIds);
 
       final results = await Future.wait([likesFuture, countsFuture]);
@@ -206,8 +208,16 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
             );
 
             if (countInfo != null) {
-              story['_likeCount'] = countInfo['like_count'] ?? 0;
-              story['_commentCount'] = countInfo['comment_count'] ?? 0;
+              final likesList = countInfo['post_likes'] as List?;
+              final commentsList = countInfo['comments'] as List?;
+
+              story['_likeCount'] = likesList != null && likesList.isNotEmpty
+                  ? likesList[0]['count'] ?? 0
+                  : 0;
+              story['_commentCount'] =
+                  commentsList != null && commentsList.isNotEmpty
+                  ? commentsList[0]['count'] ?? 0
+                  : 0;
             } else {
               story['_likeCount'] = 0;
               story['_commentCount'] = 0;
@@ -301,8 +311,12 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
           final author = Map<String, dynamic>.from(
             story['users'] ??
                 {
-                  'display_name': story['display_name'] ?? story['author_name'],
-                  'avatar_url': story['avatar_url'],
+                  'display_name':
+                      story['display_name'] ??
+                      story['author_name'] ??
+                      'Someone',
+                  'avatar_url':
+                      story['avatar_url'] ?? story['author_avatar_url'],
                 },
           );
           final bool isCurrentPage = index == _currentIndex;
@@ -326,6 +340,8 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
                     Supabase.instance.client.auth.currentUser?.id
                 ? () => _deleteStory(index)
                 : null,
+            storyIndex: index,
+            totalStories: _stories.length,
           );
         },
       ),
@@ -341,6 +357,8 @@ class _StoryItem extends StatefulWidget {
   final VoidCallback onLike;
   final VoidCallback onComment;
   final VoidCallback? onDelete;
+  final int storyIndex;
+  final int totalStories;
 
   const _StoryItem({
     Key? key,
@@ -351,6 +369,8 @@ class _StoryItem extends StatefulWidget {
     required this.onLike,
     required this.onComment,
     this.onDelete,
+    required this.storyIndex,
+    required this.totalStories,
   }) : super(key: key);
 
   @override
@@ -400,6 +420,17 @@ class _StoryItemState extends State<_StoryItem> {
   void dispose() {
     _videoController?.dispose();
     super.dispose();
+  }
+
+  String _formatTimeAgo(String? timestamp) {
+    if (timestamp == null) return '';
+    final date = DateTime.parse(timestamp);
+    final diff = DateTime.now().toUtc().difference(date);
+
+    if (diff.inDays > 0) return '${diff.inDays}d ago';
+    if (diff.inHours > 0) return '${diff.inHours}h ago';
+    if (diff.inMinutes > 0) return '${diff.inMinutes}m ago';
+    return 'Just now';
   }
 
   @override
@@ -452,72 +483,124 @@ class _StoryItemState extends State<_StoryItem> {
           top: MediaQuery.of(context).padding.top + 40,
           left: 16,
           right: 16,
-          child: Row(
+          child: Column(
             children: [
-              IconButton(
-                icon: const Icon(
-                  Icons.arrow_back_ios,
-                  color: Colors.white,
-                  size: 28,
-                ),
-                onPressed: widget.onClose,
-              ),
-              const SizedBox(width: 4),
-              GestureDetector(
-                onTap: () {
-                  if (widget.story['user_id'] != null) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                            UserProfileScreen(userId: widget.story['user_id']),
-                      ),
-                    );
-                  }
-                },
-                child: CircleAvatar(
-                  radius: 20,
-                  backgroundImage: widget.author['avatar_url'] != null
-                      ? NetworkImage(widget.author['avatar_url'])
-                      : null,
-                  backgroundColor: Colors.indigo,
-                  child: widget.author['avatar_url'] == null
-                      ? Text(
-                          widget.author['display_name']?[0] ?? '?',
-                          style: const TextStyle(color: Colors.white),
-                        )
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    if (widget.story['user_id'] != null) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => UserProfileScreen(
-                            userId: widget.story['user_id'],
+              // Story progress indicator
+              if (widget.totalStories > 1)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    children: List.generate(widget.totalStories, (i) {
+                      return Expanded(
+                        child: Container(
+                          height: 2.5,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          decoration: BoxDecoration(
+                            color: i <= widget.storyIndex
+                                ? Colors.white
+                                : Colors.white30,
+                            borderRadius: BorderRadius.circular(2),
                           ),
                         ),
                       );
-                    }
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.author['display_name'] ?? 'Someone',
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
+                    }),
                   ),
                 ),
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                    onPressed: widget.onClose,
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () {
+                      if (widget.story['user_id'] != null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                UserProfileScreen(userId: widget.story['user_id']),
+                          ),
+                        );
+                      }
+                    },
+                    child: CircleAvatar(
+                      radius: 20,
+                      backgroundImage: widget.author['avatar_url'] != null
+                          ? NetworkImage(widget.author['avatar_url'])
+                          : null,
+                      backgroundColor: Colors.indigo,
+                      child: widget.author['avatar_url'] == null
+                          ? Text(
+                              widget.author['display_name']?[0] ?? '?',
+                              style: const TextStyle(color: Colors.white),
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        if (widget.story['user_id'] != null) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => UserProfileScreen(
+                                userId: widget.story['user_id'],
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.author['display_name'] ?? 'Someone',
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Text(
+                            _formatTimeAgo(widget.story['created_at']),
+                            style: GoogleFonts.inter(
+                              color: Colors.white60,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Story counter
+                  if (widget.totalStories > 1)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${widget.storyIndex + 1}/${widget.totalStories}',
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ],
           ),

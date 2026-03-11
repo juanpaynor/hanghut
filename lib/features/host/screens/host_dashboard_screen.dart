@@ -1346,7 +1346,7 @@ class _BookingCard extends StatelessWidget {
 
 // ─── Tab 4: Earnings ──────────────────────────────────────────────────────────
 
-class _EarningsTab extends StatelessWidget {
+class _EarningsTab extends StatefulWidget {
   final String partnerId;
   final Map<String, dynamic> partner;
   final HostService hostService;
@@ -1358,9 +1358,28 @@ class _EarningsTab extends StatelessWidget {
   });
 
   @override
+  State<_EarningsTab> createState() => _EarningsTabState();
+}
+
+class _EarningsTabState extends State<_EarningsTab> {
+  late Future<Map<String, dynamic>> _earningsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _earningsFuture = widget.hostService.getEarningsSummary(widget.partnerId);
+  }
+
+  void _refreshEarnings() {
+    setState(() {
+      _earningsFuture = widget.hostService.getEarningsSummary(widget.partnerId);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, dynamic>>(
-      future: hostService.getEarningsSummary(partnerId),
+      future: _earningsFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -1371,8 +1390,13 @@ class _EarningsTab extends StatelessWidget {
               'total_gross': 0.0,
               'total_fees': 0.0,
               'total_payout': 0.0,
+              'available_balance': 0.0,
+              'total_withdrawn': 0.0,
               'transaction_count': 0,
             };
+
+        final availableBalance = (summary['available_balance'] as num?)?.toDouble() ?? 0.0;
+        final totalWithdrawn = (summary['total_withdrawn'] as num?)?.toDouble() ?? 0.0;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -1398,7 +1422,7 @@ class _EarningsTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Total Earnings',
+                      'Available Balance',
                       style: GoogleFonts.inter(
                         color: Colors.white70,
                         fontSize: 14,
@@ -1406,7 +1430,7 @@ class _EarningsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '₱${(summary['total_gross'] as double).toStringAsFixed(2)}',
+                      '₱${availableBalance.toStringAsFixed(2)}',
                       style: GoogleFonts.inter(
                         color: Colors.white,
                         fontSize: 36,
@@ -1417,17 +1441,17 @@ class _EarningsTab extends StatelessWidget {
                     Row(
                       children: [
                         _EarningsStat(
-                          label: 'Platform Fee',
+                          label: 'Total Earned',
                           value:
-                              '₱${(summary['total_fees'] as double).toStringAsFixed(0)}',
+                              '₱${(summary['total_payout'] as double).toStringAsFixed(0)}',
                           color: Colors.white70,
                         ),
                         const SizedBox(width: 24),
                         _EarningsStat(
-                          label: 'Net Payout',
+                          label: 'Withdrawn',
                           value:
-                              '₱${(summary['total_payout'] as double).toStringAsFixed(0)}',
-                          color: Colors.white,
+                              '₱${totalWithdrawn.toStringAsFixed(0)}',
+                          color: Colors.white70,
                         ),
                         const SizedBox(width: 24),
                         _EarningsStat(
@@ -1446,7 +1470,7 @@ class _EarningsTab extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: () => _showPayoutDialog(context, summary, partner),
+                  onPressed: () => _showPayoutDialog(context, summary, widget.partner),
                   icon: const Icon(Icons.account_balance_outlined),
                   label: const Text('Request Payout'),
                 ),
@@ -1462,7 +1486,7 @@ class _EarningsTab extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) =>
-                            BankAccountsScreen(partnerId: partnerId),
+                            BankAccountsScreen(partnerId: widget.partnerId),
                       ),
                     );
                   },
@@ -1483,7 +1507,7 @@ class _EarningsTab extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               FutureBuilder<List<Map<String, dynamic>>>(
-                future: hostService.getPayoutHistory(partnerId),
+                future: widget.hostService.getPayoutHistory(widget.partnerId),
                 builder: (context, payoutSnapshot) {
                   final payouts = payoutSnapshot.data ?? [];
                   if (payouts.isEmpty) {
@@ -1516,9 +1540,9 @@ class _EarningsTab extends StatelessWidget {
     Map<String, dynamic> summary,
     Map<String, dynamic> partner,
   ) async {
-    final netPayout = summary['total_payout'] as double;
+    final availableBalance = (summary['available_balance'] as num?)?.toDouble() ?? 0.0;
 
-    if (netPayout <= 0) {
+    if (availableBalance <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No funds available to withdraw.')),
       );
@@ -1532,7 +1556,7 @@ class _EarningsTab extends StatelessWidget {
       builder: (ctx) => const Center(child: CircularProgressIndicator()),
     );
 
-    final accounts = await hostService.getBankAccounts(partnerId);
+    final accounts = await widget.hostService.getBankAccounts(widget.partnerId);
     if (!context.mounted) return;
     Navigator.pop(context); // Close loader
 
@@ -1565,7 +1589,7 @@ class _EarningsTab extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => BankAccountsScreen(partnerId: partnerId),
+                    builder: (_) => BankAccountsScreen(partnerId: widget.partnerId),
                   ),
                 );
               },
@@ -1592,7 +1616,7 @@ class _EarningsTab extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Available: ₱${netPayout.toStringAsFixed(2)}',
+              'Available: ₱${availableBalance.toStringAsFixed(2)}',
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -1615,10 +1639,9 @@ class _EarningsTab extends StatelessWidget {
             onPressed: () async {
               Navigator.pop(ctx);
               try {
-                // We pass the new bank account data to requestPayout
-                await hostService.requestPayout(
-                  partnerId: partnerId,
-                  amount: netPayout,
+                await widget.hostService.requestPayout(
+                  partnerId: widget.partnerId,
+                  amount: availableBalance,
                   channelCode: primaryAcc['bank_code'],
                   bankAccountNumber: primaryAcc['account_number'],
                   bankAccountName: primaryAcc['account_holder_name'],
@@ -1632,6 +1655,8 @@ class _EarningsTab extends StatelessWidget {
                       ),
                     ),
                   );
+                  // Refresh the earnings card
+                  _refreshEarnings();
                 }
               } catch (e) {
                 if (context.mounted) {

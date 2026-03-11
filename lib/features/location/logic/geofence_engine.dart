@@ -31,16 +31,16 @@ class GeofenceEngine {
 
   // Config
   static const double kGeofenceRadiusMeters = 200.0;
-  static const int kDwellTimeSeconds = 5; // Reduced for testing (was 30)
+  static const int kDwellTimeSeconds = 20; // Production value (was 5 for testing)
 
   // PHASE 1: Rate limiting config
   static const Duration kNotificationCooldown = Duration(hours: 6);
   static const int kMaxNotificationsPerHour = 3;
 
-  // Stream for UI (Foreground)
-  final StreamController<Map<String, String>> _eventStreamController =
+  // Stream for UI (Foreground) — carries full event data for the modal
+  final StreamController<Map<String, dynamic>> _eventStreamController =
       StreamController.broadcast();
-  Stream<Map<String, String>> get eventStream => _eventStreamController.stream;
+  Stream<Map<String, dynamic>> get eventStream => _eventStreamController.stream;
 
   // Muted Zones (Persisted)
   Set<String> _mutedZones = {};
@@ -147,6 +147,13 @@ class GeofenceEngine {
     print('🔇 GEOFENCE: Muted $id');
   }
 
+  /// Temporarily snooze a geofence for 1 hour (sets cooldown without permanent mute)
+  void snoozeGeofence(String id) {
+    _lastNotificationTime[id] = DateTime.now();
+    _saveNotificationHistory();
+    print('💤 GEOFENCE: Snoozed $id for 1 hour');
+  }
+
   // PHASE 1: Check rate limit
   bool _canSendNotification() {
     final now = DateTime.now();
@@ -169,34 +176,35 @@ class GeofenceEngine {
   // PHASE 2: Check if event is relevant
   bool _shouldNotify(Map<String, dynamic> event) {
     try {
-      // 1. Event starts within next 4 hours
-      final eventTime = DateTime.parse(event['datetime']);
-      final timeUntilEvent = eventTime.difference(DateTime.now());
+      // 1. Event starts within next 4 hours (if datetime is available)
+      final datetimeStr = event['datetime'] ?? event['start_datetime'];
+      if (datetimeStr != null) {
+        final eventTime = DateTime.parse(datetimeStr);
+        final timeUntilEvent = eventTime.difference(DateTime.now());
 
-      if (timeUntilEvent > const Duration(hours: 4)) {
-        print('⏱️ Event too far in future: ${timeUntilEvent.inHours}h');
-        return false; // Too far in future
-      }
+        if (timeUntilEvent > const Duration(hours: 4)) {
+          return false; // Too far in future
+        }
 
-      if (timeUntilEvent.isNegative ||
-          timeUntilEvent < const Duration(minutes: -30)) {
-        print('⏱️ Event already ended');
-        return false; // Event ended
+        if (timeUntilEvent.isNegative &&
+            timeUntilEvent < const Duration(minutes: -30)) {
+          return false; // Event ended
+        }
       }
+      // If no datetime (e.g. a table), it's always relevant
 
       // 2. Event not full
-      final currentCapacity = event['current_capacity'] ?? 0;
-      final maxGuests = event['max_guests'] ?? 4;
+      final currentCapacity = (event['current_capacity'] ?? event['member_count'] ?? 0) as num;
+      final maxGuests = (event['max_guests'] ?? event['capacity'] ?? 99) as num;
 
       if (currentCapacity >= maxGuests) {
-        print('🚫 Event is full');
         return false;
       }
 
       return true;
     } catch (e) {
       print('❌ Error checking event relevance: $e');
-      return false; // Safer to not notify if we can't validate
+      return true; // Default to notifying if we can't validate
     }
   }
 
@@ -288,8 +296,16 @@ class GeofenceEngine {
     _recentNotifications.add(DateTime.now());
     _saveNotificationHistory(); // Persist
 
-    // 1. Notify UI (if App is Open)
-    _eventStreamController.add({'id': id, 'title': title});
+    // 1. Notify UI (if App is Open) — include full event data for rich modal
+    _eventStreamController.add({
+      'id': id,
+      'title': title,
+      'datetime': event['datetime'] ?? event['start_datetime'],
+      'current_capacity': event['current_capacity'] ?? event['member_count'] ?? 0,
+      'max_guests': event['max_guests'] ?? event['capacity'] ?? 0,
+      'location_name': event['location_name'] ?? event['venue_name'] ?? event['title'],
+      'ticket_price': event['ticket_price'] ?? event['price_per_person'] ?? 0,
+    });
 
     // 2. Show Notification (Smart Copy)
     String notifTitle = 'You are near $title!';
@@ -378,11 +394,15 @@ class GeofenceEngine {
 
     // First pass: collect all nearby events with distances
     for (final fence in _activeGeofences) {
+      // Support both table (location_lat/lng) and event (latitude/longitude) schemas
+      final double fenceLat = ((fence['latitude'] ?? fence['location_lat']) as num).toDouble();
+      final double fenceLng = ((fence['longitude'] ?? fence['location_lng']) as num).toDouble();
+
       final double distance = _locationService.distanceBetween(
         userLat,
         userLng,
-        fence['latitude'],
-        fence['longitude'],
+        fenceLat,
+        fenceLng,
       );
 
       final String fenceId = fence['id'];

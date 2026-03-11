@@ -82,6 +82,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _initializeChat() async {
     await _getCurrentUser();
     await _checkIfHost();
+    await _markChatAsRead(); // Added: Update read receipt
     await _loadParticipants();
     await _loadMessageHistory();
     _subscribeToAbly();
@@ -89,8 +90,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _subscribeToParticipants();
   }
 
+  Future<void> _markChatAsRead() async {
+    if (_currentUserId == null) {
+      print('⚠️ _markChatAsRead: _currentUserId is null, skipping');
+      return;
+    }
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      print('📖 _markChatAsRead: chatType=${widget.chatType}, tableId=${widget.tableId}, userId=$_currentUserId, now=$now');
+      if (widget.chatType == 'trip') {
+        await SupabaseConfig.client
+            .from('trip_chat_participants')
+            .update({'last_read_at': now})
+            .eq('chat_id', widget.tableId)
+            .eq('user_id', _currentUserId!);
+      } else if (widget.chatType == 'dm' || widget.chatType == 'direct') {
+        await SupabaseConfig.client
+            .from('direct_chat_participants')
+            .update({'last_read_at': now})
+            .eq('chat_id', widget.tableId)
+            .eq('user_id', _currentUserId!);
+      } else {
+        await SupabaseConfig.client
+            .from('table_members')
+            .update({'last_read_at': now})
+            .eq('table_id', widget.tableId)
+            .eq('user_id', _currentUserId!);
+      }
+      print('✅ _markChatAsRead: SUCCESS for ${widget.chatType} ${widget.tableId}');
+    } catch (e) {
+      print('❌ _markChatAsRead: FAILED - $e');
+    }
+  }
+
   @override
   void dispose() {
+    // Mark chat as read on close so unread count resets
+    _markChatAsRead();
     WidgetsBinding.instance.removeObserver(this);
     _messageController.dispose();
     _scrollController.dispose();
@@ -115,7 +151,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _useTelegramMode = false;
     });
 
-    if (widget.chatType == 'trip' || widget.chatType == 'dm') {
+    if (widget.chatType == 'trip' ||
+        widget.chatType == 'dm' ||
+        widget.chatType == 'direct') {
       setState(() {
         _isHost = false;
       });
@@ -143,11 +181,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
-          table: widget.chatType == 'trip'
-              ? 'trip_messages'
-              : 'message_reactions', // Trip reactions not yet supported
+          table: 'message_reactions',
           callback: (payload) {
-            if (widget.chatType != 'trip') _loadReactions();
+            _loadReactions();
           },
         )
         .subscribe();
@@ -261,7 +297,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 .from('trip_chat_participants')
                 .select('user_id')
                 .eq('chat_id', widget.tableId)
-          : widget.chatType == 'dm'
+          : (widget.chatType == 'dm' || widget.chatType == 'direct')
           ? SupabaseConfig.client
                 .from('direct_chat_participants')
                 .select('user_id')
@@ -281,7 +317,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       for (var p in response) {
         final uid = p['user_id'] as String;
         userIds.add(uid);
-        if (widget.chatType != 'trip' && widget.chatType != 'dm') {
+        if (widget.chatType != 'trip' && widget.chatType != 'dm' && widget.chatType != 'direct') {
           statusMap[uid] = p['arrival_status'] ?? 'joined';
         }
       }
@@ -986,10 +1022,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     int attempts = 0;
     while (attempts < 20) {
       try {
+        // Determine the correct messages table based on chat type
+        String messagesTable = 'messages';
+        if (widget.chatType == 'dm') messagesTable = 'direct_messages';
+        if (widget.chatType == 'trip') messagesTable = 'trip_messages';
+
         // If Telegram Mode, verify message exists first
         if (_useTelegramMode) {
           final messageExists = await SupabaseConfig.client
-              .from('messages')
+              .from(messagesTable)
               .select('id')
               .eq('id', messageId)
               .maybeSingle();

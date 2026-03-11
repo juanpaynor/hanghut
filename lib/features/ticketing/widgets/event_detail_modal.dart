@@ -512,7 +512,6 @@ class _EventDetailModalState extends State<EventDetailModal> {
 
   Widget _buildBuyButton() {
     return SizedBox(
-      height: 52,
       width: double.infinity,
       child: ElevatedButton(
         onPressed: (_isLoadingTiers || _isSoldOut) ? null : _onBuyTickets,
@@ -520,6 +519,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
           backgroundColor: _isSoldOut ? Colors.grey[300] : Colors.black,
           foregroundColor: _isSoldOut ? Colors.grey[600] : Colors.white,
           elevation: 0,
+          padding: const EdgeInsets.symmetric(vertical: 16),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:bitemates/features/home/screens/feed_screen.dart';
 import 'package:bitemates/features/map/screens/map_screen.dart';
@@ -11,6 +12,8 @@ import 'package:bitemates/features/location/logic/geofence_engine.dart';
 import 'package:bitemates/features/location/widgets/geofence_modal.dart';
 import 'package:bitemates/core/services/account_status_service.dart';
 import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
+import 'package:bitemates/core/services/admin_popup_service.dart';
+import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -31,6 +34,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   late int _selectedIndex;
 
   final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
+  StreamSubscription<Map<String, dynamic>>? _geofenceSubscription;
 
   @override
   void initState() {
@@ -45,10 +49,32 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         _mapScreenKey.currentState?.showTableDetails(widget.initialTableId!);
       });
     }
+
+    // Check for Admin Popups on Startup
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAdminPopups();
+    });
+  }
+
+  Future<void> _checkAdminPopups() async {
+    final activePopup = await AdminPopupService().checkAndGetActivePopup();
+    if (activePopup != null && mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false, // Force them to interact with the modal
+        builder: (context) => AdminPopupModal(
+          popupData: activePopup,
+          onDismissed: () {
+            AdminPopupService().markPopupAsSeen(activePopup['id']);
+          },
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _geofenceSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -82,12 +108,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _setupGeofenceListener() {
-    GeofenceEngine().eventStream.listen((event) {
+    _geofenceSubscription = GeofenceEngine().eventStream.listen((event) {
       if (mounted) {
         GeofenceModal.show(
           context,
-          tableId: event['id']!,
-          tableName: event['title']!,
+          eventData: event,
           onCheckIn: () {
             setState(() {
               _selectedIndex = 1; // Switch to Map Tab
@@ -113,6 +138,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showTableDetails(tableId);
+          });
+        },
+        onStoryTap: (story) {
+          setState(() {
+            _selectedIndex = 1;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _mapScreenKey.currentState?.showStoryDetails(story);
           });
         },
       ),

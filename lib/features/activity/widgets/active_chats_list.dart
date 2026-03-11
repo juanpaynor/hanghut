@@ -204,7 +204,7 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
           channelId = 'table_${chat['chat_id']}';
         }
 
-        final result = await showModalBottomSheet<bool>(
+        await showModalBottomSheet<bool>(
           context: context,
           isScrollControlled: true,
           backgroundColor: Colors.transparent,
@@ -216,10 +216,7 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
             chatType: type == 'dm' ? 'dm' : type,
           ),
         );
-
-        if (result == true) {
-          _loadChats(refresh: true);
-        }
+        _loadChats(refresh: true);
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),
@@ -289,7 +286,15 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
                     const SizedBox(height: 4),
                     Text(
                       chat['subtitle'] ?? '',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: chat['has_unread'] == true
+                            ? Theme.of(context).textTheme.bodyLarge?.color
+                            : Colors.grey[600],
+                        fontWeight: chat['has_unread'] == true
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -297,17 +302,50 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
                 ),
               ),
 
-              // Time / Arrow
+              // Time / Arrow / Unread Badge
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (type == 'dm')
+                  if (type == 'dm' ||
+                      (chat['unread_count'] != null &&
+                          chat['unread_count'] > 0))
                     Text(
                       timeStr,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: chat['has_unread'] == true
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey[400],
+                        fontWeight: chat['has_unread'] == true
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
                     )
                   else
                     Icon(Icons.chevron_right, color: Colors.grey[400]),
+
+                  if (chat['unread_count'] != null && chat['unread_count'] > 0)
+                    Container(
+                      margin: const EdgeInsets.only(top: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        chat['unread_count'] > 99
+                            ? '99+'
+                            : chat['unread_count'].toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ],

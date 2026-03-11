@@ -52,7 +52,7 @@ class TableService {
         try {
           final markerData = await SupabaseConfig.client
               .from('tables')
-              .select('id, marker_image_url, marker_emoji, image_url')
+              .select('id, marker_image_url, marker_emoji, image_url, images')
               .inFilter('id', ids);
 
           final markerMap = <String, Map<String, dynamic>>{};
@@ -67,6 +67,7 @@ class TableService {
                   markerMap[id]!['marker_image_url'];
               tables[i]['marker_emoji'] ??= markerMap[id]!['marker_emoji'];
               tables[i]['image_url'] ??= markerMap[id]!['image_url'];
+              tables[i]['images'] ??= markerMap[id]!['images'];
             }
           }
         } catch (e) {
@@ -91,6 +92,58 @@ class TableService {
     } catch (e) {
       print('Error fetching tables: $e');
       rethrow;
+    }
+  }
+
+  // Fetch experiences specifically for the new carousel
+  Future<List<Map<String, dynamic>>> getExperiences({
+    double? userLat,
+    double? userLng,
+    int limit = 10,
+  }) async {
+    try {
+      final response = await SupabaseConfig.client
+          .from('map_ready_tables')
+          .select()
+          .eq('is_experience', true) // Filter by the actual experience flag
+          .order('scheduled_time', ascending: true)
+          .limit(limit);
+
+      final tables = List<Map<String, dynamic>>.from(response);
+
+      // Enrich with missing data just like getMapReadyTables
+      if (tables.isNotEmpty) {
+        final ids = tables.map((t) => t['id'] as String).toList();
+        try {
+          final markerData = await SupabaseConfig.client
+              .from('tables')
+              .select('id, marker_image_url, marker_emoji, image_url, images')
+              .inFilter('id', ids);
+
+          final markerMap = <String, Map<String, dynamic>>{};
+          for (final m in markerData) {
+            markerMap[m['id'] as String] = m;
+          }
+
+          for (int i = 0; i < tables.length; i++) {
+            final id = tables[i]['id'] as String;
+            if (markerMap.containsKey(id)) {
+              tables[i]['marker_image_url'] ??=
+                  markerMap[id]!['marker_image_url'];
+              tables[i]['marker_emoji'] ??= markerMap[id]!['marker_emoji'];
+              tables[i]['image_url'] ??= markerMap[id]!['image_url'];
+              tables[i]['images'] ??= markerMap[id]!['images'];
+            }
+          }
+        } catch (e) {
+          print('⚠️ Could not enrich experience marker data: $e');
+        }
+      }
+
+      return tables;
+    } catch (e) {
+      print('Error fetching experiences: $e');
+      return [];
     }
   }
 

@@ -22,6 +22,7 @@ class ChatListService {
           .from('user_active_chats')
           .select()
           .eq('user_id', user.id)
+          .order('has_unread', ascending: false)
           .order('last_activity_at', ascending: false)
           .range(start, end);
 

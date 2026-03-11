@@ -17,10 +17,16 @@ import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/notifications/screens/notifications_screen.dart';
 
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
+import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
+
 class FeedScreen extends StatefulWidget {
   final Function(String)? onJoinTable;
+  final Function(Map<String, dynamic>)? onStoryTap;
 
-  const FeedScreen({super.key, this.onJoinTable});
+  const FeedScreen({super.key, this.onJoinTable, this.onStoryTap});
 
   @override
   State<FeedScreen> createState() => _FeedScreenState();
@@ -35,6 +41,9 @@ class _FeedScreenState extends State<FeedScreen>
 
   List<Map<String, dynamic>> _socialPosts = [];
   List<Map<String, dynamic>> _trendingTables = []; // New: Trending Tables
+  List<Map<String, dynamic>> _trendingExperiences =
+      []; // New: Trending Experiences
+  List<Event> _trendingEvents = []; // New: Trending Events
   bool _isLoading = true;
   bool _isLoadingMore = false;
 
@@ -50,6 +59,7 @@ class _FeedScreenState extends State<FeedScreen>
   final List<String> _categories = ['All', 'Hangouts', 'Discussions'];
 
   Position? _userPosition;
+  String? _currentUserAvatarUrl;
   final List<StreamSubscription> _ablySubscriptions = [];
 
   Timer? _scrollDebounce;
@@ -70,6 +80,7 @@ class _FeedScreenState extends State<FeedScreen>
     _tabController.addListener(_onTabChanged);
     _scrollController.addListener(_onScroll);
     _getUserLocation();
+    _fetchCurrentUserAvatar();
 
     // Start listening for notifications (Realtime Red Dot)
     NotificationService().subscribeToNotifications();
@@ -97,6 +108,8 @@ class _FeedScreenState extends State<FeedScreen>
         });
         _loadSocialPosts();
         _loadTrendingTables(); // New: Load trending tables
+        _loadTrendingExperiences(); // Load experiences
+        _loadTrendingEvents(); // Load events
         _subscribeToAblyFeed();
       }
     } catch (e) {
@@ -104,7 +117,31 @@ class _FeedScreenState extends State<FeedScreen>
       if (mounted) {
         _loadSocialPosts();
         _loadTrendingTables(); // Try loading anyway
+        _loadTrendingExperiences();
+        _loadTrendingEvents();
       }
+    }
+  }
+
+  Future<void> _fetchCurrentUserAvatar() async {
+    try {
+      final userId = SupabaseConfig.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final data = await SupabaseConfig.client
+          .from('user_photos')
+          .select('photo_url')
+          .eq('user_id', userId)
+          .eq('is_primary', true)
+          .maybeSingle();
+
+      if (mounted && data != null && data['photo_url'] != null) {
+        setState(() {
+          _currentUserAvatarUrl = data['photo_url'];
+        });
+      }
+    } catch (e) {
+      print('❌ Error fetching current user avatar: $e');
     }
   }
 
@@ -174,6 +211,36 @@ class _FeedScreenState extends State<FeedScreen>
       }
     } catch (e) {
       print('❌ Error loading trending tables: $e');
+    }
+  }
+
+  Future<void> _loadTrendingExperiences() async {
+    try {
+      final experiences = await _tableService.getExperiences(
+        userLat: _userPosition?.latitude,
+        userLng: _userPosition?.longitude,
+        limit: 10,
+      );
+      if (mounted) {
+        setState(() {
+          _trendingExperiences = experiences;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading trending experiences: $e');
+    }
+  }
+
+  Future<void> _loadTrendingEvents() async {
+    try {
+      final events = await EventService().getUpcomingEvents(limit: 10);
+      if (mounted) {
+        setState(() {
+          _trendingEvents = events;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading trending events: $e');
     }
   }
 
@@ -380,6 +447,8 @@ class _FeedScreenState extends State<FeedScreen>
                 await Future.wait([
                   _loadSocialPosts(force: true),
                   _loadTrendingTables(),
+                  _loadTrendingExperiences(),
+                  _loadTrendingEvents(),
                 ]);
               },
               color: Theme.of(context).primaryColor,
@@ -527,7 +596,96 @@ class _FeedScreenState extends State<FeedScreen>
                       ),
                     ),
 
-                  // 3. Category Filter Chips (Only in For You)
+                  // 3. Experiences Carousel (New)
+                  if (_tabController.index == 0 &&
+                      _trendingExperiences.isNotEmpty &&
+                      _selectedCategory != 'Discussions')
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              left: 24,
+                              bottom: 12,
+                            ),
+                            child: Text(
+                              'Curated Experiences',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).primaryColor,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            child: TrendingCarousel(
+                              items: _trendingExperiences,
+                              onItemTap: (experience) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ExperienceDetailModal(
+                                      experience: experience,
+                                      matchData: const {},
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Events Carousel (New)
+                  if (_tabController.index == 0 &&
+                      _trendingEvents.isNotEmpty &&
+                      _selectedCategory != 'Discussions')
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              left: 24,
+                              bottom: 12,
+                            ),
+                            child: Text(
+                              'Upcoming Events',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).primaryColor,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            child: TrendingCarousel(
+                              items: _trendingEvents,
+                              onItemTap: (event) {
+                                // Events navigate to EventDetailModal/EventPurchaseScreen
+                                // Since logic isn't defined to push Event routes from Feed,
+                                // we push to the Purchase Screen for now since it buys a ticket
+                                // or the Event Sales Screen if host.
+                                // We can use the main app router pattern or push directly:
+                                showModalBottomSheet(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (context) =>
+                                      EventDetailModal(event: event as Event),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // 4. Category Filter Chips (Only in For You)
                   if (_tabController.index == 0)
                     SliverToBoxAdapter(
                       child: Container(
@@ -589,8 +747,8 @@ class _FeedScreenState extends State<FeedScreen>
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 24),
                         child: TrendingCarousel(
-                          tables: _trendingTables,
-                          onTableTap: (table) {
+                          items: _trendingTables,
+                          onItemTap: (table) {
                             if (widget.onJoinTable != null) {
                               widget.onJoinTable!(table['id']);
                             } else {
@@ -721,6 +879,15 @@ class _FeedScreenState extends State<FeedScreen>
                             ),
                             child: SocialPostCard(
                               post: post,
+                              onTap: () {
+                                if (post['is_story'] == true &&
+                                    widget.onStoryTap != null) {
+                                  widget.onStoryTap!(post);
+                                } else {
+                                  // Navigating to normal post detail is handled inside SocialPostCard if needed,
+                                  // or we can push a PostDetailScreen here. For now, just handle stories.
+                                }
+                              },
                               onPostDeleted: (postId) {
                                 setState(() {
                                   _socialPosts.removeWhere(
@@ -840,21 +1007,22 @@ class _FeedScreenState extends State<FeedScreen>
               CircleAvatar(
                 radius: 16,
                 backgroundColor: Colors.grey[200],
-                backgroundImage:
-                    SupabaseConfig
-                            .client
-                            .auth
-                            .currentUser
-                            ?.userMetadata?['avatar_url'] !=
-                        null
-                    ? NetworkImage(
-                        SupabaseConfig
-                            .client
-                            .auth
-                            .currentUser!
-                            .userMetadata!['avatar_url'],
-                      )
-                    : null,
+                backgroundImage: _currentUserAvatarUrl != null
+                    ? NetworkImage(_currentUserAvatarUrl!)
+                    : (SupabaseConfig
+                                  .client
+                                  .auth
+                                  .currentUser
+                                  ?.userMetadata?['avatar_url'] !=
+                              null
+                          ? NetworkImage(
+                              SupabaseConfig
+                                  .client
+                                  .auth
+                                  .currentUser!
+                                  .userMetadata!['avatar_url'],
+                            )
+                          : null),
               ),
               const SizedBox(width: 12),
               Text(

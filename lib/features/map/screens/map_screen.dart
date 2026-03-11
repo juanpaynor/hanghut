@@ -63,6 +63,7 @@ class MapScreenState extends State<MapScreen>
   int _activeUserCount = 0;
   bool _isFetching = false;
   bool _showCloudIntro = true;
+  int _lastFeatureCount = 0; // Track marker count for pop animation
 
   // Filter toggle
   MapFilter _currentFilter = MapFilter.all;
@@ -114,7 +115,7 @@ class MapScreenState extends State<MapScreen>
   @override
   void dispose() {
     _debounceTimer?.cancel();
-    // _popAnimationTimer?.cancel();
+    _popAnimationTimer?.cancel();
     _heartbeatTimer?.cancel();
     _feedSubscription?.cancel();
     super.dispose();
@@ -128,6 +129,40 @@ class MapScreenState extends State<MapScreen>
       _updateHeartbeat();
     });
     _updateHeartbeat(); // Initial run
+  }
+
+  /// Public method to open story from external screens
+  Future<void> showStoryDetails(Map<String, dynamic> story) async {
+    final lat = (story['latitude']) as num?;
+    final lng = (story['longitude']) as num?;
+
+    if (lat != null && lng != null && _mapboxMap != null) {
+      _mapboxMap?.flyTo(
+        CameraOptions(
+          center: Point(coordinates: Position(lng.toDouble(), lat.toDouble())),
+          zoom: 16.0,
+          pitch: 50.0,
+        ),
+        MapAnimationOptions(duration: 1200),
+      );
+    }
+
+    if (mounted) {
+      // Small delay to let camera start flying
+      await Future.delayed(const Duration(milliseconds: 300));
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => LocationStoryViewerScreen(
+          initialStory: story,
+          clusterId:
+              story['external_place_id'] ??
+              story['event_id'] ??
+              story['table_id'],
+        ),
+      );
+    }
   }
 
   /// Public method to open table details from external screens (e.g. Feed)
@@ -1395,6 +1430,8 @@ class MapScreenState extends State<MapScreen>
                   markerImageUrl.toString().isNotEmpty) {
                 markerImage = await _createCustomMarkerImage(
                   imageUrl: markerImageUrl,
+                  activityType:
+                      table['cuisine_type'], // Use cuisine_type which stores 'Experience' etc
                   glowColor: matchData['color'],
                   glowIntensity: matchData['glowIntensity'],
                   count: 1,
@@ -1403,13 +1440,14 @@ class MapScreenState extends State<MapScreen>
                   markerEmoji.toString().isNotEmpty) {
                 markerImage = await _createEmojiMarkerImage(
                   emoji: markerEmoji,
+                  activityType: table['cuisine_type'],
                   glowColor: matchData['color'],
                   glowIntensity: matchData['glowIntensity'],
                 );
               } else {
                 markerImage = await _createTableMarkerImage(
                   photoUrl: table['host_photo_url'],
-                  activityType: table['activityType'],
+                  activityType: table['cuisine_type'],
                   glowColor: matchData['color'],
                   glowIntensity: matchData['glowIntensity'],
                   count: 1,
@@ -1752,8 +1790,11 @@ class MapScreenState extends State<MapScreen>
 
       print('✅ Updated Cluster Source with ${features.length} features');
 
-      // Trigger "Spring Pop" Animation now that data is on map
-      // _startPopAnimation(); // DISABLED: Causing crash on iOS Simulator
+      // Trigger "Spring Pop" Animation only when marker count changes
+      if (features.length != _lastFeatureCount) {
+        _lastFeatureCount = features.length;
+        _startPopAnimation();
+      }
 
       // 3D Models removed - no longer updating 3D layer
       // await _update3DLayerData(fetchedTables); // REMOVED
@@ -1979,34 +2020,26 @@ class MapScreenState extends State<MapScreen>
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
-    final int size = 120;
+    final int baseSize = 120;
+    final int canvasSize = 140; // Extra room for the attached badge
     final double padding = 8.0;
+
+    final Offset mainCenter = Offset(baseSize / 2, baseSize / 2);
 
     // 1. Draw solid white background
     final Paint bgPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 4, bgPaint);
+    canvas.drawCircle(mainCenter, baseSize / 2 - 4, bgPaint);
 
     // 2. Draw thick purple "Stories" ring
     final Paint ringPaint = Paint()
       ..color = Colors.indigo.shade400
       ..style = PaintingStyle.stroke
       ..strokeWidth = 6;
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 4, ringPaint);
+    canvas.drawCircle(mainCenter, baseSize / 2 - 4, ringPaint);
 
     // 3. Draw image content (clipped to inner circle)
-    String? imageUrl;
-
-    // First try to get the user's profile picture from the joined user_photos array
-    if (story['user_photos'] != null &&
-        (story['user_photos'] as List).isNotEmpty) {
-      imageUrl = (story['user_photos'] as List).first.toString();
-    }
-    // Fallback to avatar_url, image_url, or the story's own thumbnail/media
-    imageUrl ??=
-        story['avatar_url'] ??
-        story['image_url'] ??
-        story['thumbnail_url'] ??
-        story['media_url'];
+    String? imageUrl =
+        story['image_url'] ?? story['thumbnail_url'] ?? story['media_url'];
 
     try {
       if (imageUrl != null) {
@@ -2017,15 +2050,12 @@ class MapScreenState extends State<MapScreen>
           final ui.FrameInfo frameInfo = await codec.getNextFrame();
           final ui.Image image = frameInfo.image;
 
-          final double imgSize = size - (padding * 2);
+          final double imgSize = baseSize - (padding * 2);
 
           canvas.save();
           canvas.clipPath(
             Path()..addOval(
-              Rect.fromCircle(
-                center: Offset(size / 2, size / 2),
-                radius: imgSize / 2,
-              ),
+              Rect.fromCircle(center: mainCenter, radius: imgSize / 2),
             ),
           );
           paintImage(
@@ -2036,20 +2066,81 @@ class MapScreenState extends State<MapScreen>
           );
           canvas.restore();
         } else {
-          _drawPlaceholder(canvas, size, 'social');
+          _drawPlaceholder(canvas, baseSize, 'social');
         }
       } else {
-        _drawPlaceholder(canvas, size, 'social');
+        _drawPlaceholder(canvas, baseSize, 'social');
       }
     } catch (e) {
       print('❌ Error loading story image: $e');
-      _drawPlaceholder(canvas, size, 'social');
+      _drawPlaceholder(canvas, baseSize, 'social');
+    }
+
+    // 4. Draw author avatar overlapping bottom right
+    String? authorAvatarUrl = story['author_avatar_url'];
+    // Fallback if view doesn't have author_avatar_url yet
+    if (authorAvatarUrl == null &&
+        story['user_photos'] != null &&
+        (story['user_photos'] as List).isNotEmpty) {
+      authorAvatarUrl = (story['user_photos'] as List).first.toString();
+    }
+    authorAvatarUrl ??= story['avatar_url'];
+
+    if (authorAvatarUrl != null) {
+      try {
+        final avatarResponse = await http.get(Uri.parse(authorAvatarUrl));
+        if (avatarResponse.statusCode == 200) {
+          final Uint8List aBytes = avatarResponse.bodyBytes;
+          final ui.Codec aCodec = await ui.instantiateImageCodec(aBytes);
+          final ui.FrameInfo aFrameInfo = await aCodec.getNextFrame();
+          final ui.Image aImage = aFrameInfo.image;
+
+          // Position at bottom right
+          final Offset avatarCenter = const Offset(105, 105);
+          final double avatarRadius = 24.0;
+
+          // Draw white border
+          canvas.drawCircle(
+            avatarCenter,
+            avatarRadius + 3.0,
+            Paint()..color = Colors.white,
+          );
+
+          // Draw grey background/placeholder
+          canvas.drawCircle(
+            avatarCenter,
+            avatarRadius,
+            Paint()..color = Colors.grey.shade300,
+          );
+
+          canvas.save();
+          canvas.clipPath(
+            Path()..addOval(
+              Rect.fromCircle(center: avatarCenter, radius: avatarRadius),
+            ),
+          );
+          paintImage(
+            canvas: canvas,
+            rect: Rect.fromLTWH(
+              avatarCenter.dx - avatarRadius,
+              avatarCenter.dy - avatarRadius,
+              avatarRadius * 2,
+              avatarRadius * 2,
+            ),
+            image: aImage,
+            fit: BoxFit.cover,
+          );
+          canvas.restore();
+        }
+      } catch (e) {
+        print('❌ Error loading story author avatar: $e');
+      }
     }
 
     // Convert to image
     final ui.Image markerImg = await pictureRecorder.endRecording().toImage(
-      size,
-      size,
+      canvasSize,
+      canvasSize,
     );
     final ByteData? byteData = await markerImg.toByteData(
       format: ui.ImageByteFormat.png,
@@ -2060,6 +2151,7 @@ class MapScreenState extends State<MapScreen>
 
   Future<Uint8List> _createCustomMarkerImage({
     required String imageUrl,
+    String? activityType,
     required String glowColor,
     required double glowIntensity,
     int count = 1,
@@ -2068,13 +2160,25 @@ class MapScreenState extends State<MapScreen>
     final Canvas canvas = Canvas(pictureRecorder);
     final int size = 120; // Slightly larger for custom images
 
-    // Parse hex color
-    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+    // Default parsed hex color
+    Color color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
 
-    // Draw outer glow ring with match-based color
-    if (glowIntensity > 0) {
+    // Override color based on Activity Type
+    if (activityType != null) {
+      final typeLower = activityType.toLowerCase();
+      if (typeLower == 'experience') {
+        color = const Color(0xFFFF9800); // Vibrant Orange for Experiences
+      } else if (typeLower == 'event') {
+        color = const Color(0xFFE040FB); // Bright Purple for Events
+      } else {
+        color = const Color(0xFF2979FF); // Bright Blue for default Activities
+      }
+    }
+
+    // Draw outer glow ring with match-based or type-based color
+    if (glowIntensity > 0 || activityType != null) {
       final Paint ringPaint = Paint()
-        ..color = color.withOpacity(glowIntensity)
+        ..color = color.withOpacity(glowIntensity > 0 ? glowIntensity : 0.8)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 10;
 
@@ -2190,13 +2294,28 @@ class MapScreenState extends State<MapScreen>
     final Canvas canvas = Canvas(pictureRecorder);
     final int size = 120;
 
-    // Parse hex color
-    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+    // Default parsed hex color
+    Color color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
 
-    // Draw outer glow ring with match-based color
-    if (glowIntensity > 0) {
+    // Override color based on Activity Type
+    if (activityType != null) {
+      final typeLower = activityType.toLowerCase();
+      if (typeLower == 'experience') {
+        color = const Color(0xFFFF9800); // Vibrant Orange for Experiences
+      } else if (typeLower == 'event') {
+        color = const Color(0xFFE040FB); // Bright Purple for Events
+      } else {
+        color = const Color(0xFF2979FF); // Bright Blue for default Activities
+      }
+    }
+
+    // Draw outer glow ring with match-based or type-based color
+    if (glowIntensity > 0 || activityType != null) {
       final Paint ringPaint = Paint()
-        ..color = color.withOpacity(glowIntensity)
+        ..color = color
+            .withOpacity(
+              glowIntensity > 0 ? glowIntensity : 0.8,
+            ) // Use given intensity or default to strong glow for types
         ..style = PaintingStyle.stroke
         ..strokeWidth = 8;
 
@@ -2285,6 +2404,7 @@ class MapScreenState extends State<MapScreen>
 
   Future<Uint8List> _createEmojiMarkerImage({
     required String emoji,
+    String? activityType,
     required String glowColor,
     required double glowIntensity,
   }) async {
@@ -2292,13 +2412,25 @@ class MapScreenState extends State<MapScreen>
     final Canvas canvas = Canvas(pictureRecorder);
     final int size = 120;
 
-    // Parse hex color
-    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+    // Default parsed hex color
+    Color color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+
+    // Override color based on Activity Type
+    if (activityType != null) {
+      final typeLower = activityType.toLowerCase();
+      if (typeLower == 'experience') {
+        color = const Color(0xFFFF9800); // Vibrant Orange for Experiences
+      } else if (typeLower == 'event') {
+        color = const Color(0xFFE040FB); // Bright Purple for Events
+      } else {
+        color = const Color(0xFF2979FF); // Bright Blue for default Activities
+      }
+    }
 
     // Draw outer glow ring
-    if (glowIntensity > 0) {
+    if (glowIntensity > 0 || activityType != null) {
       final Paint ringPaint = Paint()
-        ..color = color.withOpacity(glowIntensity)
+        ..color = color.withOpacity(glowIntensity > 0 ? glowIntensity : 0.8)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 10;
 
@@ -2692,53 +2824,46 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
-  // --- MARKER POP ANIMATION LOGIC (DISABLED) ---
-  /*
+  // --- MARKER POP ANIMATION ---
   Timer? _popAnimationTimer;
-  double _markerScale = 0.0;
-  int _animationStep = 0;
 
+  /// Animates markers from scale 0 → 1.15 → 0.95 → 1.0 (elastic bounce).
+  /// Runs at 30fps to avoid overwhelming the Mapbox style engine on iOS.
   void _startPopAnimation() {
-    print('💥 _startPopAnimation started');
     _popAnimationTimer?.cancel();
-    _animationStep = 0;
 
-    // Simple spring simulation 0 -> 1.2 -> 1.0
-    // We'll run at 60fps (16ms) for ~500ms
-    _popAnimationTimer = Timer.periodic(const Duration(milliseconds: 16), (
-      timer,
-    ) {
-      if (!mounted || _mapboxMap?.style == null) {
-        timer.cancel();
-        return;
-      }
+    // Pre-computed keyframes: elastic overshoot curve sampled at 30fps over 500ms
+    // Total ~15 frames. Each value is the iconSize at that frame.
+    const List<double> keyframes = [
+      0.00, 0.15, 0.35, 0.58, 0.80, // Ramp up (0-166ms)
+      1.00, 1.10, 1.15,              // Overshoot peak (200-266ms)
+      1.10, 1.02, 0.95,              // Settle back (300-366ms)
+      0.97, 1.00, 1.00, 1.00,        // Final settle (400-500ms)
+    ];
 
-      _animationStep++;
+    int frame = 0;
 
-      // Elastic Out Curve Approximation
-      // t goes from 0.0 to 1.0 over approx 40 steps (640ms)
-      double t = (_animationStep * 16) / 600.0;
-      if (t > 1.0) {
-        _markerScale = 1.0;
-        _updateLayerScale(_markerScale);
-        timer.cancel();
-        return;
-      }
+    // Set initial scale to 0 immediately
+    _updateLayerScale(0.0);
 
-      // Physics: Overshoot
-      if (t < 0.3) {
-        // First 30% time: Shoot up to 1.2
-        _markerScale = (t / 0.3) * 1.2;
-      } else if (t < 0.6) {
-        // Next 30%: 1.2 down to 0.9
-        _markerScale = 1.2 - ((t - 0.3) / 0.3) * 0.3;
-      } else {
-        // Final: 0.9 up to 1.0
-        _markerScale = 0.9 + ((t - 0.6) / 0.4) * 0.1;
-      }
+    _popAnimationTimer = Timer.periodic(
+      const Duration(milliseconds: 33), // ~30fps
+      (timer) {
+        if (!mounted || _mapboxMap == null) {
+          timer.cancel();
+          return;
+        }
 
-      _updateLayerScale(_markerScale);
-    });
+        if (frame >= keyframes.length) {
+          _updateLayerScale(1.0); // Ensure final state
+          timer.cancel();
+          return;
+        }
+
+        _updateLayerScale(keyframes[frame]);
+        frame++;
+      },
+    );
   }
 
   void _updateLayerScale(double scale) {
@@ -2746,20 +2871,18 @@ class MapScreenState extends State<MapScreen>
       final style = _mapboxMap?.style;
       if (style == null) return;
 
-      // 1. Scale Unclustered Points (Icons)
+      // Scale unclustered marker icons
       style.setStyleLayerProperty('unclustered-points', 'icon-size', scale);
 
-      // 2. Scale Clusters (Bubbles)
-      // Base radius is 20, so we multiply
+      // Scale cluster circles (base radius = 20)
       style.setStyleLayerProperty('clusters', 'circle-radius', 20.0 * scale);
 
-      // 3. Scale Cluster Text (Counts)
+      // Scale cluster count text (base size = 14)
       style.setStyleLayerProperty('cluster-count', 'text-size', 14.0 * scale);
     } catch (e) {
-      // Ignored
+      // Silently ignore — layer may not exist yet during init
     }
   }
-  */
 
   // End of MapScreenState
 }

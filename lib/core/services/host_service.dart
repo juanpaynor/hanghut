@@ -320,6 +320,15 @@ class HostService {
 
     final eventTransactions = List<Map<String, dynamic>>.from(eventResponse);
 
+    // 3. Fetch Payouts (completed + pending) to subtract from available
+    final payoutResponse = await _supabase
+        .from('payouts')
+        .select('amount, status')
+        .eq('partner_id', partnerId)
+        .inFilter('status', ['completed', 'pending_request', 'processing']);
+
+    final payouts = List<Map<String, dynamic>>.from(payoutResponse);
+
     double totalGross = 0;
     double totalFees = 0;
     double totalPayout = 0;
@@ -336,10 +345,18 @@ class HostService {
       totalPayout += (t['organizer_payout'] as num?)?.toDouble() ?? 0;
     }
 
+    // 4. Sum all payouts that are completed or in-progress
+    double totalWithdrawn = 0;
+    for (final p in payouts) {
+      totalWithdrawn += (p['amount'] as num?)?.toDouble() ?? 0;
+    }
+
     return {
       'total_gross': totalGross,
       'total_fees': totalFees,
-      'total_payout': totalPayout,
+      'total_payout': totalPayout,  // All-time net earnings
+      'available_balance': totalPayout - totalWithdrawn,  // What's left to withdraw
+      'total_withdrawn': totalWithdrawn,
       'transaction_count': expTransactions.length + eventTransactions.length,
     };
   }

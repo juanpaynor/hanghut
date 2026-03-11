@@ -150,8 +150,14 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
     }
   }
 
+  // Available vibe tags (same as camera screen)
+  static const List<String> _vibeTags = [
+    '🔥 Lit', '😌 Chill', '🍕 Foodie', '🎶 Vibes',
+    '☕ Coffee', '🌅 Golden Hour', '🎉 Party', '💼 Hustle',
+    '🏖️ Beach', '🌃 Night Out', '🥂 Celebrate', '📸 OOTD',
+  ];
+
   void _showEditSheet() {
-    // Allows user to correct GPS drift or change vibe before posting
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -159,39 +165,112 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            top: 24,
-            left: 20,
-            right: 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Edit Location & Vibe',
-                style: GoogleFonts.inter(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                top: 24,
+                left: 20,
+                right: 20,
               ),
-              const SizedBox(height: 16),
-              // Dummy list for now. In reality, this calls Google Places / Supabase venues.
-              ListTile(
-                leading: const Icon(Icons.location_on, color: Colors.indigo),
-                title: Text('Change Location', style: GoogleFonts.inter()),
-                subtitle: Text(_currentLocationName),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  // Navigate to venue search
-                },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36, height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Edit Location & Vibe',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Location row
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Colors.indigo, size: 18),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _currentLocationName,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Set the Vibe',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _vibeTags.map((tag) {
+                      final isSelected = _currentVibeTag == tag;
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _currentVibeTag = isSelected ? null : tag;
+                          });
+                          setSheetState(() {});
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? Colors.indigo
+                                : Colors.grey[100],
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isSelected
+                                  ? Colors.indigo
+                                  : Colors.grey[300]!,
+                            ),
+                          ),
+                          child: Text(
+                            tag,
+                            style: GoogleFonts.inter(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 24),
+                ],
               ),
-              const SizedBox(height: 24),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -236,11 +315,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                   ),
                   child: IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: _isUploading ? null : () => Navigator.pop(context),
                   ),
                 ),
-                if (_isUploading)
-                  const CircularProgressIndicator(color: Colors.white),
               ],
             ),
           ),
@@ -309,24 +386,36 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                   ),
                   const SizedBox(width: 12),
                   GestureDetector(
-                    onTap: _uploadStory,
-                    child: Container(
+                    onTap: _isUploading ? null : _uploadStory,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 20,
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.indigo,
+                        color: _isUploading
+                            ? Colors.indigo.withOpacity(0.5)
+                            : Colors.indigo,
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      child: Text(
-                        'Post',
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
+                      child: _isUploading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(
+                              'Post',
+                              style: GoogleFonts.inter(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                              ),
+                            ),
                     ),
                   ),
                 ],

@@ -34,6 +34,38 @@ class EventService {
     }
   }
 
+  /// Fetch upcoming events for Feed carousel
+  Future<List<Event>> getUpcomingEvents({int limit = 10}) async {
+    try {
+      final response = await SupabaseConfig.client
+          .from('events')
+          .select('''
+            id, title, description, venue_name, address, latitude, longitude,
+            start_datetime, end_datetime, cover_image_url, ticket_price,
+            capacity, tickets_sold, event_type, organizer_id, created_at,
+            partners:organizer_id (
+              pass_fees_to_customer,
+              fixed_fee_per_ticket,
+              custom_percentage
+            )
+          ''')
+          .gte('start_datetime', DateTime.now().toIso8601String())
+          .order('start_datetime', ascending: true)
+          .limit(limit);
+
+      if (response == null) return [];
+
+      final events = (response as List)
+          .map((e) => Event.fromJson(e as Map<String, dynamic>))
+          .toList();
+
+      return events;
+    } catch (e) {
+      print('❌ Error fetching upcoming events: $e');
+      return [];
+    }
+  }
+
   /// Get single event by ID
   Future<Event?> getEvent(String eventId) async {
     try {

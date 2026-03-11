@@ -340,14 +340,18 @@ class NotificationService {
     final userId = client.auth.currentUser?.id;
     if (userId == null) return 0;
 
-    final count = await client
-        .from('notifications')
-        .count(CountOption.exact)
-        .eq('user_id', userId)
-        .eq('is_read', false);
+    try {
+      final response = await client
+          .from('notifications')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_read', false);
 
-    return count;
-    // Note: count() returns int directly in recent versions, or PostgrestResponse.
-    // Supabase Flutter v2 .count() returns `Future<int>` directly.
+      final List data = response as List;
+      return data.length;
+    } catch (e) {
+      print('❌ getUnreadCount Error: $e');
+      return 0;
+    }
   }
 }

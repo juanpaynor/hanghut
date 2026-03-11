@@ -59,7 +59,42 @@ class LocationInferenceService {
 
     final lat = position.latitude;
     final lng = position.longitude;
-    final city = 'Metro Manila'; // TODO: Reverse geocode city if needed.
+
+    // Reverse geocode to get city name
+    String city = 'Unknown City';
+    try {
+      final apiKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+      if (apiKey.isNotEmpty) {
+        final geocodeUrl =
+            'https://maps.googleapis.com/maps/api/geocode/json'
+            '?latlng=$lat,$lng'
+            '&result_type=locality|administrative_area_level_1'
+            '&key=$apiKey';
+        final geoResponse = await http.get(Uri.parse(geocodeUrl));
+        if (geoResponse.statusCode == 200) {
+          final geoData = json.decode(geoResponse.body);
+          if (geoData['status'] == 'OK' &&
+              geoData['results'] != null &&
+              geoData['results'].isNotEmpty) {
+            // Extract the formatted city name
+            city = geoData['results'][0]['formatted_address'] ?? city;
+            // Try to get a cleaner locality from address_components
+            final components = geoData['results'][0]['address_components'] as List?;
+            if (components != null) {
+              for (final comp in components) {
+                final types = List<String>.from(comp['types'] ?? []);
+                if (types.contains('locality')) {
+                  city = comp['long_name'] as String;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Silently fallback to 'Unknown City'
+    }
 
     // 2. Try Supabase Spatial Query (Need an RPC that uses PostGIS to find nearest table/event)
     // For now, we'll try to get ANY table within the database roughly.

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -29,6 +30,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   bool _isInitializing = true;
   bool _isTakingPhoto = false;
 
+  // Camera controls
+  int _currentCameraIndex = 0;
+  FlashMode _flashMode = FlashMode.off;
+
   // Video Recording State
   bool _isVideoRecording = false;
   double _recordingProgress = 0.0;
@@ -40,6 +45,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   InferredLocation? _inferredContext;
   String _visibility = 'public'; // 'public' or 'followers'
   String? _vibeTag;
+
+  // Available vibe tags
+  static const List<String> _vibeTags = [
+    '🔥 Lit', '😌 Chill', '🍕 Foodie', '🎶 Vibes',
+    '☕ Coffee', '🌅 Golden Hour', '🎉 Party', '💼 Hustle',
+    '🏖️ Beach', '🌃 Night Out', '🥂 Celebrate', '📸 OOTD',
+  ];
 
   @override
   void initState() {
@@ -67,23 +79,24 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     }
   }
 
-  Future<void> _initializeCamera() async {
+  Future<void> _initializeCamera({int? cameraIndex}) async {
     try {
-      _cameras = await availableCameras();
+      _cameras ??= await availableCameras();
       if (_cameras != null && _cameras!.isNotEmpty) {
-        // Find back camera
-        final backCamera = _cameras!.firstWhere(
-          (camera) => camera.lensDirection == CameraLensDirection.back,
-          orElse: () => _cameras!.first,
-        );
+        final index = cameraIndex ?? 0;
+        _currentCameraIndex = index.clamp(0, _cameras!.length - 1);
+
+        // Dispose old controller before creating new one
+        await _cameraController?.dispose();
 
         _cameraController = CameraController(
-          backCamera,
+          _cameras![_currentCameraIndex],
           ResolutionPreset.high,
-          enableAudio: false,
+          enableAudio: true,
         );
 
         await _cameraController!.initialize();
+        await _cameraController!.setFlashMode(_flashMode);
       }
     } catch (e) {
       debugPrint('Error initializing camera: $e');
@@ -94,6 +107,53 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
         });
       }
     }
+  }
+
+  Future<void> _flipCamera() async {
+    if (_cameras == null || _cameras!.length < 2) return;
+    if (_isVideoRecording) return;
+
+    HapticFeedback.lightImpact();
+    final nextIndex = (_currentCameraIndex + 1) % _cameras!.length;
+    setState(() => _isInitializing = true);
+    await _initializeCamera(cameraIndex: nextIndex);
+  }
+
+  Future<void> _toggleFlash() async {
+    if (_cameraController == null) return;
+    HapticFeedback.selectionClick();
+
+    final nextMode = switch (_flashMode) {
+      FlashMode.off => FlashMode.auto,
+      FlashMode.auto => FlashMode.always,
+      FlashMode.always => FlashMode.torch,
+      FlashMode.torch => FlashMode.off,
+    };
+
+    try {
+      await _cameraController!.setFlashMode(nextMode);
+      setState(() => _flashMode = nextMode);
+    } catch (e) {
+      debugPrint('Flash mode error: $e');
+    }
+  }
+
+  IconData _flashIcon() {
+    return switch (_flashMode) {
+      FlashMode.off => Icons.flash_off,
+      FlashMode.auto => Icons.flash_auto,
+      FlashMode.always => Icons.flash_on,
+      FlashMode.torch => Icons.flashlight_on,
+    };
+  }
+
+  String _flashLabel() {
+    return switch (_flashMode) {
+      FlashMode.off => 'Off',
+      FlashMode.auto => 'Auto',
+      FlashMode.always => 'On',
+      FlashMode.torch => 'Torch',
+    };
   }
 
   @override
@@ -109,6 +169,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     if (_isTakingPhoto || _isVideoRecording) return;
 
     setState(() => _isTakingPhoto = true);
+    HapticFeedback.mediumImpact();
 
     try {
       final XFile photo = await _cameraController!.takePicture();
@@ -132,6 +193,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     if (_isTakingPhoto || _isVideoRecording) return;
 
     try {
+      HapticFeedback.heavyImpact();
       await _cameraController!.prepareForVideoRecording();
       await _cameraController!.startVideoRecording();
 
@@ -303,7 +365,114 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   }
 
   void _showEditOverlayBottomSheet() {
-    // TODO: Implement the Edit Bottom Sheet (Venue Search, Vibe Picker, etc.)
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36, height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Set the Vibe',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Pick a vibe tag for your story',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _vibeTags.map((tag) {
+                      final isSelected = _vibeTag == tag;
+                      return GestureDetector(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          setState(() {
+                            _vibeTag = isSelected ? null : tag;
+                          });
+                          setSheetState(() {});
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? Colors.indigo
+                                : Colors.grey[100],
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isSelected
+                                  ? Colors.indigo
+                                  : Colors.grey[300]!,
+                            ),
+                          ),
+                          child: Text(
+                            tag,
+                            style: GoogleFonts.inter(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Icon(Icons.location_on, color: Colors.indigo, size: 18),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _currentLocationName,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _toggleVisibility() {
@@ -359,14 +528,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
             child: Center(child: CameraPreview(_cameraController!)),
           ),
 
-          // 2. Top Bar (Close and Follower Toggle)
+          // 2. Top Bar (Close, Flash, Flip, and Follower Toggle)
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
             left: 16,
             right: 16,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                // Close button
                 Container(
                   decoration: const BoxDecoration(
                     color: Colors.black26,
@@ -377,6 +546,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                     onPressed: () => Navigator.pop(context),
                   ),
                 ),
+                const SizedBox(width: 8),
+                // Flash toggle
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Colors.black26,
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: Icon(_flashIcon(), color: Colors.white),
+                    onPressed: _toggleFlash,
+                    tooltip: 'Flash: ${_flashLabel()}',
+                  ),
+                ),
+                const Spacer(),
+                // Visibility toggle
                 GestureDetector(
                   onTap: _toggleVisibility,
                   child: Container(
@@ -522,6 +706,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                               ),
                       ),
                     ],
+                  ),
+                ),
+
+                // Flip Camera Button (Bottom Right)
+                Positioned(
+                  right: 24,
+                  child: GestureDetector(
+                    onTap: _flipCamera,
+                    child: Container(
+                      height: 50,
+                      width: 50,
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white54, width: 2),
+                      ),
+                      child: const Icon(
+                        Icons.flip_camera_ios,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                    ),
                   ),
                 ),
               ],

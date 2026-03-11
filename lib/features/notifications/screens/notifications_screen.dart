@@ -8,6 +8,7 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 
+
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
 
@@ -171,10 +172,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             style: TextStyle(color: Colors.black, fontSize: 13),
             children: [
               TextSpan(
-                text: actor['display_name'] ?? 'Someone',
+                text: item['title'] ?? 'New Notification',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              TextSpan(text: ' ${item['title']}'),
             ],
           ),
         ),
@@ -269,13 +269,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           tableTitle = '${chat['destination_city']} Group';
         }
       } else if (chatType == 'dm' || chatType == 'direct') {
-        // Ensure "direct_" prefix for DMs
-        // If entityId is the chat UUID, prefix matches ActiveChatsList
-        channelId = 'direct_$entityId';
-
-        // Fetch Other User Name for Title
-        // (Optional optimization: pass name in metadata)
-        tableTitle = 'Direct Message';
+        // For DM notifications, entity_id IS the direct_chats.id (confirmed from schema).
+        // No extra DB lookups needed.
+        var chatId = metadata['chat_id'] ?? entityId;
+        channelId = chatId.startsWith('direct_') ? chatId : 'direct_$chatId';
+        tableTitle = metadata['actor_name'] ?? 'Direct Message';
+        entityId = chatId;
       } else {
         // Table / Hangout
         final table = await SupabaseConfig.client
@@ -292,15 +291,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     if (mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ChatScreen(
-            tableId: entityId,
-            channelId: channelId,
-            tableTitle: tableTitle,
-            chatType: chatType == 'dm' ? 'dm' : chatType, // normalize dm
-          ),
+      // Normalize 'direct' -> 'dm' so ChatScreen queries the right tables
+      final normalizedChatType = (chatType == 'direct') ? 'dm' : chatType;
+
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        enableDrag: true,
+        builder: (context) => ChatScreen(
+          tableId: entityId,
+          channelId: channelId,
+          tableTitle: tableTitle,
+          chatType: normalizedChatType,
         ),
       );
     }

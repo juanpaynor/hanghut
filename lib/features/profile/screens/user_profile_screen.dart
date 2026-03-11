@@ -430,7 +430,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             // 2. Glass Stats Card (Floating Overlap)
             SliverToBoxAdapter(
               child: Transform.translate(
-                offset: const Offset(0, 0), // Removed overlap effect
+                offset: const Offset(
+                  0,
+                  -20,
+                ), // Restore slight overlap for depth
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child:
@@ -473,7 +476,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 24), // Added vertical spacing
+                    const SizedBox(height: 8), // Adjusted for overlap offset
                     // Action Buttons (Only for others)
                     if (!widget.isOwnProfile) ...[
                       Row(
@@ -492,10 +495,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                         : Colors.white,
                                     elevation: 0,
                                     padding: const EdgeInsets.symmetric(
-                                      vertical: 16, // Taller buttons
+                                      vertical: 14, // Tighter
                                     ),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
+                                      borderRadius: BorderRadius.circular(
+                                        24,
+                                      ), // Pill shape
                                       side: _isFollowing
                                           ? BorderSide(
                                               color: Theme.of(
@@ -509,12 +514,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                     _isFollowing
                                         ? Icons.check
                                         : Icons.person_add,
-                                    size: 20,
+                                    size: 18,
                                   ),
                                   label: Text(
                                     _isFollowing ? 'Following' : 'Follow',
                                     style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
@@ -526,23 +531,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: AppTheme.primaryColor,
                                     padding: const EdgeInsets.symmetric(
-                                      vertical: 16, // Taller buttons
+                                      vertical: 14,
                                     ),
                                     side: const BorderSide(
                                       color: AppTheme.primaryColor,
+                                      width: 1.5,
                                     ),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
+                                      borderRadius: BorderRadius.circular(24),
                                     ),
                                   ),
                                   icon: const Icon(
                                     Icons.chat_bubble_outline,
-                                    size: 20,
+                                    size: 18,
                                   ),
                                   label: const Text(
                                     'Message',
                                     style: TextStyle(
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
@@ -610,21 +616,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
                     // Photos Gallery
                     if (_userPhotos.isNotEmpty) ...[
+                      const SizedBox(height: 8),
                       Text(
                         'GALLERY',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           letterSpacing: 1.5,
                           fontWeight: FontWeight.bold,
-                          color: Colors.grey,
+                          color: isDark ? Colors.grey[500] : Colors.grey[600],
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       SizedBox(
-                        height: 100, // Horizontal strip
+                        height: 120, // Slightly taller strip
                         child: ListView.separated(
                           scrollDirection: Axis.horizontal,
                           itemCount: _userPhotos.length,
-                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 12),
                           itemBuilder: (context, index) {
                             final url = _userPhotos[index]['photo_url'] ?? '';
                             return GestureDetector(
@@ -640,12 +648,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                 }
                               },
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(16),
                                 child: Hero(
                                   tag: url,
                                   child: CachedNetworkImage(
                                     imageUrl: url,
-                                    height: 100,
+                                    height: 120,
                                     width: 100,
                                     fit: BoxFit.cover,
                                     placeholder: (context, url) =>
@@ -657,6 +665,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           },
                         ),
                       ),
+                      const SizedBox(height: 32),
                     ],
                   ],
                 ),
@@ -669,7 +678,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   _buildSectionHeader(context, 'ACTIVE QUESTS'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   const QuestCard(
                     title: 'Weekend Warrior',
                     description: 'Join a table this weekend',
@@ -694,7 +703,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       reward: 'Badge + 500 XP',
                       type: 'Lifetime',
                     ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 32),
                 ]),
               ),
             ),
@@ -707,17 +716,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const SizedBox(height: 24),
                       _buildSectionHeader(context, 'BADGES'),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       GridView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         gridDelegate:
                             const SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: 4,
-                              crossAxisSpacing: 12,
-                              mainAxisSpacing: 12,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
                             ),
                         itemCount: _badges.length,
                         itemBuilder: (context, index) {
@@ -728,30 +736,31 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                               padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
                                 color: isDark ? Colors.grey[900] : Colors.white,
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
                                   color: (badge['color'] as Color).withOpacity(
-                                    0.5,
+                                    0.2,
                                   ),
                                 ),
                                 boxShadow: [
                                   BoxShadow(
                                     color: (badge['color'] as Color)
-                                        .withOpacity(0.1),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
+                                        .withOpacity(0.08),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
                                   ),
                                 ],
                               ),
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Icon(
                                     badge['icon'],
                                     color: badge['color'],
-                                    size: 28,
+                                    size: 26,
                                   ),
-                                  const SizedBox(height: 4),
+                                  const SizedBox(height: 6),
                                   Text(
                                     badge['name'],
                                     style: TextStyle(
@@ -769,7 +778,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           );
                         },
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 32),
                     ],
                   ),
                 ),

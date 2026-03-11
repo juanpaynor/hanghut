@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/services/location_service.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 
 class EditPostModal extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -15,6 +18,11 @@ class _EditPostModalState extends State<EditPostModal> {
   bool _isSubmitting = false;
   bool _hasChanges = false;
 
+  double? _selectedLat;
+  double? _selectedLng;
+  double? _postLat;
+  double? _postLng;
+
   @override
   void initState() {
     super.initState();
@@ -22,10 +30,25 @@ class _EditPostModalState extends State<EditPostModal> {
       text: widget.post['content'] ?? '',
     );
     _contentController.addListener(_onChanged);
+
+    // Initialize location
+    _postLat = widget.post['latitude'] is num
+        ? (widget.post['latitude'] as num).toDouble()
+        : null;
+    _postLng = widget.post['longitude'] is num
+        ? (widget.post['longitude'] as num).toDouble()
+        : null;
+    _selectedLat = _postLat;
+    _selectedLng = _postLng;
   }
 
   void _onChanged() {
-    final changed = _contentController.text != (widget.post['content'] ?? '');
+    final textChanged =
+        _contentController.text != (widget.post['content'] ?? '');
+    final locationChanged =
+        _selectedLat != _postLat || _selectedLng != _postLng;
+    final changed = textChanged || locationChanged;
+
     if (changed != _hasChanges) {
       setState(() => _hasChanges = changed);
     }
@@ -35,6 +58,44 @@ class _EditPostModalState extends State<EditPostModal> {
   void dispose() {
     _contentController.dispose();
     super.dispose();
+  }
+
+  Future<void> _openLocationPicker() async {
+    // Determine starting position (either post's current location or user's current device location)
+    Position? startPos;
+    if (_selectedLat != null && _selectedLng != null) {
+      startPos = Position(
+        latitude: _selectedLat!,
+        longitude: _selectedLng!,
+        timestamp: DateTime.now(),
+        accuracy: 0,
+        altitude: 0,
+        heading: 0,
+        speed: 0,
+        speedAccuracy: 0,
+        altitudeAccuracy: 0,
+        headingAccuracy: 0,
+      );
+    } else {
+      startPos = await LocationService().getCurrentLocation();
+    }
+
+    if (!mounted) return;
+
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => LocationPickerModal(initialPosition: startPos),
+    );
+
+    if (result != null) {
+      setState(() {
+        _selectedLat = result['latitude'];
+        _selectedLng = result['longitude'];
+      });
+      _onChanged(); // Trigger change detection
+    }
   }
 
   Future<void> _save() async {
@@ -48,9 +109,15 @@ class _EditPostModalState extends State<EditPostModal> {
 
     setState(() => _isSubmitting = true);
 
+    // Only send location if it has changed
+    final locationChanged =
+        _selectedLat != _postLat || _selectedLng != _postLng;
+
     final result = await SocialService().editPost(
       postId: widget.post['id'],
       content: newContent,
+      latitude: locationChanged ? _selectedLat : null,
+      longitude: locationChanged ? _selectedLng : null,
     );
 
     if (mounted) {
@@ -228,6 +295,66 @@ class _EditPostModalState extends State<EditPostModal> {
                           ),
                         ),
                       ],
+
+                      // Location Picker Row
+                      const SizedBox(height: 16),
+                      InkWell(
+                        onTap: _openLocationPicker,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[200]!),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(
+                                    context,
+                                  ).primaryColor.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.location_on,
+                                  color: Theme.of(context).primaryColor,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Add Location',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.grey[800],
+                                      ),
+                                    ),
+                                    Text(
+                                      (_selectedLat != null)
+                                          ? 'Location Selected'
+                                          : 'Tap to pick location',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey[500],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: Colors.grey[400],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),

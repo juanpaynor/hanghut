@@ -30,6 +30,17 @@ void callbackDispatcher() {
     print("📍 BACKGROUND TASK: $task started");
 
     try {
+      // Initialize dependencies in the background isolate
+      WidgetsFlutterBinding.ensureInitialized();
+
+      try {
+        await dotenv.load();
+      } catch (_) {
+        // .env may not exist in release builds
+      }
+
+      await SupabaseConfig.initialize();
+
       // 1. Initialize Engine (Loads cache)
       final engine = GeofenceEngine();
       await engine.init();
@@ -44,6 +55,9 @@ void callbackDispatcher() {
         );
         // 3. Run Check
         engine.checkProximity(pos.latitude, pos.longitude);
+
+        // 4. Refresh cache from DB while we have connectivity
+        await engine.syncGeofences();
       } else {
         print("⚠️ BACKGROUND TASK: Could not get location");
       }
@@ -69,7 +83,7 @@ Future<void> main() async {
   // Initialize Workmanager
   Workmanager().initialize(
     callbackDispatcher,
-    isInDebugMode: true, // TODO: Set to false in production
+    isInDebugMode: false, // Production: no debug notifications
   );
 
   // Register Periodic Task (15 min interval)

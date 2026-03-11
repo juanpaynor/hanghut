@@ -1,36 +1,70 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/features/ticketing/models/event.dart';
 
 class TrendingCarousel extends StatelessWidget {
-  final List<Map<String, dynamic>> tables;
-  final Function(Map<String, dynamic>) onTableTap;
+  final List<dynamic>
+  items; // Support both Map<String, dynamic> (Tables) and Event
+  final Function(dynamic) onItemTap;
+  final String? fixedBadge; // If null, derives from item
 
   const TrendingCarousel({
     super.key,
-    required this.tables,
-    required this.onTableTap,
+    required this.items,
+    required this.onItemTap,
+    this.fixedBadge,
   });
+
+  String _getTitle(dynamic item) {
+    if (item is Event) return item.title;
+    if (item is Map) return item['title'] ?? 'Hangout';
+    return '';
+  }
+
+  String? _getImageUrl(dynamic item) {
+    if (item is Event) return item.coverImageUrl;
+    if (item is Map) {
+      String? img = item['image_url'] ?? item['marker_image_url'];
+      if (img == null && item['images'] != null && (item['images'] as List).isNotEmpty) {
+        img = (item['images'] as List).first as String?;
+      }
+      return img ?? 'https://images.unsplash.com/photo-1543007630-9710e4a00a20?auto=format&fit=crop&q=80';
+    }
+    return '';
+  }
+
+  String _getBadge(dynamic item) {
+    if (fixedBadge != null) return fixedBadge!;
+    if (item is Event) return 'EVENT';
+    if (item is Map) {
+      if (item['is_experience'] == true) {
+        final expType = item['experience_type'] as String?;
+        return expType?.replaceAll('_', ' ').toUpperCase() ?? 'EXPERIENCE';
+      }
+      final type = item['cuisine_type']; // Activity type
+      return type?.toUpperCase() ?? 'PENDING';
+    }
+    return 'HAPPENING';
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (tables.isEmpty) return const SizedBox.shrink();
+    if (items.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
       height: 180,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: tables.length,
+        itemCount: items.length,
         itemBuilder: (context, index) {
-          final table = tables[index];
-          final title = table['title'] ?? 'Hangout';
-          final bgImage =
-              table['image_url'] ??
-              table['marker_image_url'] ??
-              'https://images.unsplash.com/photo-1543007630-9710e4a00a20?auto=format&fit=crop&q=80';
+          final item = items[index];
+          final title = _getTitle(item);
+          final bgImage = _getImageUrl(item);
+          final badge = _getBadge(item);
 
           return GestureDetector(
-            onTap: () => onTableTap(table),
+            onTap: () => onItemTap(item),
             child: Container(
               width: 140,
               margin: const EdgeInsets.only(right: 12),
@@ -44,7 +78,7 @@ class TrendingCarousel extends StatelessWidget {
                   // Image
                   Positioned.fill(
                     child: CachedNetworkImage(
-                      imageUrl: bgImage,
+                      imageUrl: bgImage ?? '',
                       fit: BoxFit.cover,
                       placeholder: (context, url) =>
                           Container(color: Colors.grey[200]),
@@ -88,9 +122,9 @@ class TrendingCarousel extends StatelessWidget {
                             color: const Color(0xFFFFD700),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: const Text(
-                            'PENDING',
-                            style: TextStyle(
+                          child: Text(
+                            badge,
+                            style: const TextStyle(
                               color: Colors.black,
                               fontSize: 8,
                               fontWeight: FontWeight.bold,

@@ -465,7 +465,8 @@ class SocialService {
               avatar_url,
               user_photos (photo_url, is_primary)
             ),
-            comment_likes (user_id)
+            comment_likes (user_id),
+            comment_reactions (emoji, user_id)
           ''')
           .eq('post_id', postId)
           .order('created_at', ascending: true);
@@ -491,12 +492,29 @@ class SocialService {
 
         final likes = comment['comment_likes'] as List;
 
+        // Parse reactions
+        final rawReactions = comment['comment_reactions'] as List? ?? [];
+        final Map<String, Map<String, dynamic>> parsedReactions = {};
+        for (var r in rawReactions) {
+          final emoji = r['emoji'] as String;
+          final uId = r['user_id'] as String;
+
+          if (!parsedReactions.containsKey(emoji)) {
+            parsedReactions[emoji] = {'count': 0, 'is_reacted': false};
+          }
+          parsedReactions[emoji]!['count'] =
+              (parsedReactions[emoji]!['count'] as int) + 1;
+          if (uId == currentUserId) {
+            parsedReactions[emoji]!['is_reacted'] = true;
+          }
+        }
+
         return {
           ...comment,
           'user': {...userData ?? {}, 'avatar_url': avatarUrl},
           'like_count': likes.length,
           'is_liked': likes.any((l) => l['user_id'] == currentUserId),
-          'reactions': <String, Map<String, dynamic>>{},
+          'reactions': parsedReactions,
           'replies': [],
         };
       }).toList();
@@ -801,6 +819,8 @@ class SocialService {
     required String postId,
     required String content,
     String? gifUrl,
+    double? latitude,
+    double? longitude,
   }) async {
     try {
       final userId = _client.auth.currentUser?.id;
@@ -811,6 +831,13 @@ class SocialService {
       // Allow clearing or changing gif
       if (gifUrl != null) {
         updateData['gif_url'] = gifUrl;
+      }
+
+      // Handle Location Changes
+      if (latitude != null && longitude != null) {
+        updateData['latitude'] = latitude;
+        updateData['longitude'] = longitude;
+        updateData['h3_cell'] = _calculateH3Cell(latitude, longitude);
       }
 
       final response = await _client
