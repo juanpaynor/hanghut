@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:intl/intl.dart';
 
 class ActiveChatsList extends StatefulWidget {
@@ -113,6 +114,62 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
     }
   }
 
+  /// Replaces raw image URLs in subtitle with a friendly label
+  String _formatSubtitle(String subtitle) {
+    if (subtitle.isEmpty) return subtitle;
+    final lower = subtitle.toLowerCase();
+    if (lower.contains('/storage/v1/object/') ||
+        RegExp(r'\.(jpg|jpeg|png|gif|webp)(\?|$)', caseSensitive: false)
+            .hasMatch(lower)) {
+      return '📷 Photo';
+    }
+    return subtitle;
+  }
+
+  Future<bool> _confirmDeleteChat(Map<String, dynamic> chat) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Conversation'),
+        content: Text(
+          'Remove your chat with ${chat['title'] ?? 'this person'}? '
+          'This will remove it from your inbox.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return false;
+
+    try {
+      await DirectChatService().deleteChat(chat['chat_id']);
+      if (mounted) {
+        setState(() {
+          _chats.removeWhere((c) => c['chat_id'] == chat['chat_id']);
+        });
+      }
+      return false; // Already removed from list, don't let Dismissible animate again
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to delete chat')),
+        );
+        _loadChats(refresh: true); // Rollback
+      }
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -172,7 +229,29 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
                     );
                   }
 
-                  return _buildChatCard(_chats[index]);
+                  final chat = _chats[index];
+                  final isDm = chat['chat_type'] == 'dm';
+
+                  if (isDm) {
+                    return Dismissible(
+                      key: Key('chat_${chat['chat_id']}'),
+                      direction: DismissDirection.endToStart,
+                      confirmDismiss: (_) => _confirmDeleteChat(chat),
+                      background: Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 24),
+                        child: const Icon(Icons.delete_outline, color: Colors.white, size: 28),
+                      ),
+                      child: _buildChatCard(chat),
+                    );
+                  }
+
+                  return _buildChatCard(chat);
                 },
               ),
       ),
@@ -285,7 +364,7 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      chat['subtitle'] ?? '',
+                      _formatSubtitle(chat['subtitle'] ?? ''),
                       style: TextStyle(
                         fontSize: 14,
                         color: chat['has_unread'] == true

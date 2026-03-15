@@ -17,6 +17,10 @@ class PushNotificationService {
 
   PushNotificationService._internal();
 
+  /// Set to true during payment flow to prevent FCM notifications from
+  /// blocking the main thread during app resume (Mapbox re-render window).
+  static bool suppressNotifications = false;
+
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
 
   Future<void> init() async {
@@ -71,25 +75,36 @@ class PushNotificationService {
         _fcm.onTokenRefresh.listen(_saveTokenToSupabase);
 
         // 5. Message Listeners
+        // Defer notification display to avoid competing with
+        // Mapbox re-render and other services during app resume.
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
           print('🔔 FCM Foreground Message: ${message.notification?.title}');
 
-          if (message.notification != null) {
-            NotificationService().showNotification(
-              id: message.hashCode,
-              title: message.notification!.title ?? 'New Notification',
-              body: message.notification!.body ?? '',
-              payload: jsonEncode(message.data), // Pass data for routing on tap
-            );
-          } else if (message.data.isNotEmpty) {
-            // Data-only message
-            NotificationService().showNotification(
-              id: message.hashCode,
-              title: 'Bitemates',
-              body: 'You have a new message', // Generic fallback
-              payload: jsonEncode(message.data),
-            );
+          // During payment flow, skip showing notifications entirely
+          // to prevent ANR from main thread contention with Mapbox re-render.
+          if (suppressNotifications) {
+            print('🔔 FCM: Notification suppressed (payment in progress)');
+            return;
           }
+
+          // Defer by 2 seconds for non-payment notifications
+          Future.delayed(const Duration(seconds: 2), () {
+            if (message.notification != null) {
+              NotificationService().showNotification(
+                id: message.hashCode,
+                title: message.notification!.title ?? 'New Notification',
+                body: message.notification!.body ?? '',
+                payload: jsonEncode(message.data),
+              );
+            } else if (message.data.isNotEmpty) {
+              NotificationService().showNotification(
+                id: message.hashCode,
+                title: 'Bitemates',
+                body: 'You have a new message',
+                payload: jsonEncode(message.data),
+              );
+            }
+          });
         });
 
         FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
@@ -115,20 +130,47 @@ class PushNotificationService {
     print('🔔 Handling Tap: $data');
     if (data['type'] == 'chat_message' || data['type'] == 'chat') {
       final String chatType = data['chat_type'] ?? 'table';
-      var tableId =
-          data['table_id']?.toString() ?? data['chat_id']?.toString();
+      // Support both push data keys (table_id, chat_id) and bell data keys (entity_id)
+      var entityId =
+          data['table_id']?.toString() ??
+          data['chat_id']?.toString() ??
+          data['entity_id']?.toString();
 
-      if (tableId != null) {
-        String channelId = '${chatType}_$tableId';
-        if (chatType == 'dm' || chatType == 'direct') {
-          // For DM push notifications, tableId IS the direct_chats.id (confirmed from schema).
-          // No extra DB lookups needed.
-          channelId = tableId!.startsWith('direct_')
-              ? tableId
-              : 'direct_$tableId';
-        } else if (chatType == 'trip') {
-          // Provide basic fallback for Trip Group name until it loads inside ChatScreen
-          channelId = data['ably_channel_id'] ?? channelId;
+      if (entityId != null) {
+        String channelId = '${chatType}_$entityId';
+        String tableTitle = data['sender_name'] ?? 'Chat';
+
+        try {
+          if (chatType == 'trip') {
+            // Fetch Trip Chat Details (same as bell handler)
+            final chat = await SupabaseConfig.client
+                .from('trip_group_chats')
+                .select('ably_channel_id, destination_city')
+                .eq('id', entityId)
+                .maybeSingle();
+
+            if (chat != null) {
+              channelId = chat['ably_channel_id'] ?? channelId;
+              tableTitle = '${chat['destination_city']} Group';
+            }
+          } else if (chatType == 'dm' || chatType == 'direct') {
+            var chatId = data['chat_id']?.toString() ?? entityId;
+            channelId = chatId.startsWith('direct_') ? chatId : 'direct_$chatId';
+            tableTitle = data['sender_name'] ?? data['actor_name'] ?? 'Direct Message';
+            entityId = chatId;
+          } else {
+            // Table / Hangout — look up title from DB
+            final table = await SupabaseConfig.client
+                .from('tables')
+                .select('title')
+                .eq('id', entityId)
+                .maybeSingle();
+            if (table != null) {
+              tableTitle = table['title'] ?? tableTitle;
+            }
+          }
+        } catch (e) {
+          print('⚠️ Push chat nav: fallback to raw data: $e');
         }
 
         // Normalize 'direct' -> 'dm' so ChatScreen queries the right tables
@@ -143,8 +185,8 @@ class PushNotificationService {
             enableDrag: true,
             builder: (context) => ChatScreen(
               channelId: channelId,
-              tableId: tableId!,
-              tableTitle: data['sender_name'] ?? 'Chat',
+              tableId: entityId!,
+              tableTitle: tableTitle,
               chatType: normalizedChatType,
             ),
           );
@@ -163,6 +205,33 @@ class PushNotificationService {
           (route) => false,
         );
       }
+    } else if (data['type'] == 'broadcast') {
+      // Admin broadcast notification — route to target screen or default to Feed
+      final target = data['target']?.toString();
+      int tabIndex = 0; // Default: Feed
+
+      switch (target) {
+        case 'map':
+          tabIndex = 1;
+          break;
+        case 'tickets':
+          tabIndex = 2;
+          break;
+        case 'profile':
+          tabIndex = 3;
+          break;
+        case 'feed':
+        default:
+          tabIndex = 0;
+          break;
+      }
+
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => MainNavigationScreen(initialIndex: tabIndex),
+        ),
+        (route) => false,
+      );
     }
   }
 

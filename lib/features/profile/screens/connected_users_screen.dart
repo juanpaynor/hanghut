@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
@@ -77,13 +78,33 @@ class _UserListTab extends StatefulWidget {
 
 class _UserListTabState extends State<_UserListTab> {
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
   List<Map<String, dynamic>> _users = [];
   String? _errorMessage;
+  final ScrollController _scrollController = ScrollController();
+  static const int _pageSize = 30;
 
   @override
   void initState() {
     super.initState();
     _loadUsers();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _hasMore) {
+        _loadMore();
+      }
+    }
   }
 
   Future<void> _loadUsers() async {
@@ -92,14 +113,15 @@ class _UserListTabState extends State<_UserListTab> {
       List<Map<String, dynamic>> users;
 
       if (widget.type == 'followers') {
-        users = await socialService.getFollowers(widget.userId);
+        users = await socialService.getFollowers(widget.userId, limit: _pageSize, offset: 0);
       } else {
-        users = await socialService.getFollowing(widget.userId);
+        users = await socialService.getFollowing(widget.userId, limit: _pageSize, offset: 0);
       }
 
       if (mounted) {
         setState(() {
           _users = users;
+          _hasMore = users.length >= _pageSize;
           _isLoading = false;
         });
       }
@@ -110,6 +132,32 @@ class _UserListTabState extends State<_UserListTab> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_isLoadingMore || !_hasMore) return;
+    setState(() => _isLoadingMore = true);
+
+    try {
+      final socialService = SocialService();
+      List<Map<String, dynamic>> users;
+
+      if (widget.type == 'followers') {
+        users = await socialService.getFollowers(widget.userId, limit: _pageSize, offset: _users.length);
+      } else {
+        users = await socialService.getFollowing(widget.userId, limit: _pageSize, offset: _users.length);
+      }
+
+      if (mounted) {
+        setState(() {
+          _users.addAll(users);
+          _hasMore = users.length >= _pageSize;
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoadingMore = false);
     }
   }
 
@@ -138,9 +186,23 @@ class _UserListTabState extends State<_UserListTab> {
     }
 
     return ListView.builder(
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _users.length,
+      itemCount: _users.length + (_isLoadingMore ? 1 : 0),
       itemBuilder: (context, index) {
+        if (index == _users.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
         final user = _users[index];
         final avatarUrl = user['avatar_url'];
         final displayName = user['display_name'] ?? 'Unknown User';
@@ -257,6 +319,12 @@ class _FollowButtonState extends State<_FollowButton> {
 
   @override
   Widget build(BuildContext context) {
+    // Don't show follow button for self
+    final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+    if (currentUserId == widget.userId) {
+      return const SizedBox.shrink();
+    }
+
     if (_isLoading) {
       return const SizedBox(
         width: 24,
@@ -264,10 +332,6 @@ class _FollowButtonState extends State<_FollowButton> {
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     }
-
-    // Don't show follow button for self
-    // (Assuming SocialService handles auth check, but here we can check basic logic if needed)
-    // For now, always show if not loading
 
     return OutlinedButton(
       onPressed: _toggle,

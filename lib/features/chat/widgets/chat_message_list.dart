@@ -20,6 +20,11 @@ class ChatMessageList extends StatelessWidget {
   final Function(Map<String, dynamic>) onShowActions;
   final Function(String, String) onReact;
   final Function(LinkableElement) onOpenLink;
+  final Function(String userId)? onMentionTap;
+  final List<Map<String, dynamic>> participants;
+  final String searchQuery;
+  final List<int> matchedIndices;
+  final int currentMatchIndex;
 
   const ChatMessageList({
     super.key,
@@ -35,6 +40,11 @@ class ChatMessageList extends StatelessWidget {
     required this.onShowActions,
     required this.onReact,
     required this.onOpenLink,
+    this.onMentionTap,
+    this.participants = const [],
+    this.searchQuery = '',
+    this.matchedIndices = const [],
+    this.currentMatchIndex = -1,
   });
 
   @override
@@ -104,6 +114,13 @@ class ChatMessageList extends StatelessWidget {
             }
           },
           onOpenLink: onOpenLink,
+          onMentionTap: onMentionTap,
+          participants: participants,
+          searchQuery: searchQuery,
+          isCurrentMatch: matchedIndices.isNotEmpty &&
+              currentMatchIndex >= 0 &&
+              currentMatchIndex < matchedIndices.length &&
+              matchedIndices[currentMatchIndex] == index,
         );
       },
     );

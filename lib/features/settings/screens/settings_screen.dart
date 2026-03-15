@@ -10,8 +10,8 @@ import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/legal/screens/terms_of_service_screen.dart';
-import 'package:bitemates/features/verification/screens/user_verification_screen.dart';
-import 'package:bitemates/features/experiences/screens/my_trips_screen.dart';
+import 'package:bitemates/features/settings/screens/blocked_users_screen.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -166,40 +166,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SettingsSection(
             title: 'ACCOUNT',
             children: [
-              ListTile(
-                leading: Icon(
-                  Icons.verified_user,
-                  color: Theme.of(context).primaryColor,
-                ),
-                title: const Text('Identity Verification'),
-                subtitle: const Text('Get verified badge'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const UserVerificationScreen(),
-                    ),
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(
-                  Icons.luggage,
-                  color: Theme.of(context).primaryColor,
-                ),
-                title: const Text('My Trips'),
-                subtitle: const Text('View your booked experiences & tickets'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const MyTripsScreen(),
-                    ),
-                  );
-                },
-              ),
+              // Removed: Identity Verification, My Trips
             ],
           ),
           const Divider(),
@@ -278,7 +245,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 title: const Text('Blocked Users'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () {},
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const BlockedUsersScreen(),
+                    ),
+                  );
+                },
               ),
               // Moved Dark Mode here for consistency, or can keep seperate
               SwitchListTile(
@@ -338,11 +312,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 title: const Text('Contact Support'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Support chat placeholder')),
-                  );
-                },
+                onTap: () => _launchUrl('mailto:support@bitemates.app?subject=Support%20Request'),
               ),
               ListTile(
                 leading: Icon(
@@ -350,10 +320,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: Theme.of(context).iconTheme.color,
                 ),
                 title: const Text('Report an Issue'),
+                subtitle: const Text('Report bugs or app problems'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Report issue placeholder')),
+                  ReportModal.show(
+                    context,
+                    targetType: 'app',
+                    targetId: '00000000-0000-0000-0000-000000000000', // nil UUID for app-level reports
+                    targetName: 'App Issue',
                   );
                 },
               ),

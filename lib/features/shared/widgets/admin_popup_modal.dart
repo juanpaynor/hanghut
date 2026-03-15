@@ -47,6 +47,7 @@ class AdminPopupModal extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: Colors.white,
               shape: BoxShape.rectangle,
@@ -59,10 +60,11 @@ class AdminPopupModal extends StatelessWidget {
                 ),
               ],
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min, // To make the card compact
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min, // To make the card compact
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
                 if (imageUrl != null) ...[
                   ClipRRect(
                     borderRadius: const BorderRadius.vertical(
@@ -174,6 +176,7 @@ class AdminPopupModal extends StatelessWidget {
               ],
             ),
           ),
+        ),
           // Floating X button at the top right
           Positioned(
             right: 8,

@@ -44,12 +44,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<Map<String, dynamic>> _userPhotos = [];
   String? _errorMessage;
   bool _isFollowing = false;
+  late final bool _isOwnProfile;
 
   @override
   void initState() {
     super.initState();
+    // Auto-detect own profile: override widget.isOwnProfile if userId matches current user
+    final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+    _isOwnProfile = widget.isOwnProfile || widget.userId == currentUserId;
     _loadUserProfile();
-    if (!widget.isOwnProfile) {
+    if (!_isOwnProfile) {
       _checkFollowStatus();
     }
   }
@@ -405,7 +409,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               imageUrl: _userData?['avatar_url'],
               displayName: _userData?['display_name'] ?? 'Unknown',
               characterClass: charClass,
-              isOwnProfile: widget.isOwnProfile,
+              isOwnProfile: _isOwnProfile,
               onEdit: () async {
                 final bool? result = await Navigator.push(
                   context,
@@ -478,7 +482,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   children: [
                     const SizedBox(height: 8), // Adjusted for overlap offset
                     // Action Buttons (Only for others)
-                    if (!widget.isOwnProfile) ...[
+                    if (!_isOwnProfile) ...[
                       Row(
                             children: [
                               Expanded(
@@ -562,7 +566,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ],
 
                     // Switch to Host Mode (own profile only)
-                    if (widget.isOwnProfile) ...[
+                    if (_isOwnProfile) ...[
                       _HostModeButton(),
                       const SizedBox(height: 16),
                     ],

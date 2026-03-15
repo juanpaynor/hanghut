@@ -162,4 +162,15 @@ class DirectChatService {
       print('Error marking as read: $e');
     }
   }
+  /// Delete a DM chat — removes the current user from the conversation.
+  /// If both participants have left, the chat and all messages are cleaned up.
+  Future<void> deleteChat(String chatId) async {
+    try {
+      await _client.rpc('delete_dm_chat', params: {'p_chat_id': chatId});
+      print('✅ DM chat $chatId deleted');
+    } catch (e) {
+      print('❌ Error deleting DM chat: $e');
+      rethrow;
+    }
+  }
 }

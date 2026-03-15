@@ -329,6 +329,42 @@ serve(async (req) => {
                 console.error('❌ Failed to issue tickets:', issueError)
             } else {
                 console.log(`✅ Successfully issued ${generatedTickets?.length ?? 0} tickets`)
+
+                // 🔔 Send push notification to the event host/organizer
+                try {
+                    const buyerName = intent.guest_name || intent.user?.full_name || 'Someone';
+                    const eventTitle = intent.event?.title || 'your event';
+                    const qty = intent.quantity || 1;
+
+                    // organizer_id references partners.id, not users.id
+                    // Look up the partner's actual user_id for push delivery
+                    const { data: partnerData } = await supabaseClient
+                        .from('partners')
+                        .select('user_id')
+                        .eq('id', intent.event.organizer_id)
+                        .single();
+
+                    if (partnerData?.user_id) {
+                        console.log(`🔔 Sending purchase push to partner user ${partnerData.user_id}...`);
+                        await supabaseClient.functions.invoke('send-push', {
+                            body: {
+                                user_id: partnerData.user_id,
+                                title: '🎟️ New Ticket Purchase!',
+                                body: `${buyerName} just bought ${qty} ticket${qty > 1 ? 's' : ''} for ${eventTitle}`,
+                                image: intent.event?.cover_image_url || null,
+                                data: {
+                                    type: 'ticket_purchase',
+                                    event_id: intent.event_id,
+                                },
+                            },
+                        });
+                        console.log('✅ Purchase push notification sent to organizer');
+                    } else {
+                        console.warn('⚠️ No user_id found for partner/organizer:', intent.event.organizer_id);
+                    }
+                } catch (pushErr) {
+                    console.error('⚠️ Failed to send purchase push (non-critical):', pushErr);
+                }
             }
 
             // Determine recipient (Guest or User)

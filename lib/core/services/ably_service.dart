@@ -58,6 +58,7 @@ class AblyService {
     String? senderPhotoUrl,
     String contentType = 'text',
     String? messageId, // Add message ID
+    String? replyToId, // Add reply reference
   }) async {
     if (_realtime == null) await init();
 
@@ -73,6 +74,7 @@ class AblyService {
           'senderName': senderName,
           'senderPhotoUrl': senderPhotoUrl,
           'timestamp': DateTime.now().toIso8601String(),
+          if (replyToId != null) 'replyToId': replyToId,
         },
       );
       print('✅ ABLY: Message published to $channelName');

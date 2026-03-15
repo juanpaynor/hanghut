@@ -5,6 +5,7 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback onLeave;
   final VoidCallback onClose;
   final VoidCallback onInfoTap;
+  final VoidCallback? onSearch;
 
   const ChatHeader({
     super.key,
@@ -12,6 +13,7 @@ class ChatHeader extends StatelessWidget {
     required this.onLeave,
     required this.onClose,
     required this.onInfoTap,
+    this.onSearch,
   });
 
   @override
@@ -64,6 +66,23 @@ class ChatHeader extends StatelessWidget {
                   ),
                 ),
               ),
+              // Search Button
+              if (onSearch != null)
+                IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.search,
+                      size: 18,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  onPressed: onSearch,
+                ),
               // Actions Menu
               PopupMenuButton<String>(
                 icon: Container(

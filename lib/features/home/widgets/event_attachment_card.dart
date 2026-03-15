@@ -38,19 +38,8 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
 
     return Container(
       margin: const EdgeInsets.only(top: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
       clipBehavior: Clip.antiAlias,
+      decoration: const BoxDecoration(),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -71,31 +60,24 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
               if (imageUrl != null)
                 GestureDetector(
                   onTap: widget.onImageTap,
-                  child: SizedBox(
-                    height: 150,
+                  child: CachedNetworkImage(
+                    imageUrl: imageUrl,
                     width: double.infinity,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        CachedNetworkImage(
-                          imageUrl: imageUrl,
-                          fit: BoxFit.cover,
-                          placeholder: (context, url) => Container(
-                            color: Colors.grey[100],
-                            child: const Center(
-                              child: CircularProgressIndicator(),
-                            ),
-                          ),
-                          errorWidget: (context, url, error) => Container(
-                            color: Colors.grey[100],
-                            child: const Icon(
-                              Icons.broken_image,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ),
-                        // Gradient Overlay for text readability if needed
-                      ],
+                    fit: BoxFit.fitWidth,
+                    placeholder: (context, url) => Container(
+                      height: 150,
+                      color: Colors.grey[100],
+                      child: const Center(
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
+                    errorWidget: (context, url, error) => Container(
+                      height: 150,
+                      color: Colors.grey[100],
+                      child: const Icon(
+                        Icons.broken_image,
+                        color: Colors.grey,
+                      ),
                     ),
                   ),
                 )

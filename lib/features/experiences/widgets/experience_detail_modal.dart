@@ -368,7 +368,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                           Icon(
                             Icons.location_on,
                             size: 18,
-                            color: Colors.pink[600],
+                            color: Colors.grey,
                           ),
                           const SizedBox(width: 6),
                           Expanded(
@@ -614,7 +614,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                           children: [
                             Icon(
                               Icons.map_outlined,
-                              color: Colors.pink[600],
+                              color: Colors.grey,
                               size: 22,
                             ),
                             const SizedBox(width: 8),
@@ -638,7 +638,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                             foregroundColor: Colors.black87,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(14),
                             ),
                             padding: const EdgeInsets.symmetric(
                               vertical: 12,
@@ -857,11 +857,11 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                       child: ElevatedButton(
                         onPressed: _isBooking ? null : _handleBookNow,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.pink[600],
+                          backgroundColor: Colors.black,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(14),
                           ),
                           elevation: 0,
                         ),
@@ -1012,11 +1012,11 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                       },
                       calendarStyle: CalendarStyle(
                         selectedDecoration: BoxDecoration(
-                          color: Colors.pink[600],
+                          color: Colors.black,
                           shape: BoxShape.circle,
                         ),
                         todayDecoration: BoxDecoration(
-                          color: Colors.pink[100],
+                          color: Colors.grey[300],
                           shape: BoxShape.circle,
                         ),
                         markerDecoration: const BoxDecoration(
@@ -1085,7 +1085,7 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                           border: Border.all(
                             color: isFull
                                 ? Colors.grey[200]!
-                                : Colors.pink[100]!,
+                                : Colors.grey[300]!,
                           ),
                           borderRadius: BorderRadius.circular(12),
                           color: isFull ? Colors.grey[50] : Colors.white,
@@ -1118,9 +1118,12 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                                   onPressed: () =>
                                       Navigator.pop(context, schedule),
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.pink[50],
-                                    foregroundColor: Colors.pink[700],
+                                    backgroundColor: Colors.black,
+                                    foregroundColor: Colors.white,
                                     elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
                                   ),
                                   child: const Text('Select'),
                                 ),

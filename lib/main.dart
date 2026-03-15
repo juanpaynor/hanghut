@@ -13,6 +13,7 @@ import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/core/services/account_status_service.dart';
 import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 
 import 'package:workmanager/workmanager.dart';
 import 'package:bitemates/features/location/logic/geofence_engine.dart';
@@ -71,9 +72,10 @@ void callbackDispatcher() {
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // If you're going to use other Firebase services in the background, such as Firestore,
-  // make sure you call `initializeApp` before using other Firebase services.
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Keep this handler as light as possible — no Firebase.initializeApp()
+  // unless you actually need to use Firebase services (Firestore, etc.) here.
+  // Heavy initialization in the background isolate competes with the main
+  // app's memory and can cause Android to OOM-kill the process.
   print("Handling a background message: ${message.messageId}");
 }
 
@@ -124,17 +126,19 @@ Future<void> main() async {
     print("❌ FIREBASE INIT ERROR: $e");
   }
 
-  // Initialize Foreground Geofence Engine
-  await GeofenceEngine().init();
-  // Attempt sync (if network available)
-  GeofenceEngine().syncGeofences(); // Fire and forget
-
-  // Update user location once per 24h (non-blocking)
-  AppLocationService().updateLocationIfNeeded().catchError((e) {
-    print("⚠️ Location update failed (non-critical): $e");
-  });
-
+  // Initialize Foreground Geofence Engine + location (deferred to after first frame)
+  // This reduces startup jank — these are not needed before the UI renders
   runApp(const MyApp());
+
+  // Defer non-critical work to after the first frame renders
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    await GeofenceEngine().init();
+    GeofenceEngine().syncGeofences(); // Fire and forget
+
+    AppLocationService().updateLocationIfNeeded().catchError((e) {
+      print("⚠️ Location update failed (non-critical): $e");
+    });
+  });
 }
 
 // Global Navigator Key for Deep Linking
@@ -155,6 +159,7 @@ class MyApp extends StatelessWidget {
           return MaterialApp(
             title: 'HangHut',
             navigatorKey: navigatorKey, // Add Global Key
+            navigatorObservers: [AnalyticsService().observer],
             debugShowCheckedModeBanner: false,
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
@@ -219,6 +224,8 @@ class _SessionHandlerState extends State<SessionHandler> {
   @override
   void initState() {
     super.initState();
+    // Set analytics user ID on login
+    AnalyticsService().setUserId(widget.session.user.id);
     _statusFuture = AccountStatusService.checkStatus();
     _profileFuture = _checkProfileExists(widget.session.user.id);
   }

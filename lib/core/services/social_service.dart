@@ -384,33 +384,15 @@ class SocialService {
     }
   }
 
-  /// Get Bookmarked Posts
-  Future<List<Map<String, dynamic>>> getBookmarkedPosts() async {
+  /// Get Bookmarked Posts (paginated)
+  Future<List<Map<String, dynamic>>> getBookmarkedPosts({
+    int limit = 20,
+    int offset = 0,
+  }) async {
     try {
       final userId = _client.auth.currentUser?.id;
       if (userId == null) return [];
 
-      final response = await _client
-          .from('post_bookmarks')
-          .select('''
-            post:posts!inner(
-              *,
-              post_likes(count),
-              comments(count)
-            )
-          ''')
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
-
-      // Transform to match Feed format
-      // Note: This is a simpler fetch than the main feed, might lack user_datajoin if not careful
-      // We need to fetch user data manually or via join if we want rich cards
-      // For now, let's keep it simple or use a dedicated view/RPC if needed.
-      // Actually, let's just do a manual fetch/transform loop to match `getFeed` output structure
-      // or better, create an RPC for this too?
-      // For simplicity, let's reuse get_philippines_feed logic or similar client-side join.
-
-      // Better approach: Just use standard select with joins
       final data = await _client
           .from('post_bookmarks')
           .select('''
@@ -428,7 +410,8 @@ class SocialService {
             )
           ''')
           .eq('user_id', userId)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .range(offset, offset + limit - 1);
 
       final List<Map<String, dynamic>> posts = [];
       for (var item in data) {
@@ -437,11 +420,11 @@ class SocialService {
 
         posts.add({
           ...post,
-          'user': post['user'], // mapped correctly
+          'user': post['user'],
           'likes_count': likes.length,
           'is_liked': likes.any((l) => l['user_id'] == userId),
           'user_has_liked': likes.any((l) => l['user_id'] == userId),
-          'user_has_bookmarked': true, // Obviously
+          'user_has_bookmarked': true,
           'comment_count': (post['comments'] as List).length,
         });
       }
@@ -452,8 +435,12 @@ class SocialService {
     }
   }
 
-  /// Get comments for a post
-  Future<List<Map<String, dynamic>>> getComments(String postId) async {
+  /// Get comments for a post (paginated)
+  Future<Map<String, dynamic>> getComments(
+    String postId, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
     try {
       final response = await _client
           .from('comments')
@@ -469,11 +456,12 @@ class SocialService {
             comment_reactions (emoji, user_id)
           ''')
           .eq('post_id', postId)
-          .order('created_at', ascending: true);
+          .order('created_at', ascending: true)
+          .range(offset, offset + limit);
 
       final currentUserId = _client.auth.currentUser?.id;
 
-      return List<Map<String, dynamic>>.from(response).map((comment) {
+      final comments = List<Map<String, dynamic>>.from(response).map((comment) {
         // Enrich user avatar logic (same as feed)
         final userData = comment['user'] as Map<String, dynamic>?;
         String? avatarUrl = userData?['avatar_url'];
@@ -518,9 +506,14 @@ class SocialService {
           'replies': [],
         };
       }).toList();
+
+      return {
+        'comments': comments,
+        'hasMore': comments.length > limit,
+      };
     } catch (e) {
       print('❌ Error fetching comments: $e');
-      return [];
+      return {'comments': <Map<String, dynamic>>[], 'hasMore': false};
     }
   }
 
@@ -702,6 +695,7 @@ class SocialService {
   Future<void> followUser(String targetUserId) async {
     final user = _client.auth.currentUser;
     if (user == null) return;
+    if (user.id == targetUserId) return; // Prevent self-follow
 
     try {
       await _client.from('follows').insert({
@@ -729,19 +723,23 @@ class SocialService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getFollowers(String userId) async {
+  Future<List<Map<String, dynamic>>> getFollowers(
+    String userId, {
+    int limit = 30,
+    int offset = 0,
+  }) async {
     try {
       final response = await _client
           .from('follows')
           .select(
             'follower:users!follower_id(*, user_photos(photo_url, is_primary))',
           )
-          .eq('following_id', userId);
+          .eq('following_id', userId)
+          .range(offset, offset + limit - 1);
 
       return List<Map<String, dynamic>>.from(
         response.map((e) {
           final user = e['follower'] as Map<String, dynamic>;
-          // Enrich avatar_url if missing
           if (user['avatar_url'] == null && user['user_photos'] != null) {
             final photos = user['user_photos'] as List;
             if (photos.isNotEmpty) {
@@ -761,19 +759,23 @@ class SocialService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getFollowing(String userId) async {
+  Future<List<Map<String, dynamic>>> getFollowing(
+    String userId, {
+    int limit = 30,
+    int offset = 0,
+  }) async {
     try {
       final response = await _client
           .from('follows')
           .select(
             'following:users!following_id(*, user_photos(photo_url, is_primary))',
           )
-          .eq('follower_id', userId);
+          .eq('follower_id', userId)
+          .range(offset, offset + limit - 1);
 
       return List<Map<String, dynamic>>.from(
         response.map((e) {
           final user = e['following'] as Map<String, dynamic>;
-          // Enrich avatar_url if missing
           if (user['avatar_url'] == null && user['user_photos'] != null) {
             final photos = user['user_photos'] as List;
             if (photos.isNotEmpty) {

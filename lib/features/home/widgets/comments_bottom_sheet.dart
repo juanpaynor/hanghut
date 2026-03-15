@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
 class CommentsBottomSheet extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -15,9 +16,13 @@ class CommentsBottomSheet extends StatefulWidget {
 class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   final TextEditingController _commentController = TextEditingController();
   final FocusNode _inputFocusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
   List<Map<String, dynamic>> _comments = [];
   bool _isLoading = true;
   bool _isPosting = false;
+  bool _hasMore = true;
+  bool _isLoadingMore = false;
+  static const int _pageSize = 50;
 
   // Reply state
   String? _replyingToId;
@@ -40,13 +45,24 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   void initState() {
     super.initState();
     _loadComments();
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
     _commentController.dispose();
     _inputFocusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _hasMore) {
+        _loadMoreComments();
+      }
+    }
   }
 
   // --- Data: Build thread tree ---
@@ -70,16 +86,43 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
     setState(() => _isLoading = true);
     try {
-      final comments = await SocialService().getComments(postId);
+      final result = await SocialService().getComments(postId, limit: _pageSize, offset: 0);
       if (mounted) {
         setState(() {
-          _comments = comments;
+          _comments = List<Map<String, dynamic>>.from(result['comments'] ?? []);
+          _hasMore = result['hasMore'] ?? false;
           _isLoading = false;
         });
       }
     } catch (e) {
       print('Error loading comments: $e');
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadMoreComments() async {
+    if (_isLoadingMore || !_hasMore) return;
+    final postId = widget.post['id']?.toString();
+    if (postId == null || postId.isEmpty) return;
+
+    setState(() => _isLoadingMore = true);
+    try {
+      final result = await SocialService().getComments(
+        postId,
+        limit: _pageSize,
+        offset: _comments.length,
+      );
+      if (mounted) {
+        setState(() {
+          final newComments = List<Map<String, dynamic>>.from(result['comments'] ?? []);
+          _comments.addAll(newComments);
+          _hasMore = result['hasMore'] ?? false;
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading more comments: $e');
+      if (mounted) setState(() => _isLoadingMore = false);
     }
   }
 
@@ -254,9 +297,22 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 : _comments.isEmpty
                 ? _buildEmptyState()
                 : ListView.builder(
+                    controller: _scrollController,
                     padding: const EdgeInsets.all(16),
-                    itemCount: _parentComments.length,
+                    itemCount: _parentComments.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
+                      if (index == _parentComments.length) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      }
                       final parent = _parentComments[index];
                       return _buildCommentThread(parent);
                     },
@@ -428,21 +484,34 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Avatar
-            CircleAvatar(
-              radius: isReply ? 14 : 18,
-              backgroundColor: Colors.grey[300],
-              backgroundImage: userAvatar != null
-                  ? NetworkImage(userAvatar)
-                  : null,
-              child: userAvatar == null
-                  ? Text(
-                      userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
-                      style: TextStyle(
-                        fontSize: isReply ? 11 : 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    )
-                  : null,
+            GestureDetector(
+              onTap: () {
+                final userId = comment['user_id'] as String?;
+                if (userId != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => UserProfileScreen(userId: userId),
+                    ),
+                  );
+                }
+              },
+              child: CircleAvatar(
+                radius: isReply ? 14 : 18,
+                backgroundColor: Colors.grey[300],
+                backgroundImage: userAvatar != null
+                    ? NetworkImage(userAvatar)
+                    : null,
+                child: userAvatar == null
+                    ? Text(
+                        userName.isNotEmpty ? userName[0].toUpperCase() : 'U',
+                        style: TextStyle(
+                          fontSize: isReply ? 11 : 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : null,
+              ),
             ),
             const SizedBox(width: 10),
 

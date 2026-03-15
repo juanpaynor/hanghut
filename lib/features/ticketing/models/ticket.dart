@@ -34,28 +34,37 @@ class Ticket {
   });
 
   factory Ticket.fromJson(Map<String, dynamic> json) {
-    final String statusString = json['status'] as String;
+    final String statusString = (json['status'] ?? 'valid').toString();
+    // PostgreSQL numeric comes as String from RPC — handle both
+    double parsedPrice = 0.0;
+    if (json['price_paid'] != null) {
+      final raw = json['price_paid'];
+      if (raw is num) {
+        parsedPrice = raw.toDouble();
+      } else {
+        parsedPrice = double.tryParse(raw.toString()) ?? 0.0;
+      }
+    }
+
     return Ticket(
       id: json['id'] as String,
       eventId: json['event_id'] as String,
-      eventTitle: json['event_title'] as String,
-      eventVenue: json['event_venue'] as String,
-      eventDateTime: DateTime.parse(json['event_start'] as String),
+      eventTitle: (json['event_title'] ?? 'Event').toString(),
+      eventVenue: (json['event_venue'] ?? 'Venue').toString(),
+      eventDateTime: DateTime.parse(json['event_start'].toString()),
       eventEndDateTime: json['event_end'] != null
-          ? DateTime.parse(json['event_end'] as String)
+          ? DateTime.parse(json['event_end'].toString())
           : null,
-      eventCoverImage: json['event_cover_image'] as String?,
-      ticketNumber: json['ticket_number'] as String,
-      qrCode: json['qr_code'] as String,
-      status: statusString, // Store raw status
-      pricePaid: json['price_paid'] != null
-          ? (json['price_paid'] as num).toDouble()
-          : 0.0,
-      isUsed: statusString == 'used', // Convenience flag
+      eventCoverImage: json['event_cover_image']?.toString(),
+      ticketNumber: (json['ticket_number'] ?? '').toString(),
+      qrCode: (json['qr_code'] ?? '').toString(),
+      status: statusString,
+      pricePaid: parsedPrice,
+      isUsed: statusString == 'used',
       usedAt: json['checked_in_at'] != null
-          ? DateTime.parse(json['checked_in_at'] as String)
+          ? DateTime.parse(json['checked_in_at'].toString())
           : null,
-      createdAt: DateTime.parse(json['purchase_date'] as String),
+      createdAt: DateTime.parse(json['purchase_date'].toString()),
     );
   }
 
@@ -80,8 +89,22 @@ class Ticket {
 }
 
 class TicketService {
-  /// Fetch all tickets for current user
-  Future<List<Ticket>> getUserTickets() async {
+  // Cache the full ticket list to avoid redundant RPC calls on pagination
+  List<Ticket>? _cachedTickets;
+
+  /// Fetch tickets for the current user.
+  /// Caches the full list on first call; subsequent requests paginate from cache.
+  /// Pass [forceRefresh] = true to invalidate cache (e.g. pull-to-refresh).
+  Future<List<Ticket>> getUserTickets({
+    int limit = 15,
+    int offset = 0,
+    bool forceRefresh = false,
+  }) async {
+    // Return from cache if available
+    if (_cachedTickets != null && !forceRefresh) {
+      return _paginateFromCache(limit, offset);
+    }
+
     try {
       final user = SupabaseConfig.client.auth.currentUser;
       if (user == null) {
@@ -93,25 +116,45 @@ class TicketService {
         params: {'user_id_param': user.id},
       );
 
-      if (response == null) return [];
+      if (response == null) {
+        _cachedTickets = [];
+        return [];
+      }
 
-      final tickets = (response as List)
-          .map((e) => Ticket.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final List<Ticket> allTickets = [];
+      for (final item in (response as List)) {
+        try {
+          allTickets.add(Ticket.fromJson(item as Map<String, dynamic>));
+        } catch (e) {
+          print('⚠️ Failed to parse ticket: $e');
+        }
+      }
 
-      // Sort: upcoming first, then used, then expired
-      tickets.sort((a, b) {
-        if (a.isUpcoming && !b.isUpcoming) return -1;
-        if (!a.isUpcoming && b.isUpcoming) return 1;
-        if (a.isUsed && !b.isUsed) return 1;
-        if (!a.isUsed && b.isUsed) return -1;
-        return b.eventDateTime.compareTo(a.eventDateTime);
-      });
+      print('🎟️ Fetched ${allTickets.length} tickets from RPC');
 
-      return tickets;
+      // Sort newest first for consistent pagination
+      allTickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      _cachedTickets = allTickets;
+      return _paginateFromCache(limit, offset);
     } catch (e) {
       print('❌ Error fetching tickets: $e');
       rethrow;
     }
   }
+
+  List<Ticket> _paginateFromCache(int limit, int offset) {
+    final cache = _cachedTickets!;
+    if (offset >= cache.length) return [];
+    final end = (offset + limit).clamp(0, cache.length);
+    final page = cache.sublist(offset, end);
+    print('🎟️ Page: offset=$offset, limit=$limit, returning ${page.length} tickets');
+    return page;
+  }
+
+  /// Invalidate cache (call on pull-to-refresh or after a new purchase)
+  void clearCache() => _cachedTickets = null;
+
+  /// Total ticket count (for UI display), or null if not yet loaded
+  int? get totalCount => _cachedTickets?.length;
 }

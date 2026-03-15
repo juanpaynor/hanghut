@@ -291,7 +291,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                                 borderSide: BorderSide(
-                                  color: Colors.pink[600]!,
+                                  color: Colors.deepPurple,
                                 ),
                               ),
                             ),
@@ -321,7 +321,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                                 borderSide: BorderSide(
-                                  color: Colors.pink[600]!,
+                                  color: Colors.deepPurple,
                                 ),
                               ),
                             ),
@@ -401,7 +401,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                               style: GoogleFonts.outfit(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 24,
-                                color: Colors.pink[600],
+                                color: Colors.black87,
                               ),
                             ),
                           ],
@@ -426,11 +426,13 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
           child: ElevatedButton(
             onPressed: _isProcessing ? null : _handleConfirmAndPay,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.pink[600],
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
               ),
+              elevation: 0,
             ),
             child: _isProcessing
                 ? const SizedBox(

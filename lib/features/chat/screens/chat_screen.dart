@@ -1,14 +1,19 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/services/user_cache.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/create_poll_sheet.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -17,6 +22,7 @@ import 'package:bitemates/features/chat/widgets/chat_input_bar.dart';
 import 'package:bitemates/features/chat/widgets/chat_message_list.dart';
 import 'package:bitemates/features/chat/screens/chat_info_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -70,13 +76,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _isTyping = false;
   ably.RealtimeChannel? _ablyChannel;
 
+  // Search
+  bool _isSearching = false;
+  String _searchQuery = '';
+  List<int> _matchedIndices = [];
+  int _currentMatchIndex = -1;
+  final TextEditingController _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeChat();
     _messageController.addListener(_onTypingChanged);
-    _scrollController.addListener(_onScroll); // Listen for scroll to load more
+    _scrollController.addListener(_onScroll);
+    // Track screen view with chat type
+    AnalyticsService().logScreenView('chat_${widget.chatType}');
   }
 
   Future<void> _initializeChat() async {
@@ -130,6 +145,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _messageController.dispose();
     _scrollController.dispose();
+    _searchController.dispose();
     _reconnectTimer?.cancel();
     _typingTimer?.cancel();
     _ablyService.leaveChannel(widget.channelId);
@@ -774,6 +790,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           setState(() {
             // Insert new message at Top (Index 0) because list is Newest -> Oldest
             _messages.insert(0, {
+              'id': data['id'],
               'content': data['content'],
               'contentType': data['contentType'] ?? 'text',
               'senderId': data['senderId'],
@@ -781,6 +798,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'senderPhotoUrl': data['senderPhotoUrl'],
               'timestamp': data['timestamp'],
               'isMe': data['senderId'] == _currentUserId,
+              if (data['replyToId'] != null) 'reply_to_id': data['replyToId'],
             });
           });
           _scrollToBottom();
@@ -794,6 +812,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           0.0, // In reverse ListView, 0.0 is the bottom
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  /// Scroll to a search result by matched index
+  void _scrollToSearchResult(int matchIndex) {
+    if (matchIndex < 0 || matchIndex >= _matchedIndices.length) return;
+    final messageIndex = _matchedIndices[matchIndex];
+
+    // In a reversed ListView, index 0 = bottom. We need to estimate the
+    // pixel offset. Each message is roughly 70px tall.
+    final estimatedOffset = messageIndex * 70.0;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          estimatedOffset.clamp(0, _scrollController.position.maxScrollExtent),
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -873,6 +911,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         senderName: _currentUserName ?? 'Unknown',
         senderPhotoUrl: _currentUserPhoto,
         messageId: messageId, // Pass the message ID
+        replyToId: replyToId, // Pass reply reference
       );
 
       // Update to sent
@@ -883,6 +922,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _messages[index]['status'] = 'sent';
           }
         });
+      }
+
+      // Send mention push notifications (non-blocking)
+      if (contentType == 'text') {
+        _sendMentionPushNotifications(content);
       }
 
       // Note: Sync happens in 60-second batches (see _startBatchSyncTimer)
@@ -897,14 +941,32 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   /// Legacy mode: Save to Supabase first
-  Future<void> _sendMessage_Legacy({String? gifUrl}) async {
+  Future<void> _sendMessage_Legacy({
+    String? gifUrl,
+    String? imageUrl,
+    String? pollId,
+  }) async {
     HapticFeedback.lightImpact();
-    final content = gifUrl ?? _messageController.text.trim();
-    final contentType = gifUrl != null ? 'gif' : 'text';
+    // Determine content and type
+    final String content;
+    final String contentType;
+    if (imageUrl != null) {
+      content = imageUrl;
+      contentType = 'image';
+    } else if (pollId != null) {
+      content = pollId;
+      contentType = 'poll';
+    } else if (gifUrl != null) {
+      content = gifUrl;
+      contentType = 'gif';
+    } else {
+      content = _messageController.text.trim();
+      contentType = 'text';
+    }
 
     if (content.isEmpty || _currentUserId == null) return;
 
-    _messageController.clear();
+    if (contentType == 'text') _messageController.clear();
     final replyToId = _replyingTo?['id'];
     setState(() {
       _replyingTo = null;
@@ -936,7 +998,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       }
 
-      // 2. Publish to Ably
+      // 2. Publish to Ably so other users see it instantly
       await _ablyService.publishMessage(
         channelName: widget.channelId,
         content: content,
@@ -944,13 +1006,79 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         senderId: _currentUserId!,
         senderName: _currentUserName ?? 'Unknown',
         senderPhotoUrl: _currentUserPhoto,
+        replyToId: replyToId,
       );
+
+      // No optimistic insert needed — in legacy mode the Ably listener
+      // echoes back our own message and handles display for all types.
+
+      // Send mention notifications only for text
+      if (contentType == 'text') {
+        _sendMentionPushNotifications(content);
+      }
     } catch (e) {
-      print('❌ CHAT: Error sending message - $e');
+      debugPrint('❌ CHAT: Error sending message - $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Failed to send message')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to send message')));
+      }
+    }
+  }
+
+  /// Send push notification to mentioned users
+  Future<void> _sendMentionPushNotifications(String content) async {
+    if (_currentUserId == null || _participants.isEmpty) return;
+
+    // Extract @mentions from content
+    final mentionRegex = RegExp(r'@([\w\s]+?)(?=\s@|\s[^@]|$)');
+    final matches = mentionRegex.allMatches(content);
+
+    for (final match in matches) {
+      final name = match.group(1)?.trim();
+      if (name == null) continue;
+
+      // Find the participant by display name
+      final participant = _participants.firstWhere(
+        (p) => (p['displayName'] as String?)?.toLowerCase() == name.toLowerCase(),
+        orElse: () => <String, dynamic>{},
+      );
+
+      if (participant.isEmpty) continue;
+      final userId = participant['userId'] as String?;
+      if (userId == null || userId == _currentUserId) continue; // Don't notify self
+
+      try {
+        // Insert in-app notification
+        await SupabaseConfig.client.from('notifications').insert({
+          'user_id': userId,
+          'actor_id': _currentUserId,
+          'type': 'chat',
+          'title': '${_currentUserName ?? 'Someone'} mentioned you',
+          'body': content.length > 100 ? '${content.substring(0, 100)}...' : content,
+          'entity_id': widget.tableId,
+          'metadata': {
+            'table_id': widget.tableId,
+            'chat_type': widget.chatType,
+          },
+        });
+
+        // Send push notification
+        await SupabaseConfig.client.functions.invoke(
+          'send-push',
+          body: {
+            'user_id': userId,
+            'title': '${_currentUserName ?? 'Someone'} mentioned you',
+            'body': content.length > 100 ? '${content.substring(0, 100)}...' : content,
+            'data': {
+              'type': 'chat',
+              'chat_type': widget.chatType,
+              'table_id': widget.tableId,
+              'sender_name': _currentUserName ?? 'Someone',
+            },
+          },
+        );
+      } catch (e) {
+        print('⚠️ Failed to send mention notification to $userId: $e');
       }
     }
   }
@@ -1203,9 +1331,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (replyMsg.isEmpty) return 'Message unavailable';
 
-    if (replyMsg['contentType'] == 'gif') {
-      return 'GIF';
-    }
+    if (replyMsg['contentType'] == 'gif') return 'GIF 🎞';
+    if (replyMsg['contentType'] == 'image') return 'Photo 🖼️';
+    if (replyMsg['contentType'] == 'poll') return 'Poll 📊';
 
     return replyMsg['content'] ?? 'Message unavailable';
   }
@@ -1250,29 +1378,210 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _leaveTable() async {
-    final confirm = await showDialog<bool>(
+  /// Image picker: compress → upload → send as image message
+  Future<void> _sendImageMessage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85, // Pre-compress via picker
+    );
+    if (picked == null || _currentUserId == null) return;
+
+    try {
+      // Compress further with flutter_image_compress
+      final tempDir = await getTemporaryDirectory();
+      final targetPath = '${tempDir.path}/${const Uuid().v4()}.jpg';
+      final compressed = await FlutterImageCompress.compressAndGetFile(
+        picked.path,
+        targetPath,
+        quality: 70,
+        minWidth: 800,
+        minHeight: 1,
+        format: CompressFormat.jpeg,
+      );
+      if (compressed == null) return;
+
+      final bytes = await File(compressed.path).readAsBytes();
+      final fileName = '${_currentUserId}/${const Uuid().v4()}.jpg';
+
+      // Upload to Supabase storage
+      await SupabaseConfig.client.storage
+          .from('chat-images')
+          .uploadBinary(fileName, bytes,
+              fileOptions: const FileOptions(contentType: 'image/jpeg'));
+
+      final imageUrl = SupabaseConfig.client.storage
+          .from('chat-images')
+          .getPublicUrl(fileName);
+
+      // Send as image message
+      await _sendMessage_Legacy(gifUrl: null, imageUrl: imageUrl);
+    } catch (e) {
+      debugPrint('❌ CHAT: Image upload failed - $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to send image. Please try again.')),
+        );
+      }
+    }
+  }
+
+  /// Poll creator: show sheet → insert to DB → send poll_id as message
+  Future<void> _showCreatePoll() async {
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Leave Chat?'),
-        content: Text(
-          widget.chatType == 'trip'
-              ? 'You will leave this trip group chat.'
-              : widget.chatType == 'dm'
-              ? 'This conversation will be hidden.'
-              : 'You will be removed from this activity and its chat.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => const CreatePollSheet(),
+    );
+    if (result == null || _currentUserId == null) return;
+
+    try {
+      // Insert poll
+      final pollData = await SupabaseConfig.client
+          .from('chat_polls')
+          .insert({
+            'chat_id': widget.tableId,
+            'chat_type': widget.chatType,
+            'creator_id': _currentUserId,
+            'question': result['question'],
+            'options': result['options'],
+          })
+          .select('id')
+          .single();
+
+      final pollId = pollData['id'] as String;
+
+      // Send poll_id as a special message
+      await _sendMessage_Legacy(gifUrl: null, pollId: pollId);
+    } catch (e) {
+      debugPrint('❌ CHAT: Poll creation failed - $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to create poll. Please try again.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _leaveTable() async {
+    final subtitleText = widget.chatType == 'trip'
+        ? 'You will leave this trip group chat.'
+        : widget.chatType == 'dm'
+        ? 'This conversation will be deleted from your inbox.'
+        : 'You will be removed from this activity and its chat.';
+
+    final confirm = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.grey[900] : Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Leave', style: TextStyle(color: Colors.red)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.exit_to_app_rounded,
+                  color: Colors.red,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Title
+              Text(
+                'Leave Chat?',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? Colors.white : Colors.grey[900],
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Subtitle
+              Text(
+                subtitleText,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[500],
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.grey[300] : Colors.grey[700],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          'Leave',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
 
     if (confirm != true) return;
@@ -1292,16 +1601,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               .eq('user_id', user.id);
         }
       } else if (widget.chatType == 'dm') {
-        // Hide DM (Delete participant entry or mark hidden)
-        // For now, let's delete the participant entry to "leave"
-        final user = SupabaseConfig.client.auth.currentUser;
-        if (user != null) {
-          await SupabaseConfig.client
-              .from('direct_chat_participants')
-              .delete()
-              .eq('chat_id', widget.tableId)
-              .eq('user_id', user.id);
-        }
+        // Delete DM conversation via RPC (bypasses RLS)
+        await SupabaseConfig.client.rpc(
+          'delete_dm_chat',
+          params: {'p_chat_id': widget.tableId},
+        );
       } else {
         // Legacy/Table Leave
         await _memberService.leaveTable(widget.tableId);
@@ -1325,21 +1629,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     // Set a fixed height for the sheet (75% of screen for better UX)
     final screenHeight = MediaQuery.of(context).size.height;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        height: screenHeight * 0.75,
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          // Ensure the height does not exceed the remaining screen height
+          height: (screenHeight * 0.75).clamp(0.0, screenHeight - bottomInset),
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
           children: [
             ChatHeader(
               title: widget.tableTitle,
               onLeave: _leaveTable,
               onClose: () => Navigator.pop(context),
+              onSearch: () {
+                setState(() {
+                  _isSearching = !_isSearching;
+                  if (!_isSearching) {
+                    _searchQuery = '';
+                    _matchedIndices = [];
+                    _currentMatchIndex = -1;
+                    _searchController.clear();
+                  }
+                });
+              },
               onInfoTap: () {
                 if (widget.chatType == 'dm') {
                   // Find the other user
@@ -1401,6 +1720,107 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ),
               ),
 
+            // Search Bar
+            if (_isSearching)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: Theme.of(context).scaffoldBackgroundColor,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.grey[800]
+                              : Colors.grey[100],
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: TextField(
+                          controller: _searchController,
+                          autofocus: true,
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodyLarge?.color,
+                            fontSize: 14,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Search messages...',
+                            hintStyle: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 14,
+                            ),
+                            prefixIcon: Icon(
+                              Icons.search,
+                              size: 20,
+                              color: Colors.grey[500],
+                            ),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                            ),
+                          ),
+                          onChanged: (query) {
+                            setState(() {
+                              _searchQuery = query.toLowerCase();
+                              _matchedIndices = [];
+                              _currentMatchIndex = -1;
+                              if (_searchQuery.isNotEmpty) {
+                                for (int i = 0; i < _messages.length; i++) {
+                                  final content = (_messages[i]['content'] as String?)?.toLowerCase() ?? '';
+                                  if (content.contains(_searchQuery)) {
+                                    _matchedIndices.add(i);
+                                  }
+                                }
+                                if (_matchedIndices.isNotEmpty) {
+                                  _currentMatchIndex = 0;
+                                  _scrollToSearchResult(0);
+                                }
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    if (_matchedIndices.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_currentMatchIndex + 1}/${_matchedIndices.length}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+                        onPressed: _matchedIndices.length > 1
+                            ? () {
+                                setState(() {
+                                  _currentMatchIndex = (_currentMatchIndex - 1) % _matchedIndices.length;
+                                });
+                                _scrollToSearchResult(_currentMatchIndex);
+                              }
+                            : null,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                        onPressed: _matchedIndices.length > 1
+                            ? () {
+                                setState(() {
+                                  _currentMatchIndex = (_currentMatchIndex + 1) % _matchedIndices.length;
+                                });
+                                _scrollToSearchResult(_currentMatchIndex);
+                              }
+                            : null,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
             // Messages Area
             Expanded(
               child: ChatMessageList(
@@ -1417,6 +1837,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 onShowActions: _showMessageActions,
                 onReact: _handleReaction,
                 onOpenLink: _onOpenLink,
+                onMentionTap: (userId) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => UserProfileScreen(userId: userId),
+                    ),
+                  );
+                },
+                participants: _participants,
+                searchQuery: _searchQuery,
+                matchedIndices: _matchedIndices,
+                currentMatchIndex: _currentMatchIndex,
               ),
             ),
 
@@ -1449,10 +1881,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onCancelReply: _cancelReply,
               onShowGifPicker: _showGifPicker,
               onSendMessage: _sendMessage,
+              onSendImage: _sendImageMessage,
+              onCreatePoll: (widget.chatType == 'dm' || widget.chatType == 'direct')
+                  ? null
+                  : _showCreatePoll,
+              participants: _participants,
             ),
           ],
         ),
       ),
+    ),
     );
   }
 

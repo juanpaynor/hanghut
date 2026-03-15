@@ -12,8 +12,10 @@ import 'package:bitemates/features/location/logic/geofence_engine.dart';
 import 'package:bitemates/features/location/widgets/geofence_modal.dart';
 import 'package:bitemates/core/services/account_status_service.dart';
 import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
+import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/core/services/admin_popup_service.dart';
 import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -79,11 +81,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     super.dispose();
   }
 
+  DateTime? _lastStatusCheck;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Check account status when app resumes
-      _checkAccountStatus();
+      // Skip status check entirely during payment flow — main thread is under
+      // heavy load from Mapbox re-render + FCM background isolate
+      if (PushNotificationService.suppressNotifications) return;
+
+      // Debounce: skip if checked within last 30 seconds
+      final now = DateTime.now();
+      if (_lastStatusCheck != null &&
+          now.difference(_lastStatusCheck!).inSeconds < 30) {
+        return;
+      }
+      _lastStatusCheck = now;
+
+      // Delay to let Mapbox and other services stabilize on resume
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) _checkAccountStatus();
+      });
     }
   }
 
@@ -161,9 +179,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     setState(() {
       _selectedIndex = index;
     });
+    // Track tab switch
+    const tabNames = ['home_feed', 'map', 'activity', 'profile'];
+    if (index < tabNames.length) {
+      AnalyticsService().logScreenView(tabNames[index]);
+    }
   }
 
   void _showCreateTableModal() {
+    AnalyticsService().logScreenView('create_table_modal');
     final position = _mapScreenKey.currentState?.getCurrentPosition();
 
     showModalBottomSheet(
@@ -184,6 +208,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _showQuickChat() {
+    AnalyticsService().logScreenView('chat_inbox');
     Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,

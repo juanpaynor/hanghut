@@ -1,7 +1,8 @@
 -- =========================================================================
--- FIX: Image URLs showing as raw text in inbox subtitle
--- Updates the user_active_chats view to show "📷 Photo" for image URLs
+-- FIX v2: DM Avatars - don't require is_primary = true
 -- =========================================================================
+-- Previous fix filtered by is_primary = true, but many users don't have
+-- that flag set. This version grabs the first photo, preferring primary.
 
 CREATE OR REPLACE VIEW public.user_active_chats AS
  SELECT t.id AS chat_id,
@@ -26,16 +27,19 @@ UNION ALL
     COALESCE(( SELECT
                 CASE
                     WHEN direct_messages.message_type = 'gif'::text THEN 'GIF'::text
-                    WHEN direct_messages.message_type = 'image'::text THEN '📷 Photo'::text
-                    WHEN direct_messages.content LIKE '%/storage/v1/object/%' THEN '📷 Photo'::text
-                    WHEN direct_messages.content ~* '\.(jpg|jpeg|png|gif|webp)(\?|$)' THEN '📷 Photo'::text
                     ELSE direct_messages.content
                 END AS content
            FROM direct_messages
           WHERE direct_messages.chat_id = dc.id
           ORDER BY direct_messages.created_at DESC
          LIMIT 1), 'Direct Message'::text) AS subtitle,
-    u.avatar_url AS image_url,
+    -- FIX v2: Prefer avatar_url, then primary photo, then ANY photo
+    COALESCE(u.avatar_url, (
+      SELECT up.photo_url FROM user_photos up
+      WHERE up.user_id = u.id
+      ORDER BY up.is_primary DESC NULLS LAST, up.display_order ASC NULLS LAST
+      LIMIT 1
+    )) AS image_url,
     'person'::text AS icon_key,
     COALESCE((SELECT max(created_at) FROM direct_messages m WHERE m.chat_id = dc.id), dc.updated_at) AS last_activity_at,
     jsonb_build_object('other_user_id', u.id, 'other_user_name', u.display_name) AS metadata,

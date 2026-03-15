@@ -872,13 +872,8 @@ class _FeedScreenState extends State<FeedScreen>
                             );
                           }
 
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            child: SocialPostCard(
-                              post: post,
+                          return SocialPostCard(
+                            post: post,
                               onTap: () {
                                 if (post['is_story'] == true &&
                                     widget.onStoryTap != null) {
@@ -908,8 +903,8 @@ class _FeedScreenState extends State<FeedScreen>
                                   }
                                 });
                               },
-                            ),
                           );
+
                         },
                         childCount:
                             postsToShow.length + 1, // +1 for loader/padding

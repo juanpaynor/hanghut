@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 
 class LocationStoryViewerScreen extends StatefulWidget {
   final Map<String, dynamic> initialStory;
@@ -34,6 +35,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
     _stories = [widget.initialStory];
     _pageController = PageController();
     _fetchClusterStories();
+    AnalyticsService().logScreenView('story_viewer');
   }
 
   @override
@@ -305,6 +307,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
           setState(() {
             _currentIndex = index;
           });
+          // Track individual story views
+          final storyId = _stories[index]['id']?.toString();
+          if (storyId != null) AnalyticsService().logViewStory(storyId);
         },
         itemBuilder: (context, index) {
           final story = _stories[index];

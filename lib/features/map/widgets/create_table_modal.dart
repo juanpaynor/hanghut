@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/services/tenor_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'dart:async';
@@ -368,6 +369,125 @@ class _CreateTableModalState extends State<CreateTableModal> {
     }
   }
 
+  // --- Auto-GIF Keyword Map ---
+  static const Map<String, String> _activityGifKeywords = {
+    // Food & Drink
+    'coffee': 'coffee cafe latte', 'cafe': 'coffee cafe',
+    'tea': 'tea time drink', 'boba': 'boba milk tea',
+    'milk tea': 'boba milk tea', 'eat': 'eating food delicious',
+    'food': 'food eating yummy', 'lunch': 'lunch eating',
+    'dinner': 'dinner date dining', 'breakfast': 'breakfast morning',
+    'brunch': 'brunch food', 'snack': 'snacks food',
+    'pizza': 'pizza eating', 'burger': 'burger eating',
+    'sushi': 'sushi japanese food', 'ramen': 'ramen noodles',
+    'bbq': 'bbq grill barbecue', 'grill': 'grill bbq cooking',
+    'buffet': 'buffet all you can eat', 'dessert': 'dessert sweets',
+    'ice cream': 'ice cream dessert', 'cake': 'cake dessert',
+    'drink': 'drinks cheers', 'beer': 'beer cheers pub',
+    'wine': 'wine cheers', 'cocktail': 'cocktail drinks bar',
+    'bar': 'bar nightlife drinks', 'pub': 'pub drinks night',
+    'samgyupsal': 'korean bbq samgyupsal', 'korean': 'korean food kbbq',
+    'japanese': 'japanese food sushi', 'chinese': 'chinese food dim sum',
+    'italian': 'italian food pasta', 'mexican': 'mexican food tacos',
+    'thai': 'thai food spicy', 'seafood': 'seafood fresh',
+    'steak': 'steak dinner', 'pasta': 'pasta italian',
+    'chicken': 'fried chicken food', 'wings': 'chicken wings',
+    
+    // Sports & Fitness
+    'run': 'running fitness jog', 'jog': 'jogging running',
+    '5k': 'running marathon 5k', '10k': 'running marathon',
+    'marathon': 'marathon running', 'gym': 'gym workout fitness',
+    'workout': 'workout gym exercise', 'exercise': 'exercise fitness',
+    'lift': 'weightlifting gym', 'crossfit': 'crossfit workout',
+    'yoga': 'yoga meditation zen', 'pilates': 'pilates workout',
+    'swim': 'swimming pool', 'surf': 'surfing waves beach',
+    'basketball': 'basketball dunk nba', 'soccer': 'soccer football goal',
+    'football': 'football soccer', 'volleyball': 'volleyball beach',
+    'tennis': 'tennis match serve', 'badminton': 'badminton sport',
+    'boxing': 'boxing punch workout', 'mma': 'mma fighting ufc',
+    'muay thai': 'muay thai kickboxing', 'jiu jitsu': 'jiu jitsu bjj',
+    'martial arts': 'martial arts karate', 'golf': 'golf swing hole',
+    'bowling': 'bowling strike', 'bike': 'cycling bike ride',
+    'cycle': 'cycling biking', 'hike': 'hiking mountain nature',
+    'climb': 'rock climbing bouldering', 'skate': 'skateboarding tricks',
+    'dance': 'dancing party moves', 'zumba': 'zumba dance fitness',
+    
+    // Entertainment & Social
+    'movie': 'movie cinema popcorn', 'cinema': 'cinema movie theater',
+    'netflix': 'netflix binge watching', 'watch': 'watching movie show',
+    'party': 'party celebration fun', 'club': 'club nightlife party',
+    'karaoke': 'karaoke singing mic', 'sing': 'singing karaoke music',
+    'concert': 'concert live music', 'music': 'music vibes',
+    'gig': 'concert live music gig', 'festival': 'music festival party',
+    'game': 'gaming video games', 'gaming': 'gaming esports controller',
+    'board game': 'board game fun', 'cards': 'card game poker',
+    'poker': 'poker cards game', 'arcade': 'arcade games retro',
+    'billiards': 'billiards pool table', 'pool': 'billiards pool game',
+    'darts': 'darts pub game', 'trivia': 'trivia quiz night',
+    
+    // Outdoor & Travel
+    'beach': 'beach summer vibes', 'camp': 'camping outdoor nature',
+    'travel': 'travel adventure explore', 'road trip': 'road trip adventure',
+    'explore': 'explore adventure travel', 'adventure': 'adventure explore',
+    'dive': 'scuba diving ocean', 'snorkel': 'snorkeling ocean',
+    'fish': 'fishing relaxing', 'park': 'park nature outdoor',
+    'picnic': 'picnic outdoor food', 'sunset': 'sunset beautiful view',
+    
+    // Creative & Learning
+    'study': 'studying books focus', 'read': 'reading books library',
+    'book': 'books reading', 'paint': 'painting art creative',
+    'draw': 'drawing art sketch', 'art': 'art creative painting',
+    'photo': 'photography camera', 'cook': 'cooking chef kitchen',
+    'bake': 'baking kitchen sweets', 'code': 'coding programming laptop',
+    'hack': 'hackathon coding tech', 'work': 'coworking productive',
+    'meeting': 'business meeting work', 'brainstorm': 'brainstorm ideas',
+    
+    // Relaxation & Wellness
+    'spa': 'spa relaxation massage', 'massage': 'massage spa relax',
+    'meditate': 'meditation zen calm', 'chill': 'chill relax vibes',
+    'hang': 'hangout friends fun', 'hangout': 'hangout friends chill',
+    'talk': 'talking conversation friends', 'catch up': 'catching up friends',
+    'vibe': 'good vibes chill', 'shop': 'shopping mall retail',
+    'mall': 'shopping mall fun', 'thrift': 'thrift shopping vintage',
+  };
+
+  /// Search Tenor for a GIF based on the activity text
+  Future<String?> _getAutoGifUrl(String activityText) async {
+    try {
+      final lowerText = activityText.toLowerCase();
+      String searchQuery = activityText; // Default: use the raw activity text
+
+      // Try to match against keyword map for better results
+      for (final entry in _activityGifKeywords.entries) {
+        if (lowerText.contains(entry.key)) {
+          searchQuery = entry.value;
+          break;
+        }
+      }
+
+      print('🎬 AUTO-GIF: Searching Tenor for "$searchQuery" (from: "$activityText")');
+
+      final tenor = TenorService();
+      final results = await tenor.searchGifs(searchQuery, limit: 5);
+
+      if (results.isNotEmpty) {
+        // Pick a random one from top 5 for variety
+        final randomIndex = DateTime.now().millisecondsSinceEpoch % results.length;
+        final gifUrl = tenor.getGifUrl(results[randomIndex]);
+        if (gifUrl.isNotEmpty) {
+          print('✅ AUTO-GIF: Found GIF: $gifUrl');
+          return gifUrl;
+        }
+      }
+
+      print('⚠️ AUTO-GIF: No results found');
+      return null;
+    } catch (e) {
+      print('❌ AUTO-GIF: Error - $e');
+      return null;
+    }
+  }
+
   // --- Creation Logic ---
   Future<void> _createTable() async {
     if (_activityController.text.isEmpty) {
@@ -390,6 +510,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
       final title = '${_userName ?? "Someone"} wants to $activity';
       final description = _descriptionController.text.trim(); // NEW
 
+      // Auto-GIF: If user didn't pick an image, search Tenor based on activity
+      String? finalImageUrl = _selectedGifUrl;
+      if (finalImageUrl == null || finalImageUrl.isEmpty) {
+        finalImageUrl = await _getAutoGifUrl(activity);
+      }
+
       await _tableService.createTable(
         latitude: _venueLat!,
         longitude: _venueLng!,
@@ -410,7 +536,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
             : (_budgetRange == 'high' ? 100 : 50),
         requiresApproval: _requiresApproval,
         goalType: _goalType,
-        imageUrl: _selectedGifUrl,
+        imageUrl: finalImageUrl,
         markerImage: _markerImage, // PASS MARKER IMAGE
         markerEmoji: _markerImage == null
             ? (_selectedEmoji ?? '📍')
@@ -1170,6 +1296,65 @@ class _CreateTableModalState extends State<CreateTableModal> {
                         max: 30,
                         divisions: 28,
                         onChanged: (val) => setState(() => _maxCapacity = val),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // REQUIRE APPROVAL toggle
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.grey[800] : Colors.grey[50],
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark
+                              ? Colors.grey[700]!
+                              : Colors.grey[200]!,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.verified_user_outlined,
+                            size: 20,
+                            color: _requiresApproval
+                                ? Colors.indigo
+                                : Colors.grey[500],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Require Approval',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                                Text(
+                                  'Review who joins before they enter',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[500],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Switch.adaptive(
+                            value: _requiresApproval,
+                            activeColor: Colors.indigo,
+                            onChanged: (val) =>
+                                setState(() => _requiresApproval = val),
+                          ),
+                        ],
                       ),
                     ),
 

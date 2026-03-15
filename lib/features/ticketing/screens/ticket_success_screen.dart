@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
-import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 
 class TicketSuccessScreen extends StatelessWidget {
   final String purchaseIntentId;
 
   const TicketSuccessScreen({super.key, required this.purchaseIntentId});
+
+  void _goToMyTickets(BuildContext context) {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const MyTicketsScreen()),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +29,6 @@ class TicketSuccessScreen extends StatelessWidget {
                 width: 200,
                 repeat: false,
                 errorBuilder: (context, error, stackTrace) {
-                  // Fallback if animation not found
                   return const Icon(
                     Icons.check_circle,
                     size: 120,
@@ -34,7 +39,6 @@ class TicketSuccessScreen extends StatelessWidget {
 
               const SizedBox(height: 32),
 
-              // Success message
               const Text(
                 'Payment Successful!',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
@@ -67,14 +71,7 @@ class TicketSuccessScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const MyTicketsScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: () => _goToMyTickets(context),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.deepPurple,
                     foregroundColor: Colors.white,

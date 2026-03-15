@@ -2,6 +2,20 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 
 class TableMemberService {
+  // Helper: get user display name for notification copy
+  Future<String> _getUserDisplayName(String userId) async {
+    try {
+      final user = await SupabaseConfig.client
+          .from('users')
+          .select('display_name')
+          .eq('id', userId)
+          .single();
+      return user['display_name'] ?? 'Someone';
+    } catch (_) {
+      return 'Someone';
+    }
+  }
+
   // Join a table (sends pending request for host approval)
   Future<Map<String, dynamic>> joinTable(String tableId) async {
     try {
@@ -50,10 +64,10 @@ class TableMemberService {
         };
       }
 
-      // Get table info to check status and capacity
+      // Get table info to check status, capacity, and approval setting
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests, title, location_name, host_id, datetime')
+          .select('status, max_guests, title, location_name, host_id, datetime, requires_approval')
           .eq('id', tableId)
           .single();
 
@@ -78,13 +92,45 @@ class TableMemberService {
         return {'success': false, 'message': 'This table is full'};
       }
 
-      // Add member with joined status (bypassing host approval for now)
+      final requiresApproval = table['requires_approval'] == true;
+
+      if (requiresApproval) {
+        // Host approval required — insert as pending
+        await SupabaseConfig.client.from('table_members').insert({
+          'table_id': tableId,
+          'user_id': user.id,
+          'role': 'member',
+          'status': 'pending',
+          'requested_at': DateTime.now().toIso8601String(),
+        });
+
+        // Send notification to host
+        final hostId = table['host_id'] as String;
+        final userName = await _getUserDisplayName(user.id);
+        try {
+          await SupabaseConfig.client.from('notifications').insert({
+            'user_id': hostId,
+            'actor_id': user.id,
+            'type': 'join_request',
+            'entity_id': tableId,
+            'title': '$userName wants to join',
+            'body': table['title'] ?? 'Your table',
+            'metadata': {'table_id': tableId},
+          });
+        } catch (_) {
+          // Non-critical
+        }
+
+        return {'success': true, 'message': 'Request sent! The host will review it.'};
+      }
+
+      // No approval required — auto-join
       await SupabaseConfig.client.from('table_members').insert({
         'table_id': tableId,
         'user_id': user.id,
         'role': 'member',
-        'status': 'joined', // Changed from 'pending' to 'joined'
-        'joined_at': DateTime.now().toIso8601String(), // Set joined_at
+        'status': 'joined',
+        'joined_at': DateTime.now().toIso8601String(),
       });
 
       // Schedule a reminder notification for 30 min before event

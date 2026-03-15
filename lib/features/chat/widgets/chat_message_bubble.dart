@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:any_link_preview/any_link_preview.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/chat/widgets/poll_message_bubble.dart';
 
 class ChatMessageBubble extends StatelessWidget {
   final Map<String, dynamic> msg;
@@ -23,6 +24,10 @@ class ChatMessageBubble extends StatelessWidget {
   final VoidCallback onShowActions;
   final VoidCallback onReact; // Double tap quick react
   final Function(LinkableElement) onOpenLink;
+  final Function(String userId)? onMentionTap;
+  final List<Map<String, dynamic>> participants;
+  final String searchQuery;
+  final bool isCurrentMatch;
 
   const ChatMessageBubble({
     super.key,
@@ -38,6 +43,10 @@ class ChatMessageBubble extends StatelessWidget {
     required this.onShowActions,
     required this.onReact,
     required this.onOpenLink,
+    this.onMentionTap,
+    this.participants = const [],
+    this.searchQuery = '',
+    this.isCurrentMatch = false,
   });
 
   @override
@@ -260,7 +269,42 @@ class ChatMessageBubble extends StatelessWidget {
                                           ),
 
                                         // Content
-                                        if (msg['contentType'] == 'gif')
+                                        if (msg['contentType'] == 'poll')
+                                          PollMessageBubble(
+                                            pollId: msg['content'],
+                                            currentUserId: msg['senderId'] ?? '',
+                                            isMe: isMe,
+                                          )
+                                        else if (msg['contentType'] == 'image')
+                                          GestureDetector(
+                                            onTap: () => _showFullScreenImage(
+                                                context, msg['content'] as String),
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              child: CachedNetworkImage(
+                                                imageUrl: msg['content'],
+                                                width: 220,
+                                                fit: BoxFit.cover,
+                                                placeholder: (context, url) =>
+                                                    Container(
+                                                      width: 220,
+                                                      height: 160,
+                                                      color: Colors.grey[200],
+                                                      child: const Center(
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                              strokeWidth: 2,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                errorWidget:
+                                                    (context, url, error) =>
+                                                        const Icon(Icons.error),
+                                              ),
+                                            ),
+                                          )
+                                        else if (msg['contentType'] == 'gif')
                                           ClipRRect(
                                             borderRadius: BorderRadius.circular(
                                               16,
@@ -305,32 +349,13 @@ class ChatMessageBubble extends StatelessWidget {
                                             ),
                                           )
                                         else
-                                          Linkify(
-                                            onOpen: onOpenLink,
-                                            text: msg['content'] ?? '',
-                                            style: TextStyle(
-                                              color: isMe
-                                                  ? Colors.white
-                                                  : Theme.of(
-                                                          context,
-                                                        ).brightness ==
-                                                        Brightness.dark
-                                                  ? Colors.white
-                                                  : Colors.black87,
-                                              fontSize: 15,
-                                            ),
-                                            linkStyle: TextStyle(
-                                              color: isMe
-                                                  ? Colors.white
-                                                  : Colors.blue,
-                                              decoration:
-                                                  TextDecoration.underline,
-                                              decorationColor: isMe
-                                                  ? Colors.white
-                                                  : Colors.blue,
-                                            ),
+                                          _buildMentionAwareText(
+                                            context,
+                                            msg['content'] ?? '',
+                                            isMe,
                                           ),
-                                        if (msg['contentType'] != 'gif')
+                                        if (msg['contentType'] == 'text' ||
+                                            msg['contentType'] == null)
                                           Builder(
                                             builder: (context) {
                                               if (msg['content'] == null)
@@ -347,6 +372,51 @@ class ChatMessageBubble extends StatelessWidget {
                                                       match.start,
                                                       match.end,
                                                     );
+                                                
+                                                // ✅ Detect image URLs (Supabase storage or common extensions)
+                                                final lowerUrl = url.toLowerCase();
+                                                final isImageUrl = lowerUrl.contains('/storage/v1/object/') ||
+                                                    lowerUrl.endsWith('.jpg') ||
+                                                    lowerUrl.endsWith('.jpeg') ||
+                                                    lowerUrl.endsWith('.png') ||
+                                                    lowerUrl.endsWith('.gif') ||
+                                                    lowerUrl.endsWith('.webp') ||
+                                                    lowerUrl.contains('.jpg?') ||
+                                                    lowerUrl.contains('.jpeg?') ||
+                                                    lowerUrl.contains('.png?') ||
+                                                    lowerUrl.contains('.webp?');
+                                                
+                                                if (isImageUrl) {
+                                                  // Render as inline image instead of link preview
+                                                  return Padding(
+                                                    padding: const EdgeInsets.only(top: 8.0),
+                                                    child: GestureDetector(
+                                                      onTap: () => _showFullScreenImage(context, url),
+                                                      child: ClipRRect(
+                                                        borderRadius: BorderRadius.circular(12),
+                                                        child: CachedNetworkImage(
+                                                          imageUrl: url,
+                                                          width: 220,
+                                                          fit: BoxFit.cover,
+                                                          placeholder: (context, url) =>
+                                                              Container(
+                                                                width: 220,
+                                                                height: 160,
+                                                                color: Colors.grey[200],
+                                                                child: const Center(
+                                                                  child: CircularProgressIndicator(
+                                                                    strokeWidth: 2,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                          errorWidget: (context, url, error) =>
+                                                              const Icon(Icons.broken_image),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  );
+                                                }
+
                                                 return Padding(
                                                   padding:
                                                       const EdgeInsets.only(
@@ -360,6 +430,8 @@ class ChatMessageBubble extends StatelessWidget {
                                                     bodyMaxLines: 3,
                                                     bodyTextOverflow:
                                                         TextOverflow.ellipsis,
+                                                    cache: const Duration(
+                                                        days: 7),
                                                     titleStyle: TextStyle(
                                                       color: isMe
                                                           ? Colors.black87
@@ -469,4 +541,238 @@ class ChatMessageBubble extends StatelessWidget {
       ),
     );
   }
+
+  /// Build text with @mentions highlighted and tappable
+  Widget _buildMentionAwareText(
+    BuildContext context,
+    String text,
+    bool isMe,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final defaultColor = isMe
+        ? Colors.white
+        : isDark
+            ? Colors.white
+            : Colors.black87;
+    final mentionColor = isMe ? Colors.amber[200]! : Colors.indigo;
+    final linkColor = isMe ? Colors.white : Colors.blue;
+
+    // Pattern: @Name (captures @followed by non-@ chars until space or end)
+    final mentionRegex = RegExp(r'@([\w\s]+?)(?=\s@|\s[^@]|$)');
+    // URL pattern
+    final urlRegex = RegExp(
+      r'https?://[^\s/$.?#].[^\s]*',
+      caseSensitive: false,
+    );
+
+    final spans = <InlineSpan>[];
+    int lastEnd = 0;
+
+    // Find all mentions and URLs, sort by position
+    final allMatches = <_TextMatch>[];
+
+    for (final match in mentionRegex.allMatches(text)) {
+      allMatches.add(_TextMatch(
+        start: match.start,
+        end: match.end,
+        text: match.group(0)!,
+        type: _MatchType.mention,
+        name: match.group(1)!.trim(),
+      ));
+    }
+
+    for (final match in urlRegex.allMatches(text)) {
+      // Skip if overlaps with a mention
+      final overlaps = allMatches.any(
+        (m) => m.start <= match.start && m.end >= match.end,
+      );
+      if (!overlaps) {
+        allMatches.add(_TextMatch(
+          start: match.start,
+          end: match.end,
+          text: match.group(0)!,
+          type: _MatchType.url,
+        ));
+      }
+    }
+
+    allMatches.sort((a, b) => a.start.compareTo(b.start));
+
+    for (final match in allMatches) {
+      // Add plain text before this match
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(
+          text: text.substring(lastEnd, match.start),
+          style: TextStyle(color: defaultColor, fontSize: 15),
+        ));
+      }
+
+      if (match.type == _MatchType.mention) {
+        // Find userId for this mention
+        final userId = _resolveUserId(match.name ?? '');
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            onTap: userId != null && onMentionTap != null
+                ? () => onMentionTap!(userId)
+                : null,
+            child: Text(
+              match.text,
+              style: TextStyle(
+                color: mentionColor,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ));
+      } else {
+        // URL
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: GestureDetector(
+            onTap: () => onOpenLink(LinkableElement(match.text, match.text)),
+            child: Text(
+              match.text,
+              style: TextStyle(
+                color: linkColor,
+                fontSize: 15,
+                decoration: TextDecoration.underline,
+                decorationColor: linkColor,
+              ),
+            ),
+          ),
+        ));
+      }
+
+      lastEnd = match.end;
+    }
+
+    // Add remaining text
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(
+        text: text.substring(lastEnd),
+        style: TextStyle(color: defaultColor, fontSize: 15),
+      ));
+    }
+
+    if (spans.isEmpty) {
+      spans.add(TextSpan(
+        text: text,
+        style: TextStyle(color: defaultColor, fontSize: 15),
+      ));
+    }
+
+    // Apply search highlighting if a query is active
+    if (searchQuery.isNotEmpty) {
+      final highlightedSpans = <InlineSpan>[];
+      for (final span in spans) {
+        if (span is TextSpan && span.text != null && span.text!.isNotEmpty) {
+          highlightedSpans.addAll(
+            _highlightSearchMatches(span.text!, span.style ?? TextStyle(color: defaultColor, fontSize: 15)),
+          );
+        } else {
+          highlightedSpans.add(span);
+        }
+      }
+      return RichText(text: TextSpan(children: highlightedSpans));
+    }
+
+    return RichText(text: TextSpan(children: spans));
+  }
+
+  /// Split text into spans, highlighting substrings that match [searchQuery]
+  List<InlineSpan> _highlightSearchMatches(String text, TextStyle baseStyle) {
+    final query = searchQuery.toLowerCase();
+    final lowerText = text.toLowerCase();
+    final result = <InlineSpan>[];
+    int start = 0;
+
+    while (true) {
+      final idx = lowerText.indexOf(query, start);
+      if (idx < 0) break;
+
+      // Text before the match
+      if (idx > start) {
+        result.add(TextSpan(text: text.substring(start, idx), style: baseStyle));
+      }
+
+      // The matched text (use original casing)
+      result.add(TextSpan(
+        text: text.substring(idx, idx + query.length),
+        style: baseStyle.copyWith(
+          backgroundColor: isCurrentMatch
+              ? Colors.yellow.withValues(alpha: 0.9)
+              : Colors.yellow.withValues(alpha: 0.45),
+          color: Colors.black87,
+        ),
+      ));
+
+      start = idx + query.length;
+    }
+
+    // Remaining text after last match
+    if (start < text.length) {
+      result.add(TextSpan(text: text.substring(start), style: baseStyle));
+    }
+
+    if (result.isEmpty) {
+      result.add(TextSpan(text: text, style: baseStyle));
+    }
+
+    return result;
+  }
+
+  String? _resolveUserId(String name) {
+    final match = participants.where(
+      (p) => (p['displayName'] as String?)?.toLowerCase() == name.toLowerCase(),
+    );
+    return match.isNotEmpty ? match.first['userId'] as String? : null;
+  }
+}
+
+enum _MatchType { mention, url }
+
+class _TextMatch {
+  final int start;
+  final int end;
+  final String text;
+  final _MatchType type;
+  final String? name;
+
+  _TextMatch({
+    required this.start,
+    required this.end,
+    required this.text,
+    required this.type,
+    this.name,
+  });
+}
+
+/// Shows a full-screen image viewer when a chat image is tapped.
+void _showFullScreenImage(BuildContext context, String imageUrl) {
+  Navigator.of(context).push(MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (context) => Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          child: CachedNetworkImage(
+            imageUrl: imageUrl,
+            fit: BoxFit.contain,
+            placeholder: (context, url) =>
+                const CircularProgressIndicator(color: Colors.white),
+            errorWidget: (context, url, error) =>
+                const Icon(Icons.broken_image, color: Colors.white, size: 64),
+          ),
+        ),
+      ),
+    ),
+  ));
 }

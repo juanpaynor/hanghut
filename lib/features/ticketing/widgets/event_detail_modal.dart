@@ -20,11 +20,37 @@ class _EventDetailModalState extends State<EventDetailModal> {
   bool _isExpanded = false;
   bool _isSoldOut = false;
   bool _isLoadingTiers = true;
+  String? _organizerDisplayName;
+  String? _organizerAvatarUrl;
 
   @override
   void initState() {
     super.initState();
     _fetchAvailability();
+    _fetchOrganizerInfo();
+  }
+
+  Future<void> _fetchOrganizerInfo() async {
+    try {
+      final response = await SupabaseConfig.client
+          .from('partners')
+          .select('business_name, profile_photo_url, verified, user_id, users!user_id (display_name, avatar_url)')
+          .eq('id', widget.event.organizerId)
+          .maybeSingle();
+
+      if (response != null && mounted) {
+        // Use partner business name, or fall back to linked user's display name
+        final userData = response['users'] as Map<String, dynamic>?;
+        setState(() {
+          _organizerDisplayName = response['business_name'] as String?
+              ?? userData?['display_name'] as String?;
+          _organizerAvatarUrl = response['profile_photo_url'] as String?
+              ?? userData?['avatar_url'] as String?;
+        });
+      }
+    } catch (e) {
+      print('⚠️ Could not fetch organizer info: $e');
+    }
   }
 
   Future<void> _fetchAvailability() async {
@@ -127,76 +153,78 @@ class _EventDetailModalState extends State<EventDetailModal> {
             // 1. Hero Image (160px)
             _buildHeroImage(categoryConfig),
 
-            // 2. Content
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title
-                  Text(
-                    widget.event.title,
-                    style: const TextStyle(
-                      color: Colors.black87,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                      height: 1.2,
+            // 2. Content (scrollable to prevent overflow)
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Title
+                    Text(
+                      widget.event.title,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                        height: 1.2,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
 
-                  // Venue
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.location_on,
-                        size: 14,
-                        color: Colors.grey,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          widget.event.venueName,
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                    // Venue
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_on,
+                          size: 14,
+                          color: Colors.grey,
                         ),
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            widget.event.venueName,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
 
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  // Date & Time
-                  _buildDateTimeBox(),
+                    // Date & Time
+                    _buildDateTimeBox(),
 
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  // Price & Availability
-                  _buildPriceRow(),
+                    // Price & Availability
+                    _buildPriceRow(),
 
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
 
-                  // Organizer Card
-                  _buildOrganizerCard(),
+                    // Organizer Card
+                    _buildOrganizerCard(),
 
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 16),
 
-                  // Description
-                  _buildDescription(),
+                    // Description
+                    _buildDescription(),
 
-                  const SizedBox(height: 24),
+                    const SizedBox(height: 24),
 
-                  // Buy Tickets Button
-                  _buildBuyButton(),
-                ],
+                    // Buy Tickets Button
+                    _buildBuyButton(),
+                  ],
+                ),
               ),
             ),
           ],
@@ -418,6 +446,12 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildOrganizerCard() {
+    final displayName = widget.event.organizerName
+        ?? _organizerDisplayName
+        ?? 'Event Organizer';
+    final photoUrl = widget.event.organizerPhotoUrl
+        ?? _organizerAvatarUrl;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -429,11 +463,11 @@ class _EventDetailModalState extends State<EventDetailModal> {
         children: [
           CircleAvatar(
             radius: 20,
-            backgroundImage: widget.event.organizerPhotoUrl != null
-                ? NetworkImage(widget.event.organizerPhotoUrl!)
+            backgroundImage: photoUrl != null
+                ? NetworkImage(photoUrl)
                 : null,
             backgroundColor: Colors.grey[300],
-            child: widget.event.organizerPhotoUrl == null
+            child: photoUrl == null
                 ? const Icon(Icons.business, color: Colors.white, size: 20)
                 : null,
           ),
@@ -446,7 +480,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
                   children: [
                     Flexible(
                       child: Text(
-                        widget.event.organizerName ?? 'Event Organizer',
+                        displayName,
                         style: const TextStyle(
                           color: Colors.black87,
                           fontSize: 15,

@@ -781,30 +781,45 @@ class _TableCompactModalState extends State<TableCompactModal> {
     if (mounted) {
       setState(() => _isLoading = false);
       if (result['success']) {
-        // Data Fallbacks (same as build method)
-        final venueName =
-            widget.table['venue_name'] ??
-            widget.table['title'] ??
-            widget.table['location_name'] ??
-            'Unknown Venue';
+        final message = result['message'] as String;
+        final isPending = message.contains('Request sent');
 
-        Navigator.pop(context, true); // Return true to refresh
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(result['message'])));
+        if (isPending) {
+          // Approval required — refresh to show "Request Pending" state
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.orange,
+          ));
+          _checkMembershipStatus();
+          _fetchPendingCount();
+        } else {
+          // Auto-joined — open chat
+          final venueName =
+              widget.table['venue_name'] ??
+              widget.table['title'] ??
+              widget.table['location_name'] ??
+              'Unknown Venue';
 
-        // Open chat automatically after joining
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          enableDrag: true,
-          builder: (context) => ChatScreen(
-            channelId: 'table_${widget.table['id']}',
-            tableId: widget.table['id'],
-            tableTitle: venueName,
-          ),
-        );
+          Navigator.pop(context, true); // Return true to refresh
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
+
+          // Open chat automatically after joining
+          showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            enableDrag: true,
+            builder: (context) => ChatScreen(
+              channelId: 'table_${widget.table['id']}',
+              tableId: widget.table['id'],
+              tableTitle: venueName,
+            ),
+          );
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

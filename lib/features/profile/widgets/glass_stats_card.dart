@@ -18,36 +18,67 @@ class GlassStatsCard extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
           decoration: BoxDecoration(
-            color: (isDark ? Colors.white : Colors.black).withOpacity(0.05),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: (isDark ? Colors.white : Colors.black).withOpacity(0.1),
-              width: 1,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      Colors.white.withValues(alpha: 0.08),
+                      Colors.white.withValues(alpha: 0.04),
+                    ]
+                  : [
+                      Colors.white.withValues(alpha: 0.85),
+                      Colors.white.withValues(alpha: 0.6),
+                    ],
             ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.9),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildStat('HOSTED', stats['hosted']?.toString() ?? '0'),
-              _buildDivider(),
-              _buildStat('JOINED', stats['joined']?.toString() ?? '0'),
-              _buildDivider(),
-              _buildStat(
-                'FOLLOWERS',
-                stats['followers']?.toString() ?? '0',
+              _buildStatItem(
+                context,
+                value: stats['hosted']?.toString() ?? '0',
+                label: 'Hosted',
+                isDark: isDark,
+              ),
+              _buildStatItem(
+                context,
+                value: stats['joined']?.toString() ?? '0',
+                label: 'Joined',
+                isDark: isDark,
+              ),
+              _buildStatItem(
+                context,
+                value: stats['followers']?.toString() ?? '0',
+                label: 'Followers',
+                isDark: isDark,
                 onTap: onFollowersTap,
               ),
-              _buildDivider(),
-              _buildStat(
-                'FOLLOWING',
-                stats['following']?.toString() ?? '0',
+              _buildStatItem(
+                context,
+                value: stats['following']?.toString() ?? '0',
+                label: 'Following',
+                isDark: isDark,
                 onTap: onFollowingTap,
               ),
             ],
@@ -57,37 +88,44 @@ class GlassStatsCard extends StatelessWidget {
     );
   }
 
-  Widget _buildStat(String label, String value, {VoidCallback? onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              letterSpacing: -0.5,
+  Widget _buildStatItem(
+    BuildContext context, {
+    required String value,
+    required String label,
+    required bool isDark,
+    VoidCallback? onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Value
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+                color: isDark ? Colors.white : Colors.grey[900],
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey,
-              letterSpacing: 1.0,
+            const SizedBox(height: 4),
+            // Label
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.grey[400] : Colors.grey[500],
+                letterSpacing: 0.3,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
-  }
-
-  Widget _buildDivider() {
-    return Container(height: 30, width: 1, color: Colors.grey.withOpacity(0.3));
   }
 }

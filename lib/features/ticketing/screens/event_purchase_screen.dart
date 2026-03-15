@@ -10,6 +10,8 @@ import 'package:bitemates/core/services/event_service.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
+import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:workmanager/workmanager.dart';
 
 class EventPurchaseScreen extends StatefulWidget {
   final Event event;
@@ -20,11 +22,14 @@ class EventPurchaseScreen extends StatefulWidget {
   State<EventPurchaseScreen> createState() => _EventPurchaseScreenState();
 }
 
-class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
+class _EventPurchaseScreenState extends State<EventPurchaseScreen>
+    with WidgetsBindingObserver {
   int _quantity = 1;
   bool _isLoading = false;
   String? _currentPurchaseIntentId;
   Timer? _pollingTimer;
+  bool _isPaymentInProgress = false;
+  int _consecutiveErrors = 0;
 
   // Event Details (for Fees)
   Event? _fullEvent;
@@ -54,6 +59,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _fetchUserProfile(); // Pre-fill if logged in
     _fetchTicketTiers();
     _checkEventDetails();
@@ -62,12 +68,154 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollingTimer?.cancel();
+    PushNotificationService.suppressNotifications = false; // Always clear
+
+    // Re-register WorkManager geofence task that was cancelled during payment
+    Workmanager().registerPeriodicTask(
+      'geofence-check',
+      'geofenceTask',
+      frequency: const Duration(minutes: 15),
+      constraints: Constraints(networkType: NetworkType.connected),
+    );
+
     _nameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
     _promoCodeController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (!_isPaymentInProgress || _currentPurchaseIntentId == null) return;
+
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // App going to background (payment browser opening) — PAUSE polling
+      // to prevent network errors that will cause ANR on resume
+      print('⏸️ App backgrounded during payment — pausing polling timer');
+      _pollingTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed) {
+      // App returned from payment browser — do a fresh check
+      print('🔄 App resumed from payment browser — checking status');
+      _consecutiveErrors = 0;
+
+      // Longer delay to let Mapbox and other services stabilize first
+      Future.delayed(const Duration(milliseconds: 2500), () {
+        if (!mounted || !_isPaymentInProgress) return;
+        _checkPaymentStatusOnce();
+      });
+    }
+  }
+
+  /// One-shot status check when app resumes from payment browser
+  Future<void> _checkPaymentStatusOnce() async {
+    try {
+      final purchase = await SupabaseConfig.client
+          .from('purchase_intents')
+          .select('status')
+          .eq('id', _currentPurchaseIntentId!)
+          .single();
+
+      final status = purchase['status'] as String;
+      print('🔄 Resume check: status = $status');
+
+      if (status == 'completed') {
+        _pollingTimer?.cancel();
+        _isPaymentInProgress = false;
+        PushNotificationService.suppressNotifications = false;
+        if (mounted) {
+          Navigator.pop(context); // Close processing dialog
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TicketSuccessScreen(
+                purchaseIntentId: _currentPurchaseIntentId!,
+              ),
+            ),
+          );
+        }
+      } else if (status == 'failed' || status == 'expired') {
+        _pollingTimer?.cancel();
+        _isPaymentInProgress = false;
+        PushNotificationService.suppressNotifications = false;
+        if (mounted) {
+          Navigator.pop(context);
+          _showErrorDialog('Payment Failed', 'The payment was not completed.');
+        }
+      } else {
+        // Still pending — restart polling timer
+        print('🔄 Payment still pending — restarting polling');
+        _restartPolling();
+      }
+    } catch (e) {
+      print('⚠️ Resume status check error: $e');
+      // Restart polling anyway — it will keep trying
+      _restartPolling();
+    }
+  }
+
+  /// Restart the polling timer after resume (only if payment still in progress)
+  void _restartPolling() {
+    if (!_isPaymentInProgress || !mounted) return;
+    _pollingTimer?.cancel(); // Safety cancel
+    _consecutiveErrors = 0;
+
+    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        _isPaymentInProgress = false;
+        return;
+      }
+
+      try {
+        final purchase = await SupabaseConfig.client
+            .from('purchase_intents')
+            .select('status')
+            .eq('id', _currentPurchaseIntentId!)
+            .single();
+
+        _consecutiveErrors = 0;
+        final status = purchase['status'] as String;
+
+        if (status == 'completed') {
+          timer.cancel();
+          _isPaymentInProgress = false;
+          if (mounted) {
+            Navigator.pop(context);
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => TicketSuccessScreen(
+                  purchaseIntentId: _currentPurchaseIntentId!,
+                ),
+              ),
+            );
+          }
+        } else if (status == 'failed' || status == 'expired') {
+          timer.cancel();
+          _isPaymentInProgress = false;
+          if (mounted) {
+            Navigator.pop(context);
+            _showErrorDialog('Payment Failed', 'The payment was not completed.');
+          }
+        }
+      } catch (e) {
+        _consecutiveErrors++;
+        print('⚠️ Polling error ($_consecutiveErrors/10): $e');
+        if (_consecutiveErrors >= 10) {
+          timer.cancel();
+          _isPaymentInProgress = false;
+          if (mounted) {
+            Navigator.pop(context);
+            _showTimeoutDialog();
+          }
+        }
+      }
+    });
   }
 
   Future<void> _fetchTicketTiers() async {
@@ -380,70 +528,28 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen> {
   // Re-pasting for completeness since I stripped the whole file structure in replace attempt
 
   void _startPaymentPolling() {
+    _isPaymentInProgress = true;
+    PushNotificationService.suppressNotifications = true;
+    _consecutiveErrors = 0;
+
+    // Cancel WorkManager to prevent a 3rd Flutter engine spawning on resume
+    Workmanager().cancelByUniqueName('geofence-check');
+
     showDialog(
       context: context,
-      barrierDismissible: true, // Allow tapping outside to cancel
+      barrierDismissible: true,
       builder: (_) => _ProcessingDialog(
         onCancel: () {
           Navigator.pop(context);
         },
       ),
     ).then((_) {
-      // Cancel the timer whether they clicked 'Cancel' or tapped outside
       _pollingTimer?.cancel();
+      _isPaymentInProgress = false;
     });
 
-    int pollCount = 0;
-    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      pollCount++;
-
-      try {
-        final purchase = await SupabaseConfig.client
-            .from('purchase_intents')
-            .select('status')
-            .eq('id', _currentPurchaseIntentId!)
-            .single();
-
-        final status = purchase['status'] as String;
-
-        if (status == 'completed') {
-          timer.cancel();
-          if (mounted) {
-            Navigator.pop(context); // Close processing dialog
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => TicketSuccessScreen(
-                  purchaseIntentId: _currentPurchaseIntentId!,
-                ),
-              ),
-            );
-          }
-        } else if (status == 'failed' || status == 'expired') {
-          timer.cancel();
-          if (mounted) {
-            Navigator.pop(context);
-            _showErrorDialog(
-              'Payment Failed',
-              'The payment was not completed.',
-            );
-          }
-        }
-      } catch (e) {
-        print('⚠️ Polling error: $e');
-      }
-
-      if (pollCount > 100) {
-        timer.cancel();
-        if (mounted) {
-          // Check if dialog is still open before popping
-          // Actually, we just pop the current route, which might be dangerous if they navigated away.
-          // A safer way is using a GlobalKey, but we will just ensure they timeout safely.
-          Navigator.pop(context);
-          _showTimeoutDialog();
-        }
-      }
-    });
+    // Start the polling timer (shared logic with resume)
+    _restartPolling();
   }
 
   void _showErrorDialog(String title, String message) {

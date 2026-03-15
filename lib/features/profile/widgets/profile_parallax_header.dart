@@ -23,12 +23,36 @@ class ProfileParallaxHeader extends StatelessWidget {
     this.onShare,
   });
 
+  // Badge gradient — consistent purple
+  List<Color> _getBadgeGradient() {
+    return [const Color(0xFF7C3AED), const Color(0xFF5B21B6)];
+  }
+
+  IconData _getBadgeIcon() {
+    switch (characterClass.toLowerCase()) {
+      case 'grand host':
+        return Icons.star_rounded;
+      case 'table hopper':
+        return Icons.bolt_rounded;
+      case 'trusty guide':
+        return Icons.shield_rounded;
+      case 'flavor scout':
+        return Icons.explore_rounded;
+      case 'gourmand':
+        return Icons.restaurant_rounded;
+      default:
+        return Icons.emoji_events_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final badgeColors = _getBadgeGradient();
+    final badgeIcon = _getBadgeIcon();
 
     return SliverAppBar(
-      expandedHeight: 400.0, // Taller for cinematic feel
+      expandedHeight: 400.0,
       pinned: true,
       stretch: true,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -38,7 +62,7 @@ class ProfileParallaxHeader extends StatelessWidget {
           ? Container(
               margin: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 shape: BoxShape.circle,
               ),
               child: IconButton(
@@ -70,35 +94,24 @@ class ProfileParallaxHeader extends StatelessWidget {
           children: [
             // 1. Hero Image
             if (imageUrl != null && imageUrl!.isNotEmpty)
-              ShaderMask(
-                shaderCallback: (rect) {
-                  return const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black, Colors.black, Colors.transparent],
-                    stops: [0.0, 0.8, 1.0],
-                  ).createShader(rect);
-                },
-                blendMode: BlendMode.dstIn,
-                child: CachedNetworkImage(
-                  imageUrl: imageUrl!,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Container(
-                    color: isDark ? Colors.grey[900] : Colors.grey[200],
-                  ),
-                  errorWidget: (context, url, error) => Container(
-                    color: isDark ? Colors.grey[900] : Colors.grey[200],
-                    child: const Icon(
-                      Icons.person,
-                      size: 60,
-                      color: Colors.grey,
-                    ),
+              CachedNetworkImage(
+                imageUrl: imageUrl!,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: isDark ? Colors.grey[900] : Colors.grey[200],
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: isDark ? Colors.grey[900] : Colors.grey[200],
+                  child: const Icon(
+                    Icons.person,
+                    size: 60,
+                    color: Colors.grey,
                   ),
                 ),
               )
             else
               Container(
-                color: AppTheme.accentColor.withOpacity(0.2),
+                color: AppTheme.accentColor.withValues(alpha: 0.2),
                 child: const Icon(
                   Icons.person,
                   size: 100,
@@ -106,7 +119,7 @@ class ProfileParallaxHeader extends StatelessWidget {
                 ),
               ),
 
-            // 2. Gradient Overlay (Bottom Up)
+            // 2. Gradient Overlay (cinematic bottom fade)
             Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -114,16 +127,12 @@ class ProfileParallaxHeader extends StatelessWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withOpacity(0.3),
-                    Colors.black.withOpacity(0.8),
+                    Colors.black.withValues(alpha: 0.15),
+                    Colors.black.withValues(alpha: 0.65),
+                    Colors.black.withValues(alpha: 0.9),
                     Theme.of(context).scaffoldBackgroundColor,
                   ],
-                  stops: const [
-                    0.3,
-                    0.6,
-                    0.95,
-                    1.0,
-                  ], // Darken the lower half more aggressively
+                  stops: const [0.2, 0.45, 0.7, 0.9, 1.0],
                 ),
               ),
             ),
@@ -137,23 +146,42 @@ class ProfileParallaxHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                        characterClass.toUpperCase(),
-                        style: const TextStyle(
-                          color: AppTheme.accentColor,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2,
-                          shadows: [
-                            Shadow(
-                              color: Colors.black87,
-                              offset: Offset(0, 2),
-                              blurRadius: 10,
+                  // Character Class Badge — gradient pill
+                  Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: badgeColors,
+                          ),
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: badgeColors[0].withValues(alpha: 0.4),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
                             ),
-                            Shadow(
-                              color: Colors.black54,
-                              offset: Offset(0, 1),
-                              blurRadius: 4,
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              badgeIcon,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              characterClass.toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.5,
+                              ),
                             ),
                           ],
                         ),
@@ -161,25 +189,27 @@ class ProfileParallaxHeader extends StatelessWidget {
                       .animate()
                       .fadeIn(duration: 600.ms, delay: 200.ms)
                       .slideX(begin: -0.2, end: 0),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 10),
+
+                  // Display Name — bold white with cleaner shadow
                   Text(
                         displayName,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 42, // Massive, cinematic text
+                          fontSize: 38,
                           fontWeight: FontWeight.w900,
-                          height: 1.0,
-                          letterSpacing: -1,
+                          height: 1.05,
+                          letterSpacing: -0.5,
                           shadows: [
                             Shadow(
-                              color: Colors.black,
-                              offset: Offset(0, 4),
-                              blurRadius: 20,
+                              color: Colors.black.withValues(alpha: 0.7),
+                              offset: const Offset(0, 3),
+                              blurRadius: 16,
                             ),
                             Shadow(
-                              color: Colors.black87,
-                              offset: Offset(0, 2),
-                              blurRadius: 6,
+                              color: Colors.black.withValues(alpha: 0.4),
+                              offset: const Offset(0, 1),
+                              blurRadius: 4,
                             ),
                           ],
                         ),
@@ -203,7 +233,7 @@ class ProfileParallaxHeader extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.3),
+        color: Colors.black.withValues(alpha: 0.3),
         shape: BoxShape.circle,
       ),
       child: IconButton(

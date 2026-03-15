@@ -43,37 +43,8 @@ class TableService {
       final response = await builder;
 
       final tables = List<Map<String, dynamic>>.from(response);
-
-      // Enrich with fields not in the view
-      // The map_ready_tables view may not include marker_image_url, marker_emoji,
-      // or image_url, so fetch them from the actual tables table and merge.
-      if (tables.isNotEmpty) {
-        final ids = tables.map((t) => t['id'] as String).toList();
-        try {
-          final markerData = await SupabaseConfig.client
-              .from('tables')
-              .select('id, marker_image_url, marker_emoji, image_url, images')
-              .inFilter('id', ids);
-
-          final markerMap = <String, Map<String, dynamic>>{};
-          for (final m in markerData) {
-            markerMap[m['id'] as String] = m;
-          }
-
-          for (int i = 0; i < tables.length; i++) {
-            final id = tables[i]['id'] as String;
-            if (markerMap.containsKey(id)) {
-              tables[i]['marker_image_url'] ??=
-                  markerMap[id]!['marker_image_url'];
-              tables[i]['marker_emoji'] ??= markerMap[id]!['marker_emoji'];
-              tables[i]['image_url'] ??= markerMap[id]!['image_url'];
-              tables[i]['images'] ??= markerMap[id]!['images'];
-            }
-          }
-        } catch (e) {
-          print('⚠️ Could not enrich marker data: $e');
-        }
-      }
+      // ✅ No enrichment query needed — view now includes
+      // marker_image_url, marker_emoji, image_url, images
 
       // Optional: filter by distance client-side if provided (and bounds not used, or as extra check)
       if (userLat != null && userLng != null && radiusKm != null) {
@@ -110,35 +81,8 @@ class TableService {
           .limit(limit);
 
       final tables = List<Map<String, dynamic>>.from(response);
-
-      // Enrich with missing data just like getMapReadyTables
-      if (tables.isNotEmpty) {
-        final ids = tables.map((t) => t['id'] as String).toList();
-        try {
-          final markerData = await SupabaseConfig.client
-              .from('tables')
-              .select('id, marker_image_url, marker_emoji, image_url, images')
-              .inFilter('id', ids);
-
-          final markerMap = <String, Map<String, dynamic>>{};
-          for (final m in markerData) {
-            markerMap[m['id'] as String] = m;
-          }
-
-          for (int i = 0; i < tables.length; i++) {
-            final id = tables[i]['id'] as String;
-            if (markerMap.containsKey(id)) {
-              tables[i]['marker_image_url'] ??=
-                  markerMap[id]!['marker_image_url'];
-              tables[i]['marker_emoji'] ??= markerMap[id]!['marker_emoji'];
-              tables[i]['image_url'] ??= markerMap[id]!['image_url'];
-              tables[i]['images'] ??= markerMap[id]!['images'];
-            }
-          }
-        } catch (e) {
-          print('⚠️ Could not enrich experience marker data: $e');
-        }
-      }
+      // ✅ No enrichment query needed — view now includes
+      // marker_image_url, marker_emoji, image_url, images
 
       return tables;
     } catch (e) {
@@ -266,6 +210,7 @@ class TableService {
         'cuisine_type': activityType,
         'price_per_person': budgetMax,
         'status': 'open',
+        'requires_approval': requiresApproval,
         'chat_storage_type':
             'telegram', // New tables use Telegram local-first mode
         'marker_model': markerModelPath, // NEW: Save the detected 3D model path

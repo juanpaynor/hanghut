@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
@@ -108,6 +109,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     final currentDesc = _asyncDescription ?? metadata['description'];
     final activityType = metadata['activity_type'] ?? 'Hangout';
     final imageUrl = metadata['image_url'];
+    final videoUrl = metadata['video_url'] as String?;
     final scheduledTimeStr = metadata['scheduled_time'];
     final scheduledTime = scheduledTimeStr != null
         ? DateTime.parse(scheduledTimeStr)
@@ -115,22 +117,12 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
 
     final commentCount = widget.post['comment_count'] ?? 0;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        // Gradient border effect
-        border: Border.all(color: Colors.orange.withOpacity(0.3), width: 1.5),
-      ),
-      child: Column(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          color: Theme.of(context).cardColor,
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 1. Header (User Info + Badge)
@@ -348,76 +340,187 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
           ),
 
           // 2. Main Content (Image/Map + Details)
-          Container(
-            height: 180,
-            width: double.infinity,
-            margin: const EdgeInsets.symmetric(horizontal: 12.0),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              color: Colors.grey[200],
-            ),
-            child: Stack(
-              children: [
-                // Image Background with Preview Gesture
-                Positioned.fill(
-                  child: GestureDetector(
-                    onTap: () {
-                      if (imageUrl != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                FullScreenImageViewer(imageUrl: imageUrl),
-                          ),
-                        );
-                      } else {
-                        widget
-                            .onTap(); // If it's a map or placeholder, treat as card tap
-                      }
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        image: imageUrl != null
-                            ? DecorationImage(
-                                image: CachedNetworkImageProvider(imageUrl),
-                                fit: BoxFit.cover,
-                              )
-                            : null,
-                        // Beautiful elegant gradient for the invitation card
-                        gradient: imageUrl == null
-                            ? const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  Color(0xFF2A0845), // Deep Purple
-                                  Color(0xFF6441A5), // Vibrant Purple
-                                ],
-                              )
-                            : null,
-                      ),
+          if (imageUrl != null) ...[
+            // Image present: show full uncropped image (clean, no text overlay)
+            GestureDetector(
+              onTap: () {
+                if (videoUrl != null && videoUrl.isNotEmpty) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => _HangoutVideoPlayer(videoUrl: videoUrl),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          FullScreenImageViewer(imageUrl: imageUrl),
+                    ),
+                  );
+                }
+              },
+              child: Stack(
+                children: [
+                  // Full-width uncropped image
+                  CachedNetworkImage(
+                    imageUrl: imageUrl,
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    placeholder: (context, url) => Container(
+                      height: 220,
+                      color: Colors.grey[200],
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    errorWidget: (context, url, error) => Container(
+                      height: 220,
+                      color: Colors.grey[200],
+                      child: const Center(child: Icon(Icons.broken_image, size: 40)),
                     ),
                   ),
-                ),
-                // Gradient Overlay for text readability
-                IgnorePointer(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.7),
+                  // Video play button only
+                  if (videoUrl != null && videoUrl.isNotEmpty)
+                    Positioned.fill(
+                      child: Center(
+                        child: Container(
+                          width: 56, height: 56,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.9),
+                            shape: BoxShape.circle,
+                            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 12)],
+                          ),
+                          child: const Icon(Icons.play_arrow_rounded, size: 36, color: Colors.black87),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            // Details section below the image
+            InkWell(
+              onTap: widget.onTap,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Details
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            customTitle,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 17,
+                              height: 1.2,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (currentDesc != null &&
+                              currentDesc.toString().isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                currentDesc.toString(),
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontSize: 13,
+                                  height: 1.3,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Icon(Icons.location_on, size: 14, color: Colors.grey[500]),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  venueName,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (scheduledTime != null) ...[
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
+                                const SizedBox(width: 4),
+                                Text(
+                                  DateFormat('EEE, MMM d • h:mm a').format(scheduledTime),
+                                  style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    // Join button
+                    _buildJoinButton(metadata),
+                  ],
                 ),
-
-                // Center Content: Beautiful Dynamic Emoji/Icon
-                if (imageUrl == null)
+              ),
+            ),
+          ] else
+            // No image: fixed height with gradient (text overlay is fine here)
+            Container(
+              height: 220,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+              ),
+              child: Stack(
+                children: [
+                  // Gradient background
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: widget.onTap,
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Color(0xFF2A0845),
+                              Color(0xFF6441A5),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Gradient Overlay
+                  IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withOpacity(0.7),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Center Emoji
                   Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -448,174 +551,38 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                       ],
                     ),
                   ),
-
-                // Top Left Badge (Activity Type)
-                if (imageUrl == null)
+                  // Top Left Badge (Activity Type)
                   Positioned(
-                    top: 12,
-                    left: 12,
+                    top: 12, left: 12,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.3),
-                          width: 1,
-                        ),
+                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
                       ),
                       child: Text(
                         activityType.toUpperCase(),
                         style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
-                          letterSpacing: 1.2,
+                          color: Colors.white, fontWeight: FontWeight.bold,
+                          fontSize: 10, letterSpacing: 1.2,
                         ),
                       ),
                     ),
                   ),
-
-                // Bottom Left Details
-                Positioned(
-                  bottom: 12,
-                  left: 12,
-                  right: 100, // Leave room for Join button
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        customTitle,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                          shadows: [
-                            Shadow(color: Colors.black54, blurRadius: 4),
-                          ],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (currentDesc != null &&
-                          currentDesc.toString().isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2.0, bottom: 4.0),
-                          child: Text(
-                            currentDesc,
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.85),
-                              fontSize: 13,
-                              shadows: const [
-                                Shadow(color: Colors.black54, blurRadius: 4),
-                              ],
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on,
-                            color: Colors.white.withOpacity(0.9),
-                            size: 14,
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              venueName,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                                shadows: const [
-                                  Shadow(color: Colors.black54, blurRadius: 4),
-                                ],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (scheduledTime != null) ...[
-                        const SizedBox(height: 2),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.access_time,
-                              color: Colors.white.withOpacity(0.9),
-                              size: 14,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              DateFormat(
-                                'EEE, MMM d • h:mm a',
-                              ).format(scheduledTime),
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
-                                fontSize: 13,
-                                shadows: const [
-                                  Shadow(color: Colors.black54, blurRadius: 4),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
+                  // Bottom Left Details
+                  Positioned(
+                    bottom: 12, left: 12, right: 100,
+                    child: _buildOverlayDetails(customTitle, currentDesc, venueName, scheduledTime),
                   ),
-                ),
-
-                // Join Button
-                Positioned(
-                  bottom: 12,
-                  right: 12,
-                  child: metadata['status'] == 'ended'
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.6),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Text(
-                            'Ended',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        )
-                      : ElevatedButton(
-                          onPressed: widget.onTap,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                          ),
-                          child: const Text(
-                            'Join',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                ),
-              ],
+                  // Join Button
+                  Positioned(
+                    bottom: 12, right: 12,
+                    child: _buildJoinButton(metadata),
+                  ),
+                ],
+              ),
             ),
-          ),
 
           // 3. Social Actions Row (Like & Comment)
           Padding(
@@ -653,6 +620,93 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
           const SizedBox(height: 8),
         ],
       ),
+    ),
+    Divider(height: 1, thickness: 0.5, color: Colors.grey[200]),
+  ],
+);
+  }
+
+  Widget _buildOverlayDetails(String customTitle, dynamic currentDesc, String venueName, DateTime? scheduledTime) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          customTitle,
+          style: const TextStyle(
+            color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20,
+            shadows: [Shadow(color: Colors.black54, blurRadius: 4)],
+          ),
+          maxLines: 1, overflow: TextOverflow.ellipsis,
+        ),
+        if (currentDesc != null && currentDesc.toString().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2.0, bottom: 4.0),
+            child: Text(
+              currentDesc.toString(),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.85), fontSize: 13,
+                shadows: const [Shadow(color: Colors.black54, blurRadius: 4)],
+              ),
+              maxLines: 2, overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Icon(Icons.location_on, color: Colors.white.withOpacity(0.9), size: 14),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                venueName,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.9), fontSize: 13, fontWeight: FontWeight.w500,
+                  shadows: const [Shadow(color: Colors.black54, blurRadius: 4)],
+                ),
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        if (scheduledTime != null) ...[
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Icon(Icons.access_time, color: Colors.white.withOpacity(0.9), size: 14),
+              const SizedBox(width: 4),
+              Text(
+                DateFormat('EEE, MMM d • h:mm a').format(scheduledTime),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.9), fontSize: 13,
+                  shadows: const [Shadow(color: Colors.black54, blurRadius: 4)],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildJoinButton(Map<String, dynamic> metadata) {
+    if (metadata['status'] == 'ended') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Text('Ended', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      );
+    }
+    return ElevatedButton(
+      onPressed: widget.onTap,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      ),
+      child: const Text('Join', style: TextStyle(fontWeight: FontWeight.bold)),
     );
   }
 
@@ -710,6 +764,91 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen video player for hangout feed cards
+class _HangoutVideoPlayer extends StatefulWidget {
+  final String videoUrl;
+
+  const _HangoutVideoPlayer({required this.videoUrl});
+
+  @override
+  State<_HangoutVideoPlayer> createState() => _HangoutVideoPlayerState();
+}
+
+class _HangoutVideoPlayerState extends State<_HangoutVideoPlayer> {
+  late VideoPlayerController _controller;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
+      ..initialize().then((_) {
+        if (mounted) {
+          setState(() => _isInitialized = true);
+          _controller.play();
+          _controller.setLooping(true);
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      extendBodyBehindAppBar: true,
+      body: GestureDetector(
+        onTap: () {
+          setState(() {
+            if (_controller.value.isPlaying) {
+              _controller.pause();
+            } else {
+              _controller.play();
+            }
+          });
+        },
+        child: Center(
+          child: _isInitialized
+              ? AspectRatio(
+                  aspectRatio: _controller.value.aspectRatio,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      VideoPlayer(_controller),
+                      if (!_controller.value.isPlaying)
+                        Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow_rounded,
+                            size: 48,
+                            color: Colors.white,
+                          ),
+                        ),
+                    ],
+                  ),
+                )
+              : const CircularProgressIndicator(color: Colors.white),
         ),
       ),
     );
