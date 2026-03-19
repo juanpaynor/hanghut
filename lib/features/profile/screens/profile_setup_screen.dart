@@ -40,7 +40,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   // Step 2: Basics Controllers
   final _nameController = TextEditingController(); // Added Name Controller
+  final _usernameController = TextEditingController();
   final _bioController = TextEditingController();
+  String? _usernameError;
   Country? _selectedCountry;
   DateTime? _dateOfBirth;
   String? _genderIdentity;
@@ -201,10 +203,40 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   @override
   void dispose() {
     _pageController.dispose();
-    _nameController.dispose(); // Dispose Name Controller
+    _nameController.dispose();
+    _usernameController.dispose();
     _bioController.dispose();
     _confettiController.dispose();
     super.dispose();
+  }
+
+  Future<void> _validateUsername(String value) async {
+    final username = value.trim().toLowerCase();
+    if (username.isEmpty) {
+      setState(() => _usernameError = null);
+      return;
+    }
+    if (username.length < 3) {
+      setState(() => _usernameError = 'At least 3 characters');
+      return;
+    }
+    if (!RegExp(r'^[a-z0-9_]+$').hasMatch(username)) {
+      setState(() => _usernameError = 'Only letters, numbers, and underscores');
+      return;
+    }
+    try {
+      final available = await SupabaseConfig.client.rpc(
+        'check_username_available',
+        params: {'p_username': username},
+      );
+      if (mounted) {
+        setState(() {
+          _usernameError = available == true ? null : 'Username already taken';
+        });
+      }
+    } catch (e) {
+      debugPrint('Error checking username: $e');
+    }
   }
 
   Future<void> _fetchInterests() async {
@@ -355,6 +387,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         displayName: _nameController.text.trim().isNotEmpty
             ? _nameController.text.trim()
             : 'User',
+        username: _usernameController.text.trim().isNotEmpty
+            ? _usernameController.text.trim().toLowerCase()
+            : null,
         bio: _bioController.text,
         dob: _dateOfBirth ?? DateTime(2000),
         gender: _genderIdentity ?? 'Prefer not to say',
@@ -700,6 +735,52 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
             controller: _nameController,
             decoration: InputDecoration(
               hintText: 'Your name',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Username
+          const Text(
+            'Choose a username',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'This is your unique handle. Others can find you with it.',
+            style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _usernameController,
+            onChanged: _validateUsername,
+            decoration: InputDecoration(
+              hintText: 'e.g. richsantos',
+              prefixIcon: Container(
+                width: 40,
+                alignment: Alignment.center,
+                child: const Text(
+                  '@',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              errorText: _usernameError,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(color: Colors.grey[300]!),

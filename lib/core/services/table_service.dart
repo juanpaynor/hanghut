@@ -77,6 +77,7 @@ class TableService {
           .from('map_ready_tables')
           .select()
           .eq('is_experience', true) // Filter by the actual experience flag
+          .eq('verified_by_hanghut', true) // Only show approved experiences
           .order('scheduled_time', ascending: true)
           .limit(limit);
 
@@ -172,7 +173,7 @@ class TableService {
     required String venueName,
     required String venueAddress,
     String? title,
-    String? description, // NEW parameter
+    String? description,
     required int maxCapacity,
     required int budgetMin,
     required int budgetMax,
@@ -181,6 +182,9 @@ class TableService {
     File? markerImage,
     String? markerEmoji,
     String? imageUrl,
+    String visibility = 'public',
+    Map<String, dynamic>? filters,
+    List<String>? invitedUserIds,
   }) async {
     print('📊 TABLE SERVICE: createTable called');
     print('  - Venue: $venueName');
@@ -205,18 +209,21 @@ class TableService {
         'datetime': scheduledTime.toIso8601String(),
         'location_name': venueName,
         'venue_address': venueAddress,
-        'description': description, // Pass description to DB
+        'description': description,
         'max_guests': maxCapacity,
         'cuisine_type': activityType,
         'price_per_person': budgetMax,
         'status': 'open',
         'requires_approval': requiresApproval,
+        'visibility': visibility,
         'chat_storage_type':
             'telegram', // New tables use Telegram local-first mode
-        'marker_model': markerModelPath, // NEW: Save the detected 3D model path
+        'marker_model': markerModelPath,
         if (markerEmoji != null) 'marker_emoji': markerEmoji,
-        if (imageUrl != null)
-          'image_url': imageUrl, // Vibe GIF displays in modal header
+        if (imageUrl != null) 'image_url': imageUrl,
+        if (filters != null && filters.isNotEmpty) 'filters': filters,
+        if (invitedUserIds != null && invitedUserIds.isNotEmpty)
+          'invited_user_ids': invitedUserIds,
       };
 
       print('📤 TABLE SERVICE: Sending to Supabase...');
@@ -273,32 +280,167 @@ class TableService {
         print('⚠️ TABLE SERVICE: Failed to add host as member: $e');
       }
 
-      // Auto-Post to Feed (New Feature)
-      try {
-        print('📣 TABLE SERVICE: Auto-posting to feed...');
-
-        await SocialService().createSystemPost(
-          content: 'New Hangout: $venueName',
-          postType: 'hangout',
-          visibility: 'public',
-          latitude: latitude,
-          longitude: longitude,
-          metadata: {
+      // Auto-add invited users as pending table members
+      if (invitedUserIds != null && invitedUserIds.isNotEmpty) {
+        try {
+          print('📨 TABLE SERVICE: Adding ${invitedUserIds.length} invited users...');
+          final inviteRows = invitedUserIds.map((uid) => {
             'table_id': tableId,
-            'venue_name': venueName,
-            'venue_address': venueAddress,
-            'scheduled_time': scheduledTime.toIso8601String(),
-            'activity_type': activityType,
-            'title': title ?? venueName,
-            'description': description, // Pass to Feed Metadata
-            'image_url': markerImageUrl ?? imageUrl,
-            'marker_emoji': markerEmoji,
-            'max_capacity': maxCapacity,
-          },
-        );
-        print('✅ TABLE SERVICE: Auto-post successful');
-      } catch (e) {
-        print('⚠️ TABLE SERVICE: Failed to auto-post: $e');
+            'user_id': uid,
+            'role': 'member',
+            'status': 'pending',
+            'requested_at': DateTime.now().toIso8601String(),
+          }).toList();
+          await SupabaseConfig.client.from('table_members').insert(inviteRows);
+          print('✅ TABLE SERVICE: Invited users added');
+        } catch (e) {
+          print('⚠️ TABLE SERVICE: Failed to add invited users: $e');
+        }
+      }
+
+      // Auto-Post to Feed (skip for mystery tables — they should stay hidden)
+      if (visibility != 'mystery') {
+        try {
+          print('📣 TABLE SERVICE: Auto-posting to feed...');
+
+          await SocialService().createSystemPost(
+            content: 'New Hangout: $venueName',
+            postType: 'hangout',
+            visibility: visibility == 'followers_only' ? 'followers' : 'public',
+            latitude: latitude,
+            longitude: longitude,
+            metadata: {
+              'table_id': tableId,
+              'venue_name': venueName,
+              'venue_address': venueAddress,
+              'scheduled_time': scheduledTime.toIso8601String(),
+              'activity_type': activityType,
+              'title': title ?? venueName,
+              'description': description,
+              'image_url': markerImageUrl ?? imageUrl,
+              'marker_emoji': markerEmoji,
+              'max_capacity': maxCapacity,
+              if (filters != null && filters.isNotEmpty) 'filters': filters,
+              'visibility': visibility,
+            },
+          );
+          print('✅ TABLE SERVICE: Auto-post successful');
+        } catch (e) {
+          print('⚠️ TABLE SERVICE: Failed to auto-post: $e');
+        }
+      } else {
+        print('🔮 TABLE SERVICE: Skipping feed post for mystery table');
+      }
+
+      // ═══ INVITE NOTIFICATIONS (in-app + push) ═══
+      if (invitedUserIds != null && invitedUserIds.isNotEmpty) {
+        try {
+          final hostName = user.userMetadata?['display_name'] ?? 'Someone';
+          final tableTitle = title ?? venueName;
+          print('🔔 TABLE SERVICE: Sending invite notifications to ${invitedUserIds.length} users...');
+
+          for (final inviteeId in invitedUserIds) {
+            // 1. In-app notification (bell)
+            try {
+              await SupabaseConfig.client.from('notifications').insert({
+                'user_id': inviteeId,
+                'actor_id': user.id,
+                'type': 'hangout_invite',
+                'title': 'You\'re Invited! 🎉',
+                'body': '$hostName invited you to "$tableTitle"',
+                'entity_id': tableId,
+                'metadata': {'table_id': tableId},
+              });
+            } catch (e) {
+              print('⚠️ Failed to insert invite notification for $inviteeId: $e');
+            }
+
+            // 2. Push notification
+            try {
+              await SupabaseConfig.client.functions.invoke(
+                'send-push',
+                body: {
+                  'user_id': inviteeId,
+                  'title': 'You\'re Invited! 🎉',
+                  'body': '$hostName invited you to "$tableTitle"',
+                  'data': {
+                    'type': 'table_join',
+                    'table_id': tableId,
+                  },
+                },
+              );
+            } catch (e) {
+              print('⚠️ Failed to send invite push for $inviteeId: $e');
+            }
+          }
+          print('✅ TABLE SERVICE: Invite notifications sent');
+        } catch (e) {
+          print('⚠️ TABLE SERVICE: Failed to send invite notifications: $e');
+        }
+      }
+
+      // ═══ FOLLOWER NOTIFICATIONS (in-app + push) — public only ═══
+      if (visibility == 'public') {
+        try {
+          final hostName = user.userMetadata?['display_name'] ?? 'Someone';
+          final tableTitle = title ?? venueName;
+          print('🔔 TABLE SERVICE: Fetching followers for notification...');
+
+          // Fetch up to 50 followers
+          final followersResp = await SupabaseConfig.client
+              .from('follows')
+              .select('follower_id')
+              .eq('following_id', user.id)
+              .limit(50);
+
+          final followerIds = (followersResp as List)
+              .map((f) => f['follower_id'] as String)
+              .where((fid) =>
+                  fid != user.id &&
+                  !(invitedUserIds?.contains(fid) ?? false)) // skip already-invited
+              .toList();
+
+          if (followerIds.isNotEmpty) {
+            print('🔔 TABLE SERVICE: Notifying ${followerIds.length} followers...');
+
+            // Batch insert in-app notifications
+            try {
+              final notifRows = followerIds.map((fid) => {
+                'user_id': fid,
+                'actor_id': user.id,
+                'type': 'follower_hangout',
+                'title': 'New Hangout from $hostName 🔥',
+                'body': '$hostName just created "$tableTitle" — join now!',
+                'entity_id': tableId,
+                'metadata': {'table_id': tableId},
+              }).toList();
+              await SupabaseConfig.client.from('notifications').insert(notifRows);
+            } catch (e) {
+              print('⚠️ Failed to batch insert follower notifications: $e');
+            }
+
+            // Send push notifications (fire-and-forget, don't block creation)
+            for (final fid in followerIds) {
+              SupabaseConfig.client.functions.invoke(
+                'send-push',
+                body: {
+                  'user_id': fid,
+                  'title': 'New Hangout from $hostName 🔥',
+                  'body': '$hostName just created "$tableTitle" — join now!',
+                  'data': {
+                    'type': 'table_join',
+                    'table_id': tableId,
+                  },
+                },
+              ).then((_) {}).catchError((e) {
+                print('⚠️ Failed to send follower push for $fid: $e');
+              });
+            }
+            print('✅ TABLE SERVICE: Follower notifications sent');
+          }
+        } catch (e) {
+          print('⚠️ TABLE SERVICE: Failed to send follower notifications: $e');
+        }
       }
 
       return tableId;
@@ -336,34 +478,25 @@ class TableService {
 
       print('✅ TABLE SERVICE: Table deleted from DB');
 
-      // 3. Mark associated Feed Post as ENDED (instead of deleting it?)
+      // 3. Delete associated Feed Post
       // We search for a post where metadata->>table_id matches
       final postResponse = await SupabaseConfig.client
           .from('posts')
-          .select('id, metadata')
+          .select('id')
           .eq('post_type', 'hangout')
-          // Using a filter on jsonb column
-          // Note: .filter('metadata->>table_id', 'eq', tableId)
           .filter('metadata->>table_id', 'eq', tableId)
           .maybeSingle();
 
       if (postResponse != null) {
         final postId = postResponse['id'];
-        final metadata = postResponse['metadata'] as Map<String, dynamic>;
-
-        print('🔄 TABLE SERVICE: Updating associated feed post $postId');
-
-        // Update status in metadata
-        metadata['status'] = 'ended';
+        print('🗑️ TABLE SERVICE: Deleting associated feed post $postId');
 
         await SupabaseConfig.client
             .from('posts')
-            .update({'metadata': metadata})
+            .delete()
             .eq('id', postId);
 
-        // Notify Ably about the update (using 'post_updated' event if we had one,
-        // but for now the client might just see it on refresh.
-        // Ideally we'd emit an event. Let's assume AblyService handles this if we add it.)
+        print('✅ TABLE SERVICE: Feed post deleted');
       }
 
       // 4. Cleanup Marker Image

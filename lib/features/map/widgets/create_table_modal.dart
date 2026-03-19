@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/tenor_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
+import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -54,6 +55,23 @@ class _CreateTableModalState extends State<CreateTableModal> {
   String _goalType = 'friends';
   bool _requiresApproval = false;
   bool _isLoading = false;
+
+  // Visibility
+  String _visibility = 'public'; // 'public' or 'followers_only'
+
+  // Advanced Filters
+  bool _showAdvancedFilters = false;
+  String _genderFilter = 'everyone'; // 'everyone', 'women_only', 'men_only', 'nonbinary_only'
+  bool _ageFilterEnabled = false;
+  RangeValues _ageRange = const RangeValues(18, 65);
+  String _enforcement = 'soft'; // 'soft' or 'hard'
+
+  // Invite by Handle
+  final _inviteController = TextEditingController();
+  List<Map<String, dynamic>> _inviteSearchResults = [];
+  List<Map<String, dynamic>> _invitedUsers = [];
+  Timer? _inviteDebounce;
+  bool _showInviteResults = false;
 
   // Visuals
   String? _selectedGifUrl;
@@ -109,6 +127,14 @@ class _CreateTableModalState extends State<CreateTableModal> {
       now.hour,
       now.minute >= 30 ? 30 : 0,
     );
+  }
+
+  @override
+  void dispose() {
+    _inviteController.dispose();
+    _inviteDebounce?.cancel();
+    _debounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadUserProfile() async {
@@ -488,6 +514,76 @@ class _CreateTableModalState extends State<CreateTableModal> {
     }
   }
 
+  // --- Invite User Search ---
+  void _onInviteSearchChanged(String query) {
+    print('🔍 Invite search onChanged: "$query"');
+    if (_inviteDebounce?.isActive ?? false) _inviteDebounce!.cancel();
+    _inviteDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (query.trim().isNotEmpty) {
+        _searchUsersForInvite(query.trim());
+      } else {
+        setState(() {
+          _inviteSearchResults = [];
+          _showInviteResults = false;
+        });
+      }
+    });
+  }
+
+  Future<void> _searchUsersForInvite(String query) async {
+    try {
+      // Strip leading @ since usernames in DB don't have it
+      final cleanQuery = query.startsWith('@') ? query.substring(1) : query;
+      if (cleanQuery.isEmpty) return;
+      print('🔍 Searching for invite: "$cleanQuery"');
+      final results = await SocialService().searchUsers(cleanQuery, limit: 5);
+      print('🔍 Search results: ${results.length} users found');
+      final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+      // Filter out already-invited users and self
+      final filtered = results.where((u) {
+        final uid = u['id'] as String;
+        return uid != currentUserId &&
+            !_invitedUsers.any((invited) => invited['id'] == uid);
+      }).toList();
+      print('🔍 Filtered results: ${filtered.length} users');
+      if (mounted) {
+        setState(() {
+          _inviteSearchResults = filtered;
+          _showInviteResults = filtered.isNotEmpty;
+        });
+      }
+    } catch (e) {
+      print('❌ Invite search error: $e');
+    }
+  }
+
+  void _addInvitedUser(Map<String, dynamic> user) {
+    setState(() {
+      _invitedUsers.add(user);
+      _inviteSearchResults = [];
+      _showInviteResults = false;
+      _inviteController.clear();
+    });
+  }
+
+  void _removeInvitedUser(int index) {
+    setState(() {
+      _invitedUsers.removeAt(index);
+    });
+  }
+
+  Map<String, dynamic>? _buildFiltersJson() {
+    if (_genderFilter == 'everyone' && !_ageFilterEnabled) return null;
+    final filters = <String, dynamic>{};
+    if (_genderFilter != 'everyone') filters['gender'] = _genderFilter;
+    if (_ageFilterEnabled) {
+      filters['age_min'] = _ageRange.start.round();
+      filters['age_max'] = _ageRange.end.round();
+    }
+    filters['enforcement'] = _enforcement;
+    return filters;
+  }
+
   // --- Creation Logic ---
   Future<void> _createTable() async {
     if (_activityController.text.isEmpty) {
@@ -520,14 +616,12 @@ class _CreateTableModalState extends State<CreateTableModal> {
         latitude: _venueLat!,
         longitude: _venueLng!,
         scheduledTime: _selectedDateTime,
-        activityType: 'other', // General type for custom activities
+        activityType: 'other',
         venueName: _venueName!,
         venueAddress: _venueAddress!,
-        title: title, // CUSTOM TITLE
-        description: description.isNotEmpty
-            ? description
-            : null, // Pass description
-        maxCapacity: _maxCapacity.round(), // Convert double to int
+        title: title,
+        description: description.isNotEmpty ? description : null,
+        maxCapacity: _maxCapacity.round(),
         budgetMin: _budgetRange == 'low'
             ? 0
             : (_budgetRange == 'high' ? 50 : 20),
@@ -537,10 +631,15 @@ class _CreateTableModalState extends State<CreateTableModal> {
         requiresApproval: _requiresApproval,
         goalType: _goalType,
         imageUrl: finalImageUrl,
-        markerImage: _markerImage, // PASS MARKER IMAGE
+        markerImage: _markerImage,
         markerEmoji: _markerImage == null
             ? (_selectedEmoji ?? '📍')
-            : null, // Default to emoji if no image
+            : null,
+        visibility: _visibility,
+        filters: _buildFiltersJson(),
+        invitedUserIds: _invitedUsers.isNotEmpty
+            ? _invitedUsers.map((u) => u['id'] as String).toList()
+            : null,
       );
 
       if (mounted) {
@@ -608,7 +707,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                   ),
                   Expanded(
                     child: Text(
-                      'Host a Table',
+                      'Host an Activity',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 18,
@@ -1358,6 +1457,610 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       ),
                     ),
 
+                    const SizedBox(height: 24),
+
+                    // ═══════════════════════════════════════
+                    // VISIBILITY SELECTOR
+                    // ═══════════════════════════════════════
+                    Text(
+                      'Who can see this?',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _visibility = 'public'),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              decoration: BoxDecoration(
+                                color: _visibility == 'public'
+                                    ? Colors.indigo
+                                    : (isDark ? Colors.grey[800] : Colors.grey[100]),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: _visibility == 'public'
+                                      ? Colors.indigo
+                                      : (isDark ? Colors.grey[700]! : Colors.grey[300]!),
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.public,
+                                    size: 18,
+                                    color: _visibility == 'public'
+                                        ? Colors.white
+                                        : Colors.grey[600],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Public',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                      color: _visibility == 'public'
+                                          ? Colors.white
+                                          : theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _visibility = 'followers_only'),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              decoration: BoxDecoration(
+                                color: _visibility == 'followers_only'
+                                    ? Colors.indigo
+                                    : (isDark ? Colors.grey[800] : Colors.grey[100]),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: _visibility == 'followers_only'
+                                      ? Colors.indigo
+                                      : (isDark ? Colors.grey[700]! : Colors.grey[300]!),
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.people_outline,
+                                    size: 18,
+                                    color: _visibility == 'followers_only'
+                                        ? Colors.white
+                                        : Colors.grey[600],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Followers',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                      color: _visibility == 'followers_only'
+                                          ? Colors.white
+                                          : theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _visibility = 'mystery'),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              decoration: BoxDecoration(
+                                color: _visibility == 'mystery'
+                                    ? const Color(0xFF7C3AED)
+                                    : (isDark ? Colors.grey[800] : Colors.grey[100]),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: _visibility == 'mystery'
+                                      ? const Color(0xFF7C3AED)
+                                      : (isDark ? Colors.grey[700]! : Colors.grey[300]!),
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Text(
+                                    '🔮',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: _visibility == 'mystery'
+                                          ? Colors.white
+                                          : Colors.grey[600],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Mystery',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                      color: _visibility == 'mystery'
+                                          ? Colors.white
+                                          : theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // Mystery hint text
+                    if (_visibility == 'mystery')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 14, color: const Color(0xFF7C3AED)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Only visible to people who scan this area with the walking pulse',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: const Color(0xFF7C3AED),
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 24),
+
+                    // ═══════════════════════════════════════
+                    // INVITE PEOPLE BY HANDLE
+                    // ═══════════════════════════════════════
+                    Text(
+                      'Invite People',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Search by @username to invite friends',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[500],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _inviteController,
+                      onChanged: _onInviteSearchChanged,
+                      decoration: InputDecoration(
+                        hintText: '@username',
+                        prefixIcon: Icon(
+                          Icons.alternate_email,
+                          color: theme.iconTheme.color?.withOpacity(0.7),
+                        ),
+                        filled: true,
+                        fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                      ),
+                    ),
+
+                    // Invite Search Results
+                    if (_showInviteResults && _inviteSearchResults.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.grey[800] : Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          children: _inviteSearchResults.map((user) {
+                            final displayName = user['display_name'] ?? 'User';
+                            final username = user['username'] ?? '';
+                            final avatarUrl = user['avatar_url'];
+                            return ListTile(
+                              leading: CircleAvatar(
+                                radius: 18,
+                                backgroundImage: avatarUrl != null
+                                    ? NetworkImage(avatarUrl)
+                                    : null,
+                                child: avatarUrl == null
+                                    ? Text(
+                                        displayName.isNotEmpty
+                                            ? displayName[0].toUpperCase()
+                                            : '?',
+                                        style: const TextStyle(fontSize: 14),
+                                      )
+                                    : null,
+                              ),
+                              title: Text(
+                                displayName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: username.isNotEmpty
+                                  ? Text(
+                                      '@$username',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[500],
+                                      ),
+                                    )
+                                  : null,
+                              trailing: Icon(
+                                Icons.add_circle_outline,
+                                size: 20,
+                                color: Colors.indigo,
+                              ),
+                              onTap: () => _addInvitedUser(user),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+
+                    // Invited Users Chips
+                    if (_invitedUsers.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: List.generate(_invitedUsers.length, (i) {
+                          final user = _invitedUsers[i];
+                          final name = user['display_name'] ?? 'User';
+                          final username = user['username'] ?? '';
+                          return Chip(
+                            avatar: CircleAvatar(
+                              radius: 12,
+                              backgroundImage: user['avatar_url'] != null
+                                  ? NetworkImage(user['avatar_url'])
+                                  : null,
+                              child: user['avatar_url'] == null
+                                  ? Text(
+                                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                      style: const TextStyle(fontSize: 10),
+                                    )
+                                  : null,
+                            ),
+                            label: Text(
+                              username.isNotEmpty ? '@$username' : name,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                            onDeleted: () => _removeInvitedUser(i),
+                            backgroundColor: isDark ? Colors.grey[800] : Colors.indigo.withOpacity(0.08),
+                            side: BorderSide(
+                              color: Colors.indigo.withOpacity(0.2),
+                            ),
+                          );
+                        }),
+                      ),
+                    ],
+
+                    const SizedBox(height: 24),
+
+                    // ═══════════════════════════════════════
+                    // ADVANCED FILTERS (Collapsible)
+                    // ═══════════════════════════════════════
+                    GestureDetector(
+                      onTap: () => setState(() => _showAdvancedFilters = !_showAdvancedFilters),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.tune,
+                            size: 20,
+                            color: _showAdvancedFilters ? Colors.indigo : Colors.grey[500],
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Advanced Filters',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                          const Spacer(),
+                          // Show active indicator if any filter is set
+                          if (_genderFilter != 'everyone' || _ageFilterEnabled)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Text(
+                                'Active',
+                                style: TextStyle(
+                                  color: Colors.indigo,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            _showAdvancedFilters
+                                ? Icons.keyboard_arrow_up
+                                : Icons.keyboard_arrow_down,
+                            color: Colors.grey,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    if (_showAdvancedFilters) ...[
+                      const SizedBox(height: 16),
+
+                      // Gender Preference
+                      Text(
+                        'Gender Preference',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.grey[800] : Colors.grey[50],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _genderFilter,
+                            isExpanded: true,
+                            dropdownColor: isDark ? Colors.grey[800] : Colors.white,
+                            items: const [
+                              DropdownMenuItem(value: 'everyone', child: Text('Everyone Welcome 🌈')),
+                              DropdownMenuItem(value: 'women_only', child: Text('Women Only 👩')),
+                              DropdownMenuItem(value: 'men_only', child: Text('Men Only 👨')),
+                              DropdownMenuItem(value: 'nonbinary_only', child: Text('Non-binary Only 🏳️‍🌈')),
+                            ],
+                            onChanged: (val) {
+                              if (val != null) setState(() => _genderFilter = val);
+                            },
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Age Range
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Age Range',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                          Switch.adaptive(
+                            value: _ageFilterEnabled,
+                            activeColor: Colors.indigo,
+                            onChanged: (val) => setState(() => _ageFilterEnabled = val),
+                          ),
+                        ],
+                      ),
+                      if (_ageFilterEnabled) ...[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '${_ageRange.start.round()} yrs',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.indigo,
+                                fontSize: 14,
+                              ),
+                            ),
+                            Text(
+                              '${_ageRange.end.round()} yrs',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.indigo,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: Colors.indigo,
+                            inactiveTrackColor: Colors.grey[200],
+                            thumbColor: Colors.indigo,
+                            overlayColor: Colors.indigo.withOpacity(0.1),
+                            rangeThumbShape: const RoundRangeSliderThumbShape(
+                              enabledThumbRadius: 8,
+                            ),
+                          ),
+                          child: RangeSlider(
+                            values: _ageRange,
+                            min: 18,
+                            max: 65,
+                            divisions: 47,
+                            onChanged: (val) => setState(() => _ageRange = val),
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 16),
+
+                      // Enforcement Mode
+                      if (_genderFilter != 'everyone' || _ageFilterEnabled) ...[
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.grey[800] : Colors.grey[50],
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Enforcement',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTap: () => setState(() => _enforcement = 'soft'),
+                                      child: AnimatedContainer(
+                                        duration: const Duration(milliseconds: 200),
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                        decoration: BoxDecoration(
+                                          color: _enforcement == 'soft'
+                                              ? Colors.amber.withOpacity(0.15)
+                                              : (isDark ? Colors.grey[700] : Colors.grey[100]),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: _enforcement == 'soft'
+                                                ? Colors.amber
+                                                : Colors.transparent,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            Icon(
+                                              Icons.label_outline,
+                                              size: 20,
+                                              color: _enforcement == 'soft'
+                                                  ? Colors.amber[800]
+                                                  : Colors.grey[500],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Soft Label',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: _enforcement == 'soft'
+                                                    ? Colors.amber[800]
+                                                    : Colors.grey[500],
+                                              ),
+                                            ),
+                                            Text(
+                                              'Tag only',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey[500],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onTap: () => setState(() => _enforcement = 'hard'),
+                                      child: AnimatedContainer(
+                                        duration: const Duration(milliseconds: 200),
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                        decoration: BoxDecoration(
+                                          color: _enforcement == 'hard'
+                                              ? Colors.red.withOpacity(0.1)
+                                              : (isDark ? Colors.grey[700] : Colors.grey[100]),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: _enforcement == 'hard'
+                                                ? Colors.red
+                                                : Colors.transparent,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            Icon(
+                                              Icons.lock_outline,
+                                              size: 20,
+                                              color: _enforcement == 'hard'
+                                                  ? Colors.red
+                                                  : Colors.grey[500],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Enforced',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: _enforcement == 'hard'
+                                                    ? Colors.red
+                                                    : Colors.grey[500],
+                                              ),
+                                            ),
+                                            Text(
+                                              'Blocks join',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey[500],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+
                     const SizedBox(height: 100), // Space for FAB
                   ],
                 ),
@@ -1391,7 +2094,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                             ),
                           )
                         : const Text(
-                            'Create Table',
+                            'Create Activity',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,

@@ -291,14 +291,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
         MaterialPageRoute(
           builder: (context) => _VideoEditorScreen(
             videoFile: videoFile,
-            onComplete: (Uint8List bytes) async {
+            onComplete: (bytes) async {
               Navigator.pop(context); // Pop editor
 
-              // Save rendered video bytes to temp file
-              final Directory tempDir = await getTemporaryDirectory();
-              final File editedVideo = await File(
-                '${tempDir.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}.mp4',
-              ).writeAsBytes(bytes);
+              final tempDir = await getTemporaryDirectory();
+              
+              // Get original extension so we don't accidentally save a .mov as purely .mp4
+              final originalPath = videoFile.path.toLowerCase();
+              String ext = '.mp4';
+              if (originalPath.endsWith('.mov')) ext = '.mov';
+              else if (originalPath.endsWith('.m4v')) ext = '.m4v';
+              
+              final editedVideo = File(
+                '${tempDir.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}$ext',
+              );
+              await editedVideo.writeAsBytes(bytes);
 
               _pushToFinalPreview(videoFile: editedVideo);
             },
@@ -804,31 +811,44 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
   Future<void> _generateVideo(CompleteParameters parameters) async {
     _videoController?.pause();
 
-    // Simplistic rendering fallback.
-    // Usually requires deeper logic using parameters for trim/blur.
-    final renderData = VideoRenderData(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      video: EditorVideo.file(widget.videoFile.path),
-      outputFormat: VideoOutputFormat.mp4,
-      imageBytes: parameters.layers.isNotEmpty ? parameters.image : null,
-      blur: parameters.blur,
-      colorMatrixList: parameters.colorFilters,
-    );
-
-    final Directory directory = await getTemporaryDirectory();
-    final String outputPath =
-        '${directory.path}/rendered_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
     try {
+      if (Platform.isIOS) {
+        // Skip ProVideoEditor on iOS entirely because without FFmpeg it outputs corrupted bad data (-9405)
+        debugPrint('⚠️ Skipping video rendering on iOS, using raw camera video.');
+        throw Exception('Skip rendering on iOS');
+      }
+
+      // Attempt rendered export (works on Android via Media3, requires FFmpeg on iOS)
+      final renderData = VideoRenderData(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        video: EditorVideo.file(widget.videoFile.path),
+        outputFormat: VideoOutputFormat.mp4,
+        imageBytes: parameters.layers.isNotEmpty ? parameters.image : null,
+        blur: parameters.blur,
+        colorMatrixList: parameters.colorFilters,
+      );
+
+      final Directory directory = await getTemporaryDirectory();
+      final String outputPath =
+          '${directory.path}/rendered_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
       await ProVideoEditor.instance.renderVideoToFile(outputPath, renderData);
       final bytes = await File(outputPath).readAsBytes();
+      
+      // Safety check: if standard Media3/FFmpeg fallback produces empty/invalid file, throw
+      if (bytes.length < 100) throw Exception('Rendered video is too small, corrupted.');
+      
+      debugPrint('✅ Video rendered successfully: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
       widget.onComplete(bytes);
     } catch (e) {
-      debugPrint("Video Rendering Error: $e");
-      if (mounted) {
-        // Fallback to uploading raw video
+      debugPrint('⚠️ Video rendering skipped or failed: $e');
+      debugPrint('🔄 Uploading raw video without edits...');
+      try {
         final bytes = await widget.videoFile.readAsBytes();
+        debugPrint('📹 Raw video size: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
         widget.onComplete(bytes);
+      } catch (fallbackError) {
+        debugPrint('❌ Fallback also failed: $fallbackError');
       }
     }
   }

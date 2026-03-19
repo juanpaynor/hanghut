@@ -33,13 +33,13 @@ UNION ALL
           WHERE direct_messages.chat_id = dc.id
           ORDER BY direct_messages.created_at DESC
          LIMIT 1), 'Direct Message'::text) AS subtitle,
-    -- FIX v2: Prefer avatar_url, then primary photo, then ANY photo
-    COALESCE(u.avatar_url, (
+    -- FIX v3: NEVER use avatar_url - only user_photos
+    (
       SELECT up.photo_url FROM user_photos up
       WHERE up.user_id = u.id
       ORDER BY up.is_primary DESC NULLS LAST, up.display_order ASC NULLS LAST
       LIMIT 1
-    )) AS image_url,
+    ) AS image_url,
     'person'::text AS icon_key,
     COALESCE((SELECT max(created_at) FROM direct_messages m WHERE m.chat_id = dc.id), dc.updated_at) AS last_activity_at,
     jsonb_build_object('other_user_id', u.id, 'other_user_name', u.display_name) AS metadata,

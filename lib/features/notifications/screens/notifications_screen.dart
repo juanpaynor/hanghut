@@ -123,6 +123,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.chat_bubble;
         iconColor = Colors.deepPurple;
         break;
+      case 'hangout_invite':
+        iconData = Icons.mail;
+        iconColor = Colors.indigo;
+        break;
+      case 'follower_hangout':
+        iconData = Icons.celebration;
+        iconColor = Colors.deepOrange;
+        break;
       default:
         iconData = Icons.notifications;
         iconColor = AppTheme.accentColor;
@@ -224,6 +232,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         'approved',
         'invite',
         'table',
+        'hangout_invite',
+        'follower_hangout',
       ].contains(type)) {
         await _navigateToTable(entityId);
       } else {
@@ -326,13 +336,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
       if (mounted) {
         Navigator.pop(context); // Close loader
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TableCompactModal(
-              table: table,
-              matchData: const {}, // No match data needed for direct navigation
-            ),
+        Navigator.pop(context); // Close notification panel
+        showDialog(
+          context: context,
+          builder: (context) => TableCompactModal(
+            table: table,
+            matchData: const {},
           ),
         );
       }

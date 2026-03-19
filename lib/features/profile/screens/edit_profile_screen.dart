@@ -21,11 +21,13 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _displayNameController;
+  late TextEditingController _usernameController;
   late TextEditingController _bioController;
   late TextEditingController _occupationController;
   late TextEditingController _instagramController;
 
   bool _isLoading = false;
+  String? _usernameError;
   List<String> _selectedTags = [];
   List<Map<String, dynamic>> _localPhotos = [];
   final ImagePicker _picker = ImagePicker();
@@ -52,6 +54,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _displayNameController = TextEditingController(
       text: widget.userProfile['display_name'],
     );
+    _usernameController = TextEditingController(
+      text: widget.userProfile['username'],
+    );
     _bioController = TextEditingController(text: widget.userProfile['bio']);
     _occupationController = TextEditingController(
       text: widget.userProfile['occupation'],
@@ -70,10 +75,44 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   void dispose() {
     _displayNameController.dispose();
+    _usernameController.dispose();
     _bioController.dispose();
     _occupationController.dispose();
     _instagramController.dispose();
     super.dispose();
+  }
+
+  Future<void> _validateUsername(String value) async {
+    final username = value.trim().toLowerCase();
+    if (username.isEmpty) {
+      setState(() => _usernameError = null);
+      return;
+    }
+    if (username.length < 3) {
+      setState(() => _usernameError = 'At least 3 characters');
+      return;
+    }
+    if (!RegExp(r'^[a-z0-9_]+$').hasMatch(username)) {
+      setState(() => _usernameError = 'Only letters, numbers, and underscores');
+      return;
+    }
+    // Check availability
+    try {
+      final available = await SupabaseConfig.client.rpc(
+        'check_username_available',
+        params: {
+          'p_username': username,
+          'p_exclude_user_id': widget.userProfile['id'],
+        },
+      );
+      if (mounted) {
+        setState(() {
+          _usernameError = available == true ? null : 'Username already taken';
+        });
+      }
+    } catch (e) {
+      print('Error checking username: $e');
+    }
   }
 
   Future<void> _pickImage() async {
@@ -141,6 +180,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           .from('users')
           .update({
             'display_name': _displayNameController.text.trim(),
+            'username': _usernameController.text.trim().toLowerCase(),
             'bio': _bioController.text.trim(),
             'occupation': _occupationController.text.trim(),
             'social_instagram': _instagramController.text.trim().replaceAll(
@@ -390,6 +430,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   _buildTextField(_displayNameController, 'e.g. Rich'),
 
                   const SizedBox(height: 16),
+                  _buildLabel('Username', icon: Icons.alternate_email),
+                  _buildTextField(
+                    _usernameController,
+                    'e.g. richsantos',
+                    prefix: '@',
+                    onChanged: _validateUsername,
+                    errorText: _usernameError,
+                  ),
+
+                  const SizedBox(height: 16),
                   _buildLabel('Occupation', icon: Icons.work_outline),
                   _buildTextField(
                     _occupationController,
@@ -505,41 +555,59 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     String hint, {
     int maxLines = 1,
     String? prefix,
+    ValueChanged<String>? onChanged,
+    String? errorText,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: TextField(
-        controller: controller,
-        style: TextStyle(color: AppTheme.textPrimary),
-        maxLines: maxLines,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey.shade400),
-          prefixIcon: prefix != null
-              ? Container(
-                  width: 40,
-                  alignment: Alignment.center,
-                  child: Text(
-                    prefix,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                )
-              : null,
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: errorText != null ? Colors.red.shade300 : Colors.grey.shade200,
+            ),
+          ),
+          child: TextField(
+            controller: controller,
+            style: TextStyle(color: AppTheme.textPrimary),
+            maxLines: maxLines,
+            onChanged: onChanged,
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(color: Colors.grey.shade400),
+              prefixIcon: prefix != null
+                  ? Container(
+                      width: 40,
+                      alignment: Alignment.center,
+                      child: Text(
+                        prefix,
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    )
+                  : null,
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 14,
+              ),
+            ),
           ),
         ),
-      ),
+        if (errorText != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4),
+            child: Text(
+              errorText,
+              style: TextStyle(color: Colors.red.shade600, fontSize: 12),
+            ),
+          ),
+      ],
     );
   }
 }

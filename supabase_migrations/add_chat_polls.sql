@@ -81,10 +81,10 @@ CREATE POLICY "Users can delete their vote"
 -- File size limit: 5MB (we compress before upload so real uploads ~100-200KB)
 -- Then add this RLS policy via SQL:
 
--- INSERT: authenticated users can upload
+INSERT: authenticated users can upload
 CREATE POLICY "Authenticated users can upload chat images"
 ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (bucket_id = 'chat-images');
 
--- SELECT: public read (already enabled by public bucket)
+SELECT: public read (already enabled by public bucket)

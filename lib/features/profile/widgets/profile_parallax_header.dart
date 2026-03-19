@@ -6,21 +6,25 @@ import 'package:flutter_animate/flutter_animate.dart';
 class ProfileParallaxHeader extends StatelessWidget {
   final String? imageUrl;
   final String displayName;
+  final String? username;
   final String characterClass;
   final bool isOwnProfile;
   final VoidCallback? onEdit;
   final VoidCallback? onSettings;
   final VoidCallback? onShare;
+  final VoidCallback? onBadgeEdit;
 
   const ProfileParallaxHeader({
     super.key,
     required this.imageUrl,
     required this.displayName,
+    this.username,
     required this.characterClass,
     this.isOwnProfile = false,
     this.onEdit,
     this.onSettings,
     this.onShare,
+    this.onBadgeEdit,
   });
 
   // Badge gradient — consistent purple
@@ -28,28 +32,11 @@ class ProfileParallaxHeader extends StatelessWidget {
     return [const Color(0xFF7C3AED), const Color(0xFF5B21B6)];
   }
 
-  IconData _getBadgeIcon() {
-    switch (characterClass.toLowerCase()) {
-      case 'grand host':
-        return Icons.star_rounded;
-      case 'table hopper':
-        return Icons.bolt_rounded;
-      case 'trusty guide':
-        return Icons.shield_rounded;
-      case 'flavor scout':
-        return Icons.explore_rounded;
-      case 'gourmand':
-        return Icons.restaurant_rounded;
-      default:
-        return Icons.emoji_events_rounded;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final badgeColors = _getBadgeGradient();
-    final badgeIcon = _getBadgeIcon();
 
     return SliverAppBar(
       expandedHeight: 400.0,
@@ -146,8 +133,10 @@ class ProfileParallaxHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Character Class Badge — gradient pill
-                  Container(
+                  // Character Class Badge — gradient pill (tappable on own profile)
+                  GestureDetector(
+                    onTap: onBadgeEdit,
+                    child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 6,
@@ -168,12 +157,6 @@ class ProfileParallaxHeader extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              badgeIcon,
-                              color: Colors.white,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 6),
                             Text(
                               characterClass.toUpperCase(),
                               style: const TextStyle(
@@ -185,7 +168,8 @@ class ProfileParallaxHeader extends StatelessWidget {
                             ),
                           ],
                         ),
-                      )
+                      ),
+                  )
                       .animate()
                       .fadeIn(duration: 600.ms, delay: 200.ms)
                       .slideX(begin: -0.2, end: 0),
@@ -219,6 +203,28 @@ class ProfileParallaxHeader extends StatelessWidget {
                       .animate()
                       .fadeIn(duration: 800.ms)
                       .slideY(begin: 0.2, end: 0),
+
+                  // Username handle
+                  if (username != null && username!.isNotEmpty)
+                    Text(
+                          '@$username',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.3,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black.withValues(alpha: 0.6),
+                                offset: const Offset(0, 1),
+                                blurRadius: 8,
+                              ),
+                            ],
+                          ),
+                        )
+                        .animate()
+                        .fadeIn(duration: 600.ms, delay: 200.ms)
+                        .slideY(begin: 0.2, end: 0),
                 ],
               ),
             ),

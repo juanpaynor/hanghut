@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -23,42 +24,58 @@ class LocationStoryViewerScreen extends StatefulWidget {
       _LocationStoryViewerScreenState();
 }
 
-class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
-  late PageController _pageController;
+class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
+    with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _stories = [];
   bool _isLoading = true;
   int _currentIndex = 0;
+  bool _isPopping = false;
+  bool _isPaused = false;
+
+  // Progress animation
+  late AnimationController _progressController;
+
+  // Video player for current video story
+  VideoPlayerController? _videoController;
+  bool _videoInitialized = false;
+  bool _videoError = false;
+
+  // Timer for image stories
+  static const _imageDuration = Duration(seconds: 5);
 
   @override
   void initState() {
     super.initState();
+    _progressController = AnimationController(vsync: this);
     _stories = [widget.initialStory];
-    _pageController = PageController();
     _fetchClusterStories();
     AnalyticsService().logScreenView('story_viewer');
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
+    _progressController.dispose();
+    _videoController?.dispose();
     super.dispose();
   }
+
+  // ═══════════════════════════════════════════════
+  // DATA LAYER (preserved from original)
+  // ═══════════════════════════════════════════════
 
   Future<void> _fetchClusterStories() async {
     try {
       List<Map<String, dynamic>> fetched = [];
 
-      // The map_live_stories_view is an aggregate (GROUP BY location) —
-      // it doesn't have individual story IDs.
-      // Query the posts table directly for full story data.
       final initialId = widget.initialStory['id']?.toString();
 
       if (widget.clusterId != null) {
-        // Fetch all stories at this cluster location
+        final isUuid = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$').hasMatch(widget.clusterId!);
         final isEvent = widget.clusterId!.startsWith('evt_');
         final isTable = widget.clusterId!.startsWith('tbl_');
 
         String columnToMatch = 'external_place_id';
+        if (isUuid) columnToMatch = 'user_id';
         if (isEvent) columnToMatch = 'event_id';
         if (isTable) columnToMatch = 'table_id';
 
@@ -80,12 +97,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
 
         fetched = List<Map<String, dynamic>>.from(response);
       } else if (initialId != null) {
-        // Try fetching by the story's location coordinates
         final lat = widget.initialStory['latitude'];
         final lng = widget.initialStory['longitude'];
 
         if (lat != null && lng != null) {
-          // Fetch stories near this location
           final List<dynamic> response = await Supabase.instance.client
               .from('posts')
               .select(
@@ -107,7 +122,6 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
 
           fetched = List<Map<String, dynamic>>.from(response);
         } else {
-          // Fallback: fetch just this single story
           final res = await Supabase.instance.client
               .from('posts')
               .select(
@@ -120,11 +134,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
         }
       }
 
-      // Map 'user' join to 'users' key and enrich avatar from user_photos
+      // Enrich avatar from user_photos
       for (final story in fetched) {
         final userData = story['user'] as Map?;
         if (userData != null) {
-          // Enrich avatar_url from user_photos if missing
           String? avatarUrl = userData['avatar_url'] as String?;
           if (avatarUrl == null && userData['user_photos'] != null) {
             final photos = userData['user_photos'] as List;
@@ -143,30 +156,29 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
         }
       }
 
-      // Fallback: keep initial story if fetch returned empty
       if (fetched.isEmpty) {
         fetched = [widget.initialStory];
       }
 
       if (mounted) {
+        final initialIndex = fetched.indexWhere(
+          (s) => s['id']?.toString() == initialId,
+        );
         setState(() {
           _stories = fetched;
-          final initialIndex = _stories.indexWhere(
-            (s) => s['id']?.toString() == initialId,
-          );
           _currentIndex = initialIndex != -1 ? initialIndex : 0;
-          _pageController = PageController(initialPage: _currentIndex);
         });
 
         await _fetchInteractionsForStories();
         setState(() => _isLoading = false);
+        _startCurrentStory();
       }
     } catch (e) {
       debugPrint('Error fetching cluster stories: $e');
-      // Still load interactions for the initial story
       if (mounted) {
         await _fetchInteractionsForStories();
         setState(() => _isLoading = false);
+        _startCurrentStory();
       }
     }
   }
@@ -204,10 +216,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
             final story = _stories[i];
             story['_isLiked'] = likedPostIds.contains(story['id']);
 
-            final countInfo = countsData.firstWhere(
-              (c) => c['id'] == story['id'],
-              orElse: () => null,
-            );
+            final countInfo = countsData
+                .cast<Map<String, dynamic>?>()
+                .firstWhere((c) => c?['id'] == story['id'], orElse: () => null);
 
             if (countInfo != null) {
               final likesList = countInfo['post_likes'] as List?;
@@ -286,146 +297,139 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading &&
-        _stories.length == 1 &&
-        _stories[0]['image_url'] == null) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator(color: Colors.white)),
-      );
-    }
+  // ═══════════════════════════════════════════════
+  // STORY PLAYBACK CONTROLLER
+  // ═══════════════════════════════════════════════
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: PageView.builder(
-        controller: _pageController,
-        scrollDirection: Axis.vertical,
-        itemCount: _stories.length,
-        onPageChanged: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-          // Track individual story views
-          final storyId = _stories[index]['id']?.toString();
-          if (storyId != null) AnalyticsService().logViewStory(storyId);
-        },
-        itemBuilder: (context, index) {
-          final story = _stories[index];
-          final author = Map<String, dynamic>.from(
-            story['users'] ??
-                {
-                  'display_name':
-                      story['display_name'] ??
-                      story['author_name'] ??
-                      'Someone',
-                  'avatar_url':
-                      story['avatar_url'] ?? story['author_avatar_url'],
-                },
-          );
-          final bool isCurrentPage = index == _currentIndex;
+  bool get _isVideo => _stories[_currentIndex]['video_url'] != null;
 
-          return _StoryItem(
-            story: story,
-            author: author,
-            isActive: isCurrentPage,
-            onClose: () => Navigator.pop(context),
-            onLike: () => _toggleLike(index),
-            onComment: () {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => CommentsBottomSheet(post: story),
-              );
-            },
-            onDelete:
-                story['user_id'] ==
-                    Supabase.instance.client.auth.currentUser?.id
-                ? () => _deleteStory(index)
-                : null,
-            storyIndex: index,
-            totalStories: _stories.length,
-          );
-        },
-      ),
-    );
-  }
-}
+  void _startCurrentStory() {
+    if (_stories.isEmpty || _currentIndex >= _stories.length) return;
 
-class _StoryItem extends StatefulWidget {
-  final Map<String, dynamic> story;
-  final Map<String, dynamic> author;
-  final bool isActive;
-  final VoidCallback onClose;
-  final VoidCallback onLike;
-  final VoidCallback onComment;
-  final VoidCallback? onDelete;
-  final int storyIndex;
-  final int totalStories;
+    _videoError = false;
+    _videoInitialized = false;
 
-  const _StoryItem({
-    Key? key,
-    required this.story,
-    required this.author,
-    required this.isActive,
-    required this.onClose,
-    required this.onLike,
-    required this.onComment,
-    this.onDelete,
-    required this.storyIndex,
-    required this.totalStories,
-  }) : super(key: key);
+    final storyId = _stories[_currentIndex]['id']?.toString();
+    if (storyId != null) AnalyticsService().logViewStory(storyId);
 
-  @override
-  State<_StoryItem> createState() => _StoryItemState();
-}
-
-class _StoryItemState extends State<_StoryItem> {
-  VideoPlayerController? _videoController;
-  bool _isVideoInitialized = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeVideo();
-  }
-
-  @override
-  void didUpdateWidget(covariant _StoryItem oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isActive && !oldWidget.isActive) {
-      _videoController?.play();
-    } else if (!widget.isActive && oldWidget.isActive) {
-      _videoController?.pause();
-      _videoController?.seekTo(Duration.zero);
+    if (_isVideo) {
+      _startVideoStory();
+    } else {
+      _startImageStory();
     }
   }
 
-  void _initializeVideo() {
-    if (widget.story['video_url'] != null) {
-      _videoController =
-          VideoPlayerController.networkUrl(Uri.parse(widget.story['video_url']))
-            ..initialize().then((_) {
-              if (mounted) {
-                setState(() {
-                  _isVideoInitialized = true;
-                });
-                _videoController!.setLooping(true);
-                if (widget.isActive) {
-                  _videoController!.play();
-                }
-              }
-            });
-    }
+  void _startImageStory() {
+    _progressController.stop();
+    _progressController.reset();
+    _progressController.duration = _imageDuration;
+    _progressController.forward();
+    _progressController.addStatusListener(_onProgressComplete);
   }
 
-  @override
-  void dispose() {
+  void _startVideoStory() async {
     _videoController?.dispose();
-    super.dispose();
+    _videoController = null;
+
+    final url = _stories[_currentIndex]['video_url'] as String;
+
+    try {
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
+      await _videoController!.initialize();
+      if (!mounted) return;
+
+      setState(() => _videoInitialized = true);
+
+      // Set progress duration to video duration
+      _progressController.stop();
+      _progressController.reset();
+      _progressController.duration = _videoController!.value.duration;
+      _progressController.forward();
+      _progressController.addStatusListener(_onProgressComplete);
+
+      _videoController!.play();
+    } catch (e) {
+      debugPrint('⚠️ Video load error: $e');
+      if (!mounted) return;
+      setState(() => _videoError = true);
+
+      // Auto-advance after 3 seconds on error
+      _progressController.stop();
+      _progressController.reset();
+      _progressController.duration = const Duration(seconds: 3);
+      _progressController.forward();
+      _progressController.addStatusListener(_onProgressComplete);
+    }
   }
+
+  void _onProgressComplete(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      _progressController.removeStatusListener(_onProgressComplete);
+      _goNext();
+    }
+  }
+
+  void _goNext() {
+    if (_currentIndex >= _stories.length - 1) {
+      // Last story — close
+      if (mounted && !_isPopping) {
+        _isPopping = true;
+        Navigator.pop(context);
+      }
+      return;
+    }
+
+    _progressController.removeStatusListener(_onProgressComplete);
+    _videoController?.dispose();
+    _videoController = null;
+
+    setState(() {
+      _currentIndex++;
+      _videoInitialized = false;
+      _videoError = false;
+    });
+    _startCurrentStory();
+  }
+
+  void _goPrevious() {
+    if (_currentIndex <= 0) {
+      // Restart current story
+      _progressController.removeStatusListener(_onProgressComplete);
+      _videoController?.dispose();
+      _videoController = null;
+      _startCurrentStory();
+      return;
+    }
+
+    _progressController.removeStatusListener(_onProgressComplete);
+    _videoController?.dispose();
+    _videoController = null;
+
+    setState(() {
+      _currentIndex--;
+      _videoInitialized = false;
+      _videoError = false;
+    });
+    _startCurrentStory();
+  }
+
+  void _pause() {
+    if (_isPaused) return;
+    _isPaused = true;
+    _progressController.stop(canceled: false);
+    _videoController?.pause();
+  }
+
+  void _resume() {
+    if (!_isPaused) return;
+    _isPaused = false;
+    _progressController.forward();
+    _videoController?.play();
+  }
+
+  // ═══════════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════════
 
   String _formatTimeAgo(String? timestamp) {
     if (timestamp == null) return '';
@@ -438,215 +442,336 @@ class _StoryItemState extends State<_StoryItem> {
     return 'Just now';
   }
 
+  Map<String, dynamic> _getAuthor(Map<String, dynamic> story) {
+    return Map<String, dynamic>.from(
+      story['users'] ??
+          {
+            'display_name':
+                story['display_name'] ?? story['author_name'] ?? 'Someone',
+            'avatar_url': story['avatar_url'] ?? story['author_avatar_url'],
+          },
+    );
+  }
+
+  // ═══════════════════════════════════════════════
+  // UI LAYER — Custom Story Viewer
+  // ═══════════════════════════════════════════════
+
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // 1. Background Media
-        if (widget.story['video_url'] != null && _isVideoInitialized)
-          SizedBox.expand(
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _videoController!.value.size.width,
-                height: _videoController!.value.size.height,
-                child: VideoPlayer(_videoController!),
-              ),
-            ),
-          )
-        else if (widget.story['image_url'] != null)
-          Image.network(
-            widget.story['image_url'],
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => const Center(
-              child: Icon(Icons.broken_image, color: Colors.white, size: 50),
-            ),
-          )
-        else
-          Container(color: Colors.grey[900]),
+    if (_isLoading &&
+        _stories.length == 1 &&
+        _stories[0]['image_url'] == null &&
+        _stories[0]['video_url'] == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
 
-        // Gradient Overlay
-        Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.black.withOpacity(0.4),
-                Colors.transparent,
-                Colors.transparent,
-                Colors.black.withOpacity(0.8),
-              ],
-              stops: const [0.0, 0.2, 0.7, 1.0],
-            ),
-          ),
+    if (_stories.isEmpty) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Text('No stories', style: TextStyle(color: Colors.white)),
         ),
+      );
+    }
 
-        // 2. Top Bar
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 40,
-          left: 16,
-          right: 16,
-          child: Column(
-            children: [
-              // Story progress indicator
-              if (widget.totalStories > 1)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Row(
-                    children: List.generate(widget.totalStories, (i) {
-                      return Expanded(
-                        child: Container(
-                          height: 2.5,
-                          margin: const EdgeInsets.symmetric(horizontal: 2),
-                          decoration: BoxDecoration(
-                            color: i <= widget.storyIndex
-                                ? Colors.white
-                                : Colors.white30,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      );
-                    }),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onLongPressStart: (_) => _pause(),
+        onLongPressEnd: (_) => _resume(),
+        onVerticalDragUpdate: (details) {
+          if (details.delta.dy > 10 && mounted && !_isPopping) {
+            _isPopping = true;
+            Navigator.pop(context);
+          }
+        },
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Media content
+            _buildMediaContent(),
+
+            // Left/Right tap zones
+            Row(
+              children: [
+                Expanded(
+                  flex: 1,
+                  child: GestureDetector(
+                    onTap: _goPrevious,
+                    behavior: HitTestBehavior.translucent,
+                    child: const SizedBox.expand(),
                   ),
                 ),
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(
-                      Icons.arrow_back_ios,
-                      color: Colors.white,
-                      size: 28,
-                    ),
-                    onPressed: widget.onClose,
+                Expanded(
+                  flex: 1,
+                  child: GestureDetector(
+                    onTap: _goNext,
+                    behavior: HitTestBehavior.translucent,
+                    child: const SizedBox.expand(),
                   ),
-                  const SizedBox(width: 4),
-                  GestureDetector(
-                    onTap: () {
-                      if (widget.story['user_id'] != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                UserProfileScreen(userId: widget.story['user_id']),
-                          ),
-                        );
-                      }
-                    },
-                    child: CircleAvatar(
-                      radius: 20,
-                      backgroundImage: widget.author['avatar_url'] != null
-                          ? NetworkImage(widget.author['avatar_url'])
-                          : null,
-                      backgroundColor: Colors.indigo,
-                      child: widget.author['avatar_url'] == null
-                          ? Text(
-                              widget.author['display_name']?[0] ?? '?',
-                              style: const TextStyle(color: Colors.white),
-                            )
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        if (widget.story['user_id'] != null) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => UserProfileScreen(
-                                userId: widget.story['user_id'],
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.author['display_name'] ?? 'Someone',
-                            style: GoogleFonts.inter(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          Text(
-                            _formatTimeAgo(widget.story['created_at']),
-                            style: GoogleFonts.inter(
-                              color: Colors.white60,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Story counter
-                  if (widget.totalStories > 1)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black45,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${widget.storyIndex + 1}/${widget.totalStories}',
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                ],
+                ),
+              ],
+            ),
+
+            // Progress indicators
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 12,
+              left: 12,
+              right: 12,
+              child: AnimatedBuilder(
+                animation: _progressController,
+                builder: (context, _) => _buildProgressIndicators(),
+              ),
+            ),
+
+            // Header
+            _buildHeader(),
+
+            // Footer
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: _buildFooter(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMediaContent() {
+    if (_currentIndex >= _stories.length) return const SizedBox();
+    final story = _stories[_currentIndex];
+    final hasVideo = story['video_url'] != null;
+
+    if (hasVideo) {
+      if (_videoError) {
+        return const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.videocam_off, color: Colors.white54, size: 48),
+              SizedBox(height: 12),
+              Text(
+                'Video couldn\'t be played',
+                style: TextStyle(color: Colors.white70, fontSize: 14),
               ),
             ],
           ),
-        ),
+        );
+      }
 
-        // 3. Bottom Info
-        Positioned(
-          bottom: 40,
-          left: 20,
-          right: 70,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (widget.story['content'] != null &&
-                  widget.story['content'].toString().isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12.0),
-                  child: Text(
-                    widget.story['content'],
+      if (_videoInitialized && _videoController != null) {
+        return FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: _videoController!.value.size.width,
+            height: _videoController!.value.size.height,
+            child: VideoPlayer(_videoController!),
+          ),
+        );
+      }
+
+      // Loading state
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    } else {
+      // Image story
+      final imageUrl = story['image_url'] ?? '';
+      if (imageUrl.isEmpty) {
+        return const Center(
+          child: Icon(Icons.image_not_supported, color: Colors.white54, size: 48),
+        );
+      }
+      return Image.network(
+        imageUrl,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        },
+        errorBuilder: (_, __, ___) => const Center(
+          child: Icon(Icons.broken_image, color: Colors.white54, size: 48),
+        ),
+      );
+    }
+  }
+
+  Widget _buildProgressIndicators() {
+    return Row(
+      children: List.generate(_stories.length, (index) {
+        double progress;
+        if (index < _currentIndex) {
+          progress = 1.0; // Completed
+        } else if (index == _currentIndex) {
+          progress = _progressController.value; // Current
+        } else {
+          progress = 0.0; // Upcoming
+        }
+
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(right: index < _stories.length - 1 ? 4 : 0),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(1.5),
+              child: LinearProgressIndicator(
+                value: progress,
+                backgroundColor: Colors.white30,
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                minHeight: 2.5,
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildHeader() {
+    if (_currentIndex >= _stories.length) return const SizedBox();
+    final story = _stories[_currentIndex];
+    final author = _getAuthor(story);
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 24,
+      left: 12,
+      right: 12,
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () {
+              if (story['user_id'] != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        UserProfileScreen(userId: story['user_id']),
+                  ),
+                );
+              }
+            },
+            child: CircleAvatar(
+              radius: 18,
+              backgroundImage: author['avatar_url'] != null
+                  ? NetworkImage(author['avatar_url'])
+                  : null,
+              backgroundColor: Colors.indigo,
+              child: author['avatar_url'] == null
+                  ? Text(
+                      author['display_name']?[0] ?? '?',
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    )
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                if (story['user_id'] != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          UserProfileScreen(userId: story['user_id']),
+                    ),
+                  );
+                }
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    author['display_name'] ?? 'Someone',
                     style: GoogleFonts.inter(
                       color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      shadows: [
-                        Shadow(
-                          offset: const Offset(0, 1),
-                          blurRadius: 3.0,
-                          color: Colors.black.withOpacity(0.8),
-                        ),
-                      ],
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
                     ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
+                  Text(
+                    _formatTimeAgo(story['created_at']),
+                    style: GoogleFonts.inter(
+                      color: Colors.white60,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Close button
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: const BoxDecoration(
+                color: Colors.black26,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.close, color: Colors.white, size: 22),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-              if (widget.story['external_place_name'] != null)
-                Container(
+  Widget _buildFooter() {
+    if (_currentIndex >= _stories.length) return const SizedBox();
+    final story = _stories[_currentIndex];
+    final isOwner =
+        story['user_id'] == Supabase.instance.client.auth.currentUser?.id;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.only(bottom: 41, left: 16, right: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Content text
+            if (story['content'] != null &&
+                story['content'].toString().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  story['content'],
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    shadows: [
+                      Shadow(
+                        offset: const Offset(0, 1),
+                        blurRadius: 3.0,
+                        color: Colors.black.withOpacity(0.8),
+                      ),
+                    ],
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+
+            // Location pill
+            if (story['external_place_name'] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
+                    horizontal: 10,
+                    vertical: 5,
                   ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
@@ -658,134 +783,161 @@ class _StoryItemState extends State<_StoryItem> {
                       const Icon(
                         Icons.location_on,
                         color: Colors.white,
-                        size: 14,
+                        size: 13,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        widget.story['external_place_name'],
+                        story['external_place_name'],
                         style: GoogleFonts.inter(
                           color: Colors.white,
-                          fontSize: 13,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
                 ),
-              const SizedBox(height: 12),
+              ),
 
-              if (widget.story['caption'] != null &&
-                  widget.story['caption'].toString().isNotEmpty)
-                Text(
-                  widget.story['caption'],
-                  style: GoogleFonts.inter(color: Colors.white, fontSize: 16),
-                ),
-
-              const SizedBox(height: 8),
-
-              if (widget.story['vibe_tag'] != null)
-                Text(
-                  '#${widget.story['vibe_tag']}',
+            // Vibe tag
+            if (story['vibe_tag'] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  '#${story['vibe_tag']}',
                   style: GoogleFonts.inter(
                     color: Colors.indigoAccent.shade100,
                     fontWeight: FontWeight.bold,
-                    fontSize: 14,
+                    fontSize: 13,
                   ),
                 ),
-            ],
-          ),
-        ),
-
-        // 4. Right Side Interactions
-        Positioned(
-          right: 16,
-          bottom: 120,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: Icon(
-                  (widget.story['_isLiked'] == true)
-                      ? Icons.favorite
-                      : Icons.favorite_border,
-                  color: (widget.story['_isLiked'] == true)
-                      ? Colors.red
-                      : Colors.white,
-                  size: 36,
-                ),
-                onPressed: widget.onLike,
               ),
-              if ((widget.story['_likeCount'] ?? 0) > 0)
-                Text(
-                  '${widget.story['_likeCount']}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              const SizedBox(height: 24),
 
-              IconButton(
-                icon: const Icon(Icons.comment, color: Colors.white, size: 36),
-                onPressed: widget.onComment,
-              ),
-              if ((widget.story['_commentCount'] ?? 0) > 0)
-                Text(
-                  '${widget.story['_commentCount']}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              const SizedBox(height: 24),
-
-              if (widget.onDelete != null)
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete_outline,
-                    color: Colors.white,
-                    size: 36,
-                  ),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: Colors.grey[900],
-                        title: const Text(
-                          'Delete Story?',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        content: const Text(
-                          'Are you sure you want to remove this story? This cannot be undone.',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text(
-                              'Cancel',
-                              style: TextStyle(color: Colors.white54),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              widget.onDelete!();
-                            },
-                            child: const Text(
-                              'Delete',
-                              style: TextStyle(color: Colors.redAccent),
-                            ),
-                          ),
-                        ],
+            // Interaction row
+            Row(
+              children: [
+                // Like button
+                GestureDetector(
+                  onTap: () => _toggleLike(_currentIndex),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        (story['_isLiked'] == true)
+                            ? Icons.favorite
+                            : Icons.favorite_border,
+                        color: (story['_isLiked'] == true)
+                            ? Colors.red
+                            : Colors.white,
+                        size: 28,
                       ),
-                    );
-                  },
+                      if ((story['_likeCount'] ?? 0) > 0) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          '${story['_likeCount']}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-            ],
-          ),
+                const SizedBox(width: 20),
+
+                // Comment button
+                GestureDetector(
+                  onTap: () {
+                    _pause();
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      builder: (context) => CommentsBottomSheet(post: story),
+                    ).then((_) {
+                      if (mounted) _resume();
+                    });
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.chat_bubble_outline,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                      if ((story['_commentCount'] ?? 0) > 0) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          '${story['_commentCount']}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+
+                const Spacer(),
+
+                // Delete button (own stories only)
+                if (isOwner)
+                  GestureDetector(
+                    onTap: () {
+                      _pause();
+                      showDialog(
+                        context: context,
+                        builder: (dialogCtx) => AlertDialog(
+                          backgroundColor: Colors.grey[900],
+                          title: const Text(
+                            'Delete Story?',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          content: const Text(
+                            'This cannot be undone.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(dialogCtx);
+                                _resume();
+                              },
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(dialogCtx);
+                                _deleteStory(_currentIndex);
+                              },
+                              child: const Text(
+                                'Delete',
+                                style: TextStyle(color: Colors.redAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    child: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.white70,
+                      size: 26,
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

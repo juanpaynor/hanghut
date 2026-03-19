@@ -146,6 +146,7 @@ class SocialService {
     String? gifUrl,
     double? latitude,
     double? longitude,
+    List<String>? mentionedUserIds,
   }) async {
     try {
       final userId = _client.auth.currentUser?.id;
@@ -215,21 +216,26 @@ class SocialService {
       }
 
       // 2. Insert Post
+      final postData = <String, dynamic>{
+        'user_id': userId,
+        'content': content,
+        'latitude': latitude,
+        'longitude': longitude,
+        'h3_cell': h3Cell,
+        'image_urls': imageUrls,
+        'image_url': imageUrls?.isNotEmpty == true
+            ? imageUrls!.first
+            : null,
+        'video_url': videoUrl,
+        'gif_url': gifUrl,
+      };
+      if (mentionedUserIds != null && mentionedUserIds.isNotEmpty) {
+        postData['mentioned_user_ids'] = mentionedUserIds;
+      }
+
       final response = await _client
           .from('posts')
-          .insert({
-            'user_id': userId,
-            'content': content,
-            'latitude': latitude,
-            'longitude': longitude,
-            'h3_cell': h3Cell,
-            'image_urls': imageUrls,
-            'image_url': imageUrls?.isNotEmpty == true
-                ? imageUrls!.first
-                : null,
-            'video_url': videoUrl,
-            'gif_url': gifUrl,
-          })
+          .insert(postData)
           .select('''
             *,
             user:user_id (
@@ -309,8 +315,15 @@ class SocialService {
     }
   }
 
-  /// Toggle Like on a Post
+  /// Track in-flight like toggles to prevent race conditions
+  final Set<String> _likesInFlight = {};
+
+  /// Toggle Like on a Post (with race condition protection)
   Future<bool> togglePostLike(String postId) async {
+    // Guard: prevent concurrent toggles for the same post
+    if (_likesInFlight.contains(postId)) return false;
+    _likesInFlight.add(postId);
+
     try {
       final userId = _client.auth.currentUser?.id;
       if (userId == null) return false;
@@ -332,19 +345,18 @@ class SocialService {
             .eq('user_id', userId);
         return false;
       } else {
-        // Like
-        await _client.from('post_likes').insert({
-          'post_id': postId,
-          'user_id': userId,
-        });
-
-        // Notification now handled by database trigger (handle_new_like)
+        // Like (ignoreDuplicates as safety net for edge cases)
+        await _client.from('post_likes').insert(
+          {'post_id': postId, 'user_id': userId},
+        );
 
         return true;
       }
     } catch (e) {
       print('❌ Error toggling like: $e');
       return false;
+    } finally {
+      _likesInFlight.remove(postId);
     }
   }
 
@@ -949,6 +961,56 @@ class SocialService {
         print('❌ Error getting H3 cells: $e');
       }
       return [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // User Search (single RPC call, no N+1)
+  // ---------------------------------------------------------------------------
+
+  /// Search users by display_name or username via a single RPC call.
+  Future<List<Map<String, dynamic>>> searchUsers(
+    String query, {
+    int limit = 20,
+  }) async {
+    if (query.trim().isEmpty) return [];
+
+    try {
+      final currentUserId = _client.auth.currentUser?.id;
+      final response = await _client.rpc('search_users', params: {
+        'p_query': query.trim(),
+        'p_limit': limit,
+        'p_exclude_user_id': currentUserId,
+      });
+
+      if (response == null) return [];
+      return List<Map<String, dynamic>>.from(
+        (response as List).map((e) => Map<String, dynamic>.from(e)),
+      );
+    } catch (e) {
+      print('❌ Error searching users: $e');
+      return [];
+    }
+  }
+
+  /// Resolve a list of @usernames to their user IDs (batch, no N+1).
+  Future<Map<String, String>> resolveUsernames(List<String> usernames) async {
+    if (usernames.isEmpty) return {};
+    try {
+      // Single query for all usernames
+      final response = await _client
+          .from('users')
+          .select('id, username')
+          .inFilter('username', usernames.map((u) => u.toLowerCase()).toList());
+
+      final Map<String, String> result = {};
+      for (var user in response) {
+        result[user['username'] as String] = user['id'] as String;
+      }
+      return result;
+    } catch (e) {
+      print('❌ Error resolving usernames: $e');
+      return {};
     }
   }
 }

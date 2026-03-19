@@ -568,8 +568,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       Map<String, Map<String, dynamic>> replyMap = {};
       if (replyToIds.isNotEmpty) {
+        // Query the correct table based on chat type
+        String replyTableName;
+        if (widget.chatType == 'trip') {
+          replyTableName = 'trip_messages';
+        } else if (widget.chatType == 'dm') {
+          replyTableName = 'direct_messages';
+        } else {
+          replyTableName = 'messages';
+        }
+
         final replyMessages = await SupabaseConfig.client
-            .from('messages')
+            .from(replyTableName)
             .select('id, content, sender_id')
             .inFilter('id', replyToIds.toList());
 
@@ -625,6 +635,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'isMe': senderId == _currentUserId,
               'deletedAt': msg['deleted_at'],
               'deletedForEveryone': msg['deleted_for_everyone'] ?? false,
+              'reply_to_id': replyToId,
               'replyTo': replyToId != null ? replyMap[replyToId] : null,
               'sequenceNumber': msg['sequence_number'],
             };
@@ -788,6 +799,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
         if (mounted) {
           setState(() {
+            // Resolve reply data from existing messages in memory
+            Map<String, dynamic>? replyTo;
+            if (data['replyToId'] != null) {
+              final replyMsg = _messages.firstWhere(
+                (m) => m['id'] == data['replyToId'],
+                orElse: () => <String, dynamic>{},
+              );
+              if (replyMsg.isNotEmpty) {
+                replyTo = {
+                  'id': replyMsg['id'],
+                  'content': replyMsg['content'],
+                  'sender_id': replyMsg['senderId'],
+                  'senderName': replyMsg['senderName'],
+                };
+              }
+            }
+
             // Insert new message at Top (Index 0) because list is Newest -> Oldest
             _messages.insert(0, {
               'id': data['id'],
@@ -798,7 +826,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'senderPhotoUrl': data['senderPhotoUrl'],
               'timestamp': data['timestamp'],
               'isMe': data['senderId'] == _currentUserId,
-              if (data['replyToId'] != null) 'reply_to_id': data['replyToId'],
+              'reply_to_id': data['replyToId'],
+              'replyTo': replyTo,
             });
           });
           _scrollToBottom();
@@ -980,6 +1009,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'sender_id': _currentUserId,
           'content': content,
           'message_type': contentType,
+          if (replyToId != null) 'reply_to_id': replyToId,
         });
       } else if (widget.chatType == 'dm') {
         await SupabaseConfig.client.from('direct_messages').insert({
@@ -987,6 +1017,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'sender_id': _currentUserId,
           'content': content,
           'message_type': contentType,
+          if (replyToId != null) 'reply_to_id': replyToId,
         });
       } else {
         await SupabaseConfig.client.from('messages').insert({

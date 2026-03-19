@@ -11,7 +11,6 @@ import 'package:bitemates/features/profile/widgets/profile_parallax_header.dart'
 import 'package:bitemates/features/profile/widgets/glass_stats_card.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 // Restored imports
-import 'package:bitemates/features/profile/widgets/quest_card.dart';
 import 'package:bitemates/features/profile/screens/connected_users_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
@@ -39,7 +38,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
   Map<String, dynamic>? _stats;
-  List<dynamic> _badges = [];
   List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
   String? _errorMessage;
@@ -73,11 +71,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final results = await Future.wait<dynamic>([
         // Hosted tables count
         supabase.from('tables').count().eq('host_id', widget.userId),
-        // Joined tables count
+        // Joined tables count (from table_members, active statuses only)
         supabase
-            .from('table_participants')
+            .from('table_members')
             .count()
-            .eq('user_id', widget.userId),
+            .eq('user_id', widget.userId)
+            .inFilter('status', ['joined', 'approved', 'attended']),
         // PHASE 1 FIX: Real followers count
         supabase.from('follows').count().eq('following_id', widget.userId),
         // PHASE 1 FIX: Real following count
@@ -89,11 +88,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             .eq('host_id', widget.userId)
             .order('datetime', ascending: false)
             .limit(5),
-        // PHASE 1 NEW: Joined tables history
+        // PHASE 1 NEW: Joined tables history (from table_members)
         supabase
-            .from('table_participants')
+            .from('table_members')
             .select('joined_at, table:tables!table_id(*)')
             .eq('user_id', widget.userId)
+            .inFilter('status', ['joined', 'approved', 'attended'])
             .order('joined_at', ascending: false)
             .limit(5),
         // Photos
@@ -153,27 +153,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         // Fallback or empty
       }
 
-      // Mock badges (will be replaced with real system later)
-      final List<dynamic> badges = [
-        {'name': 'Early Bird', 'icon': Icons.wb_sunny, 'color': Colors.orange},
-        {
-          'name': 'Night Owl',
-          'icon': Icons.nights_stay,
-          'color': Colors.purple,
-        },
-        {'name': 'Sushi Lover', 'icon': Icons.rice_bowl, 'color': Colors.red},
-      ];
-
       if (mounted) {
         setState(() {
           _userData = {...userResponse, 'avatar_url': avatarUrl};
           _stats = {
             'hosted': hostedCount,
             'joined': joinedCount,
-            'followers': followersCount, // PHASE 1 FIX: Real count
-            'following': followingCount, // PHASE 1 FIX: Real count
+            'followers': followersCount,
+            'following': followingCount,
           };
-          _badges = badges;
           _hostedTables = allTables
               .take(10)
               .toList(); // PHASE 1: Show top 10 combined
@@ -339,6 +327,56 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   // PHASE 1 FIX: Calculate actual level and XP
 
+  void _showEditBadgeDialog(String currentBadge) {
+    final controller = TextEditingController(text: currentBadge);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Badge'),
+        content: TextField(
+          controller: controller,
+          maxLength: 20,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Foodie, Traveler, Night Owl',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final newBadge = controller.text.trim();
+              if (newBadge.isEmpty) return;
+              Navigator.pop(context);
+              try {
+                final userId = SupabaseConfig.client.auth.currentUser?.id;
+                if (userId == null) return;
+                await SupabaseConfig.client
+                    .from('users')
+                    .update({'custom_badge': newBadge})
+                    .eq('id', userId);
+                setState(() {
+                  _userData?['custom_badge'] = newBadge;
+                });
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error: $e')),
+                  );
+                }
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 1. Loading State (Premium Shimmer)
@@ -394,6 +432,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
     final rpgStats = _calculateRpgStats();
     final charClass = _getCharacterClass(rpgStats);
+    // Use custom badge if set, otherwise fallback to computed RPG class
+    final badgeText = _userData?['custom_badge'] ?? charClass;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
@@ -408,8 +448,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             ProfileParallaxHeader(
               imageUrl: _userData?['avatar_url'],
               displayName: _userData?['display_name'] ?? 'Unknown',
-              characterClass: charClass,
+              username: _userData?['username'],
+              characterClass: badgeText,
               isOwnProfile: _isOwnProfile,
+              onBadgeEdit: _isOwnProfile ? () => _showEditBadgeDialog(badgeText) : null,
               onEdit: () async {
                 final bool? result = await Navigator.push(
                   context,
@@ -676,117 +718,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ),
 
-            // 3. Quests
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate([
-                  _buildSectionHeader(context, 'ACTIVE QUESTS'),
-                  const SizedBox(height: 16),
-                  const QuestCard(
-                    title: 'Weekend Warrior',
-                    description: 'Join a table this weekend',
-                    progress: 0.3,
-                    reward: '+100 XP',
-                    type: 'Weekly',
-                  ),
-                  if ((_stats?['hosted'] ?? 0) > 0)
-                    const QuestCard(
-                      title: 'First Host',
-                      description: 'Host your first table',
-                      progress: 1.0,
-                      reward: 'UNLOCKED',
-                      isCompleted: true,
-                      type: 'Lifetime',
-                    )
-                  else
-                    const QuestCard(
-                      title: 'First Host',
-                      description: 'Host your first table',
-                      progress: 0.0,
-                      reward: 'Badge + 500 XP',
-                      type: 'Lifetime',
-                    ),
-                  const SizedBox(height: 32),
-                ]),
-              ),
-            ),
-
-            // 4. Badges (formerly Loot Bag)
-            if (_badges.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildSectionHeader(context, 'BADGES'),
-                      const SizedBox(height: 16),
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 4,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 16,
-                            ),
-                        itemCount: _badges.length,
-                        itemBuilder: (context, index) {
-                          final badge = _badges[index];
-                          return Tooltip(
-                            message: badge['name'],
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: isDark ? Colors.grey[900] : Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: (badge['color'] as Color).withOpacity(
-                                    0.2,
-                                  ),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: (badge['color'] as Color)
-                                        .withOpacity(0.08),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    badge['icon'],
-                                    color: badge['color'],
-                                    size: 26,
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    badge['name'],
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      color: badge['color'],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 32),
-                    ],
-                  ),
-                ),
-              ),
 
             // 5. Adventure Log (History)
             SliverPadding(

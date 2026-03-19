@@ -1,32 +1,40 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:ui';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/create_post_modal.dart';
 import 'package:bitemates/features/home/widgets/trending_carousel.dart';
+import 'package:bitemates/features/home/widgets/friends_moments_tray.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
+import 'package:bitemates/core/services/story_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/notifications/screens/notifications_screen.dart';
+import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
 
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
+import 'package:bitemates/features/search/screens/user_search_screen.dart';
+import 'package:bitemates/features/home/screens/discover_list_screen.dart';
 
 class FeedScreen extends StatefulWidget {
   final Function(String)? onJoinTable;
   final Function(Map<String, dynamic>)? onStoryTap;
+  final VoidCallback? onSeeAllHangouts;
 
-  const FeedScreen({super.key, this.onJoinTable, this.onStoryTap});
+  const FeedScreen({super.key, this.onJoinTable, this.onStoryTap, this.onSeeAllHangouts});
 
   @override
   State<FeedScreen> createState() => _FeedScreenState();
@@ -38,12 +46,15 @@ class _FeedScreenState extends State<FeedScreen>
   final ScrollController _scrollController = ScrollController();
   final SocialService _socialService = SocialService();
   final TableService _tableService = TableService();
+  final StoryService _storyService = StoryService();
 
   List<Map<String, dynamic>> _socialPosts = [];
   List<Map<String, dynamic>> _trendingTables = []; // New: Trending Tables
   List<Map<String, dynamic>> _trendingExperiences =
       []; // New: Trending Experiences
   List<Event> _trendingEvents = []; // New: Trending Events
+  List<Map<String, dynamic>> _friendsStories = [];
+  bool _isLoadingStories = false;
   bool _isLoading = true;
   bool _isLoadingMore = false;
 
@@ -107,18 +118,21 @@ class _FeedScreenState extends State<FeedScreen>
           _userPosition = position;
         });
         _loadSocialPosts();
-        _loadTrendingTables(); // New: Load trending tables
-        _loadTrendingExperiences(); // Load experiences
-        _loadTrendingEvents(); // Load events
+        _loadTrendingTables();
+        _loadTrendingExperiences();
+        _loadTrendingEvents();
+        _loadFriendsStories();
         _subscribeToAblyFeed();
       }
     } catch (e) {
       print('❌ Error getting user location: $e');
       if (mounted) {
         _loadSocialPosts();
-        _loadTrendingTables(); // Try loading anyway
+        _loadTrendingTables();
         _loadTrendingExperiences();
         _loadTrendingEvents();
+        _loadFriendsStories();
+        _subscribeToAblyFeed(); // ✅ Still need real-time even without location
       }
     }
   }
@@ -190,7 +204,10 @@ class _FeedScreenState extends State<FeedScreen>
           final postId = data['post_id'];
           setState(() {
             _socialPosts.removeWhere((post) => post['id'] == postId);
+            _lastFetchTime = null; // ✅ Invalidate cache on deletion
           });
+          // Also refresh the friends stories tray since deleted post might be a story
+          _loadFriendsStories();
         }
       });
       _ablySubscriptions.add(sub);
@@ -206,7 +223,9 @@ class _FeedScreenState extends State<FeedScreen>
       );
       if (mounted) {
         setState(() {
-          _trendingTables = tables;
+          _trendingTables = tables
+              .where((t) => t['visibility'] != 'mystery')
+              .toList();
         });
       }
     } catch (e) {
@@ -241,6 +260,27 @@ class _FeedScreenState extends State<FeedScreen>
       }
     } catch (e) {
       print('❌ Error loading trending events: $e');
+    }
+  }
+
+  Future<void> _loadFriendsStories() async {
+    if (!mounted) return;
+    setState(() => _isLoadingStories = true);
+    try {
+      final followingOnly = _tabController.index == 1;
+      final stories = await _storyService.getFriendsStories(
+        followingOnly: followingOnly,
+        limit: 20,
+      );
+      if (mounted) {
+        setState(() {
+          _friendsStories = stories;
+          _isLoadingStories = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading friends stories: $e');
+      if (mounted) setState(() => _isLoadingStories = false);
     }
   }
 
@@ -449,6 +489,7 @@ class _FeedScreenState extends State<FeedScreen>
                   _loadTrendingTables(),
                   _loadTrendingExperiences(),
                   _loadTrendingEvents(),
+                  _loadFriendsStories(),
                 ]);
               },
               color: Theme.of(context).primaryColor,
@@ -481,6 +522,28 @@ class _FeedScreenState extends State<FeedScreen>
                       ),
                     ),
                     actions: [
+                      // Search Icon
+                      Material(
+                        color: const Color(0xFFF1F5F9),
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        child: IconButton(
+                          icon: const Icon(
+                            Icons.search,
+                            color: Colors.black87,
+                            size: 24,
+                          ),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const UserSearchScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 4),
                       StreamBuilder<int>(
                         stream: NotificationService().unreadCountStream,
                         initialData: 0,
@@ -560,137 +623,41 @@ class _FeedScreenState extends State<FeedScreen>
                     ),
                   ),
 
-                  // 2. Context Header (Only in For You)
-                  if (_tabController.index == 0)
+                  // ═══════════════════════════════════════════
+                  // 2. FRIENDS' MOMENTS STORY TRAY (Both tabs)
+                  // ═══════════════════════════════════════════
+                  if (_friendsStories.isNotEmpty || _isLoadingStories)
                     SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _userPosition != null
-                                  ? 'Activities Nearby'
-                                  : 'Discover Activities',
-                              style: const TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w800,
-                                color: Color.fromARGB(255, 120, 49, 227),
-                                letterSpacing: -1,
-                                height: 1.2,
+                      child: FriendsMomentsTray(
+                        stories: _friendsStories,
+                        isLoading: _isLoadingStories,
+                        onStoryTap: (story) async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => LocationStoryViewerScreen(
+                                initialStory: story,
+                                clusterId: story['author_id'] ??
+                                    story['external_place_id'] ??
+                                    story['event_id'] ??
+                                    story['table_id'],
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Find your next activity with friends & strangers.',
-                              style: TextStyle(
-                                fontSize: 15,
-                                color: Theme.of(
-                                  context,
-                                ).primaryColor, // Bright indigo
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
+                          );
+                          // Refresh stories tray when returning (user may have deleted a story)
+                          _loadFriendsStories();
+                        },
                       ),
                     ),
 
-                  // 3. Experiences Carousel (New)
-                  if (_tabController.index == 0 &&
-                      _trendingExperiences.isNotEmpty &&
-                      _selectedCategory != 'Discussions')
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              left: 24,
-                              bottom: 12,
-                            ),
-                            child: Text(
-                              'Curated Experiences',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).primaryColor,
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 24),
-                            child: TrendingCarousel(
-                              items: _trendingExperiences,
-                              onItemTap: (experience) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => ExperienceDetailModal(
-                                      experience: experience,
-                                      matchData: const {},
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // Events Carousel (New)
-                  if (_tabController.index == 0 &&
-                      _trendingEvents.isNotEmpty &&
-                      _selectedCategory != 'Discussions')
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              left: 24,
-                              bottom: 12,
-                            ),
-                            child: Text(
-                              'Upcoming Events',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).primaryColor,
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 24),
-                            child: TrendingCarousel(
-                              items: _trendingEvents,
-                              onItemTap: (event) {
-                                // Events navigate to EventDetailModal/EventPurchaseScreen
-                                // Since logic isn't defined to push Event routes from Feed,
-                                // we push to the Purchase Screen for now since it buys a ticket
-                                // or the Event Sales Screen if host.
-                                // We can use the main app router pattern or push directly:
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (context) =>
-                                      EventDetailModal(event: event as Event),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // 4. Category Filter Chips (Only in For You)
+                  // ═══════════════════════════════════════════
+                  // 3. CATEGORY FILTER CHIPS (Moved up, For You only)
+                  // ═══════════════════════════════════════════
                   if (_tabController.index == 0)
                     SliverToBoxAdapter(
                       child: Container(
                         height: 40,
-                        margin: const EdgeInsets.only(bottom: 16),
+                        margin: const EdgeInsets.only(bottom: 12, top: 14),
                         child: ListView.separated(
                           padding: const EdgeInsets.symmetric(horizontal: 24),
                           scrollDirection: Axis.horizontal,
@@ -739,31 +706,97 @@ class _FeedScreenState extends State<FeedScreen>
                       ),
                     ),
 
-                  // 4. Trending Carousel (Only in For You)
+                  // ═══════════════════════════════════════════
+                  // 4. DISCOVER SECTION (Merged Experiences + Events)
+                  // ═══════════════════════════════════════════
+                  if (_tabController.index == 0 &&
+                      (_trendingExperiences.isNotEmpty || _trendingEvents.isNotEmpty) &&
+                      _selectedCategory != 'Discussions')
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildSectionHeader('Discover', onSeeAll: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => DiscoverListScreen(
+                                  items: [..._trendingExperiences, ..._trendingEvents],
+                                ),
+                              ),
+                            );
+                          }),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 20),
+                            child: TrendingCarousel(
+                              items: [
+                                ..._trendingExperiences,
+                                ..._trendingEvents,
+                              ],
+                              onItemTap: (item) {
+                                if (item is Event) {
+                                  showModalBottomSheet(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (context) =>
+                                        EventDetailModal(event: item),
+                                  );
+                                } else {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ExperienceDetailModal(
+                                        experience: item,
+                                        matchData: const {},
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // ═══════════════════════════════════════════
+                  // 5. OPEN HANGOUTS (Was unlabelled Trending Tables)
+                  // ═══════════════════════════════════════════
                   if (_tabController.index == 0 &&
                       _trendingTables.isNotEmpty &&
                       _selectedCategory != 'Discussions')
                     SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 24),
-                        child: TrendingCarousel(
-                          items: _trendingTables,
-                          onItemTap: (table) {
-                            if (widget.onJoinTable != null) {
-                              widget.onJoinTable!(table['id']);
-                            } else {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => TableCompactModal(
-                                    table: table,
-                                    matchData: const {},
-                                  ),
-                                ),
-                              );
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildSectionHeader('Open Hangouts', onSeeAll: () {
+                            if (widget.onSeeAllHangouts != null) {
+                              widget.onSeeAllHangouts!();
                             }
-                          },
-                        ),
+                          }),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 20),
+                            child: TrendingCarousel(
+                              items: _trendingTables,
+                              onItemTap: (table) {
+                                if (widget.onJoinTable != null) {
+                                  widget.onJoinTable!(table['id']);
+                                } else {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => TableCompactModal(
+                                        table: table,
+                                        matchData: const {},
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                     ),
 
@@ -970,30 +1003,66 @@ class _FeedScreenState extends State<FeedScreen>
         _lastFetchTime = null; // Force refresh
       });
       _loadSocialPosts();
+      _loadFriendsStories(); // Reload stories for the new tab
     } else {
-      // Called when tab selection settles (e.g. after swipe)
-      // We handle the reload in indexIsChanging for immediate feedback,
-      // but setState update is needed to hide/show headers if not already done.
       if (mounted) setState(() {});
     }
+  }
+
+  /// Reusable section header with Google Fonts and optional "See All" link
+  Widget _buildSectionHeader(String title, {VoidCallback? onSeeAll}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: GoogleFonts.inter(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).primaryColor,
+            ),
+          ),
+          const Spacer(),
+          if (onSeeAll != null)
+            GestureDetector(
+              onTap: onSeeAll,
+              child: Text(
+                'See all',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).primaryColor,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildThreadCreationBar() {
     return SliverToBoxAdapter(
       child: GestureDetector(
         onTap: _showCreatePost,
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+          margin: const EdgeInsets.fromLTRB(0, 0, 0, 0),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: Theme.of(context).cardTheme.color ?? Colors.white,
+            color: (Theme.of(context).cardTheme.color ?? Colors.white).withOpacity(0.85),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.grey[200]!),
+            border: Border.all(color: Colors.white.withOpacity(0.3)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.03),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
@@ -1029,6 +1098,9 @@ class _FeedScreenState extends State<FeedScreen>
             ],
           ),
         ),
+          ), // BackdropFilter
+        ), // ClipRRect
+        ), // Padding
       ),
     );
   }

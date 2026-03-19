@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_compress/video_compress.dart';
 import '../widgets/story_overlay_widget.dart';
 
 class StoryPreviewScreen extends StatefulWidget {
@@ -41,6 +42,7 @@ class StoryPreviewScreen extends StatefulWidget {
 
 class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
   bool _isUploading = false;
+  String _uploadStatus = '';
   final TextEditingController _captionController = TextEditingController();
   late String _currentLocationName;
   late String? _currentVibeTag;
@@ -77,30 +79,61 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
 
   Future<void> _uploadEditedBytes(Uint8List mediaBytes, bool isVideo) async {
     if (_isUploading) return;
-    setState(() => _isUploading = true);
+    setState(() {
+      _isUploading = true;
+      _uploadStatus = 'Uploading...';
+    });
 
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
       if (user == null) throw Exception('Not authenticated');
 
-      final bucketName = isVideo ? 'social_videos' : 'post_images';
-      final fileExtension = isVideo ? '.mp4' : '.jpg';
-      final mimeType = isVideo ? 'video/mp4' : 'image/jpeg';
+      // All videos are transcoded to .mp4 H.264 before reaching here
+      const String fileExtension = '.mp4';
+      const String mimeType = 'video/mp4';
+      final String imageExtension = '.jpg';
+      final String imageMimeType = 'image/jpeg';
+
+      final ext = isVideo ? fileExtension : imageExtension;
+      final mime = isVideo ? mimeType : imageMimeType;
       final fileName =
-          '${user.id}_story_${DateTime.now().millisecondsSinceEpoch}$fileExtension';
+          '${user.id}_story_${DateTime.now().millisecondsSinceEpoch}$ext';
 
-      await supabase.storage
-          .from(bucketName)
-          .uploadBinary(
-            fileName,
-            mediaBytes,
-            fileOptions: FileOptions(contentType: mimeType),
-          );
+      debugPrint('📹 Uploading story: isVideo=$isVideo, ext=$ext, mime=$mime, size=${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
 
-      final publicUrl = supabase.storage
-          .from(bucketName)
-          .getPublicUrl(fileName);
+      // Try the preferred bucket, fall back to post_images if social_videos fails
+      String bucketName = isVideo ? 'social_videos' : 'post_images';
+      String? publicUrl;
+
+      try {
+        await supabase.storage
+            .from(bucketName)
+            .uploadBinary(
+              fileName,
+              mediaBytes,
+              fileOptions: FileOptions(contentType: mime),
+            );
+        publicUrl = supabase.storage.from(bucketName).getPublicUrl(fileName);
+      } catch (storageError) {
+        debugPrint('⚠️ Upload to $bucketName failed: $storageError');
+
+        // If social_videos bucket fails, fall back to post_images
+        if (isVideo && bucketName == 'social_videos') {
+          debugPrint('🔄 Falling back to post_images bucket for video...');
+          bucketName = 'post_images';
+          await supabase.storage
+              .from(bucketName)
+              .uploadBinary(
+                fileName,
+                mediaBytes,
+                fileOptions: FileOptions(contentType: mime),
+              );
+          publicUrl = supabase.storage.from(bucketName).getPublicUrl(fileName);
+        } else {
+          rethrow;
+        }
+      }
 
       await supabase.from('posts').insert({
         'user_id': user.id,
@@ -128,10 +161,20 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
         ).showSnackBar(const SnackBar(content: Text('Story posted! 🚀')));
       }
     } catch (e) {
-      debugPrint('Error uploading story: $e');
+      debugPrint('❌ Error uploading story: $e');
       if (mounted) {
+        final errorMsg = e.toString();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to post story. Try again.')),
+          SnackBar(
+            content: Text(
+              errorMsg.contains('Bucket not found')
+                  ? 'Storage bucket not configured. Ask admin to create "social_videos" bucket.'
+                  : errorMsg.contains('Payload too large')
+                      ? 'Video is too large (${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB). Try a shorter clip.'
+                      : 'Upload failed: ${errorMsg.length > 80 ? '${errorMsg.substring(0, 80)}...' : errorMsg}',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     } finally {
@@ -139,10 +182,56 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
     }
   }
 
+  /// Transcode video to H.264 MP4 for universal playback (fixes iOS HEVC issues)
+  Future<File?> _transcodeToMp4(File videoFile) async {
+    try {
+      debugPrint('🔄 Transcoding video to H.264 MP4...');
+      if (mounted) setState(() => _uploadStatus = 'Processing video...');
+
+      final info = await VideoCompress.compressVideo(
+        videoFile.path,
+        quality: VideoQuality.MediumQuality,
+        deleteOrigin: false,
+        includeAudio: true,
+      );
+
+      if (info == null || info.file == null) {
+        debugPrint('⚠️ Transcode returned null, using original file');
+        return videoFile;
+      }
+
+      final originalSize = await videoFile.length();
+      final newSize = await info.file!.length();
+      debugPrint('✅ Transcode complete: ${(originalSize / 1024 / 1024).toStringAsFixed(1)}MB → ${(newSize / 1024 / 1024).toStringAsFixed(1)}MB');
+
+      return info.file!;
+    } catch (e) {
+      debugPrint('⚠️ Transcode failed: $e — using original file');
+      return videoFile;
+    }
+  }
+
   Future<void> _uploadStory() async {
-    // If not edited via ProImageEditor, capture raw file
     if (widget.videoFile != null) {
-      final bytes = await widget.videoFile!.readAsBytes();
+      setState(() {
+        _isUploading = true;
+        _uploadStatus = 'Processing video...';
+      });
+
+      // Transcode to H.264 MP4 for iOS compatibility
+      final transcodedFile = await _transcodeToMp4(widget.videoFile!);
+      if (transcodedFile == null) {
+        if (mounted) {
+          setState(() => _isUploading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to process video')),
+          );
+        }
+        return;
+      }
+
+      final bytes = await transcodedFile.readAsBytes();
+      setState(() => _isUploading = false); // Reset so _uploadEditedBytes can set it
       await _uploadEditedBytes(bytes, true);
     } else if (widget.imageFile != null) {
       final bytes = await widget.imageFile!.readAsBytes();
@@ -400,13 +489,27 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: _isUploading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _uploadStatus.isNotEmpty ? _uploadStatus : 'Posting...',
+                                  style: GoogleFonts.inter(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
                             )
                           : Text(
                               'Post',

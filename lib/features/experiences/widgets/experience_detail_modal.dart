@@ -8,6 +8,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 
 class ExperienceDetailModal extends StatefulWidget {
   final Map<String, dynamic> experience;
@@ -383,7 +384,15 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 16),
+
+                      // Friends Going
+                      FriendsGoingRow(
+                        entityType: 'experience',
+                        entityId: widget.experience['id'],
+                      ),
+
+                      const SizedBox(height: 16),
 
                       // HOST PROFILE
                       Container(

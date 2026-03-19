@@ -28,6 +28,7 @@ class ProfileService {
     required List<String> interestTagIds,
     required Map<String, dynamic> preferences,
     String? photoUrl,
+    String? username,
   }) async {
     // Get user email from Supabase auth
     final user = SupabaseConfig.client.auth.currentUser;
@@ -35,14 +36,18 @@ class ProfileService {
 
     try {
       // 1. Insert or Update User in public.users table
-      await SupabaseConfig.client.from('users').upsert({
+      final userData = <String, dynamic>{
         'id': userId,
         'email': user.email,
         'display_name': displayName,
         'bio': bio,
         'date_of_birth': dob.toIso8601String().split('T')[0],
         'gender_identity': gender,
-      });
+      };
+      if (username != null && username.isNotEmpty) {
+        userData['username'] = username.toLowerCase();
+      }
+      await SupabaseConfig.client.from('users').upsert(userData);
 
       // 2. Insert Personality
       await SupabaseConfig.client.from('user_personality').upsert({

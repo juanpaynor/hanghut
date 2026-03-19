@@ -31,6 +31,7 @@ import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 
+
 // Filter enum for toggling marker visibility
 enum MapFilter { all, hangouts, events, experiences, stories }
 
@@ -77,6 +78,15 @@ class MapScreenState extends State<MapScreen>
   CameraState?
   _preFlyCamera; // To restore camera after dismissing experience sheet
 
+  // Isochrone layer state
+  bool _showIsochrone = false;
+  int _isochroneMinutes = 10;
+  Timer? _isochronePulseTimer;
+  double _isochronePulsePhase = 0.0;
+
+  // Mystery tables — separate list, only rendered when isochrone pulse is active
+  List<Map<String, dynamic>> _mysteryTables = [];
+
   @override
   bool get wantKeepAlive => true;
 
@@ -118,6 +128,7 @@ class MapScreenState extends State<MapScreen>
     _popAnimationTimer?.cancel();
     _heartbeatTimer?.cancel();
     _feedSubscription?.cancel();
+    _isochronePulseTimer?.cancel();
     super.dispose();
   }
 
@@ -660,9 +671,80 @@ class MapScreenState extends State<MapScreen>
                   },
                   child: const Icon(Icons.add_a_photo),
                 ),
+                const SizedBox(height: 12),
+
+                // Isochrone Toggle
+                FloatingActionButton(
+                  heroTag: 'map_isochrone_btn',
+                  mini: true,
+                  backgroundColor: _showIsochrone
+                      ? Colors.indigo
+                      : Colors.white,
+                  foregroundColor: _showIsochrone
+                      ? Colors.white
+                      : Colors.black87,
+                  onPressed: _toggleIsochrone,
+                  child: Icon(_showIsochrone ? Icons.radar : Icons.radar, size: 20),
+                ),
               ],
             ),
           ),
+
+          // Isochrone Minute Picker Pill
+          if (_showIsochrone)
+            Positioned(
+              right: 16,
+              bottom: 120,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [5, 10, 15].map((mins) {
+                    final isSelected = _isochroneMinutes == mins;
+                    return GestureDetector(
+                      onTap: () {
+                        if (_isochroneMinutes != mins) {
+                          setState(() => _isochroneMinutes = mins);
+                          // Re-fetch with new time
+                          _toggleIsochrone(forceRefresh: true);
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? Colors.indigo
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${mins}m',
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.black87,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
 
           // Cloud Transition (Map Only)
           if (_showCloudIntro)
@@ -744,6 +826,8 @@ class MapScreenState extends State<MapScreen>
               return _tables[index]['is_experience'] != true;
             }
           }
+          // Mystery markers are visible hangouts too
+          if (type == 'mystery') return true;
           return false;
         case MapFilter.events:
           return type == 'event' || type == 'stack';
@@ -791,6 +875,28 @@ class MapScreenState extends State<MapScreen>
           'type': 'table',
         },
       });
+    }
+
+    // Mystery tables (only when isochrone pulse is active)
+    if (_showIsochrone && _mysteryTables.isNotEmpty) {
+      for (var i = 0; i < _mysteryTables.length; i++) {
+        final table = _mysteryTables[i];
+        final imageId = 'mystery_img_${table['id']}';
+        features.add({
+          'type': 'Feature',
+          'id': 'mystery_${table['id']}',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [table['location_lng'], table['location_lat']],
+          },
+          'properties': {
+            'icon_id': imageId,
+            'description': 'Mystery Activity',
+            'index': i,
+            'type': 'mystery',
+          },
+        });
+      }
     }
 
     // Events (simplified — single markers only for rebuild; full spiderfy happens on fetch)
@@ -970,6 +1076,12 @@ class MapScreenState extends State<MapScreen>
                   index < _stories.length) {
                 final story = _stories[index];
                 stackedItems.add({...story, 'type': 'story'});
+              } else if (type == 'mystery' &&
+                  index != null &&
+                  index is int &&
+                  index < _mysteryTables.length) {
+                final table = _mysteryTables[index];
+                stackedItems.add({...table, 'type': 'table'}); // Treat as table in sheet
               } else if (index != null &&
                   index is int &&
                   index < _tables.length) {
@@ -1037,6 +1149,16 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return; // STOP processing
+          } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+            // Mystery marker tapped — open as normal table
+            final table = _mysteryTables[index];
+            final matchData = _matchingService.calculateMatch(
+              currentUser: _currentUserData!,
+              table: table,
+            );
+            if (mounted) {
+              _openTableModal(context, table, matchData, screenCoordinate);
+            }
           } else if (index != null && index < _tables.length) {
             // Table marker tapped
             final table = _tables[index];
@@ -1158,6 +1280,16 @@ class MapScreenState extends State<MapScreen>
             );
           }
           return; // STOP processing
+        } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+          // Mystery marker tapped via 3D layer — open as normal table
+          final table = _mysteryTables[index];
+          final matchData = _matchingService.calculateMatch(
+            currentUser: _currentUserData!,
+            table: table,
+          );
+          if (mounted) {
+            _openTableModal(context, table, matchData, screenCoordinate);
+          }
         } else if (index != null && index < _tables.length) {
           // Table marker tapped
           final table = _tables[index]; // Use index to get full table data
@@ -1522,6 +1654,34 @@ class MapScreenState extends State<MapScreen>
       print('📅 Found ${fetchedEvents.length} events in viewport');
       print('📸 Found ${fetchedStories.length} live stories in viewport');
 
+      // ═══ MYSTERY TABLE SPLIT ═══
+      // Separate mystery tables from regular tables before scoring
+      final mysteryTablesRaw = fetchedTables
+          .where((t) => t['visibility'] == 'mystery')
+          .toList();
+      fetchedTables = fetchedTables
+          .where((t) => t['visibility'] != 'mystery')
+          .toList();
+
+      // Filter mystery tables by isochrone proximity when pulse is active
+      List<Map<String, dynamic>> activeMysteryTables = [];
+      if (_showIsochrone && _currentPosition != null && mysteryTablesRaw.isNotEmpty) {
+        final radiusKm = (_isochroneMinutes * 80.0) / 1000.0; // walking radius in km
+        activeMysteryTables = mysteryTablesRaw.where((table) {
+          final lat = table['location_lat'] as num?;
+          final lng = table['location_lng'] as num?;
+          if (lat == null || lng == null) return false;
+          final dist = geo.Geolocator.distanceBetween(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            lat.toDouble(),
+            lng.toDouble(),
+          );
+          return dist <= (radiusKm * 1000); // compare in meters
+        }).toList();
+        print('🔮 Mystery tables in range: ${activeMysteryTables.length}/${mysteryTablesRaw.length}');
+      }
+
       // 4. Relevance Filtering: Sort by Match Score and Cap
       if (_currentUserData != null) {
         final scoredTables = fetchedTables.map((table) {
@@ -1570,6 +1730,7 @@ class MapScreenState extends State<MapScreen>
 
       setState(() {
         _tables = fetchedTables;
+        _mysteryTables = activeMysteryTables;
         _events = fetchedEvents;
         _stories = fetchedStories;
       });
@@ -1733,8 +1894,42 @@ class MapScreenState extends State<MapScreen>
         }
       }();
 
+      // ═══ Mystery Marker Image Generation ═══
+      final mysteryImagesFuture = () async {
+        if (!_showIsochrone || activeMysteryTables.isEmpty) return;
+        final mysteryNeedImages = activeMysteryTables.where((table) {
+          final imageId = 'mystery_img_${table['id']}';
+          return !_addedImages.contains(imageId);
+        }).toList();
+
+        if (mysteryNeedImages.isNotEmpty) {
+          print('🔮 Generating ${mysteryNeedImages.length} mystery markers...');
+          await Future.wait(
+            mysteryNeedImages.map((table) async {
+              try {
+                final imageId = 'mystery_img_${table['id']}';
+                final markerImage = await _createMysteryMarkerImage();
+
+                await style.addStyleImage(
+                  imageId,
+                  2.0,
+                  MbxImage(width: 120, height: 120, data: markerImage),
+                  false,
+                  [],
+                  [],
+                  null,
+                );
+                _addedImages.add(imageId);
+              } catch (e) {
+                print('❌ Error generating mystery marker for ${table['id']}: $e');
+              }
+            }),
+          );
+        }
+      }();
+
       // ✅ Wait for ALL marker types to finish simultaneously
-      await Future.wait([tableImagesFuture, eventImagesFuture, storyImagesFuture]);
+      await Future.wait([tableImagesFuture, eventImagesFuture, storyImagesFuture, mysteryImagesFuture]);
 
       // --- Build feature data (fast, just data mapping) ---
 
@@ -1756,6 +1951,29 @@ class MapScreenState extends State<MapScreen>
             'type': 'table',
           },
         });
+      }
+
+      // Add mystery table features (only when pulse is active)
+      if (_showIsochrone && activeMysteryTables.isNotEmpty) {
+        for (var i = 0; i < activeMysteryTables.length; i++) {
+          final table = activeMysteryTables[i];
+          final imageId = 'mystery_img_${table['id']}';
+          features.add({
+            'type': 'Feature',
+            'id': 'mystery_${table['id']}',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [table['location_lng'], table['location_lat']],
+            },
+            'properties': {
+              'icon_id': imageId,
+              'description': 'Mystery Activity',
+              'index': i,
+              'type': 'mystery',
+            },
+          });
+        }
+        print('🔮 Added ${activeMysteryTables.length} mystery markers to map');
       }
 
       // Add event features (with spiderfy grouping logic)
@@ -2683,6 +2901,74 @@ class MapScreenState extends State<MapScreen>
     return byteData!.buffer.asUint8List();
   }
 
+  /// Creates a mystery marker image — purple glow ring with 🔮 emoji center.
+  /// Used for tables with visibility = 'mystery', revealed via isochrone pulse.
+  Future<Uint8List> _createMysteryMarkerImage() async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    const int size = 120;
+    const mysteryColor = Color(0xFF7C3AED); // Violet-600
+
+    // Outer glow ring — pulsing purple aura
+    final Paint outerGlowPaint = Paint()
+      ..color = mysteryColor.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 14
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(2, 2, size - 4, size - 4),
+        const Radius.circular(18),
+      ),
+      outerGlowPaint,
+    );
+
+    // Inner ring — solid purple
+    final Paint ringPaint = Paint()
+      ..color = mysteryColor.withOpacity(0.9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(8, 8, size - 16, size - 16),
+        const Radius.circular(14),
+      ),
+      ringPaint,
+    );
+
+    // Dark background fill
+    final Paint bgPaint = Paint()
+      ..color = const Color(0xFF1E1033) // Deep purple-black
+      ..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(12, 12, size - 24, size - 24),
+        const Radius.circular(12),
+      ),
+      bgPaint,
+    );
+
+    // 🔮 Crystal ball emoji
+    final textPainter = TextPainter(
+      text: const TextSpan(
+        text: '🔮',
+        style: TextStyle(fontSize: 44),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: ui.TextDirection.ltr,
+    );
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+    );
+
+    // Convert to image
+    final ui.Image image = await pictureRecorder.endRecording().toImage(size, size);
+    final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
   Future<Uint8List> _createEventMarkerImage({
     required Event event,
     int badgeCount = 1,
@@ -2942,6 +3228,11 @@ class MapScreenState extends State<MapScreen>
                   idx < _stories.length) {
                 final story = _stories[idx];
                 stackedItems.add({...story, 'type': 'story'});
+              } else if (type == 'mystery' &&
+                  idx != null &&
+                  idx < _mysteryTables.length) {
+                final table = _mysteryTables[idx];
+                stackedItems.add({...table, 'type': 'table'});
               } else if (idx != null && idx < _tables.length) {
                 final table = _tables[idx];
                 stackedItems.add({...table, 'type': 'table'});
@@ -3005,6 +3296,16 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return;
+          } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+            final table = _mysteryTables[index];
+            print('🔮 Opening mystery table: ${table['title']}');
+            final matchData = _matchingService.calculateMatch(
+              currentUser: _currentUserData!,
+              table: table,
+            );
+            if (mounted) {
+              _openTableModal(context, table, matchData, screenCoordinate);
+            }
           } else if (index != null && index < _tables.length) {
             final table = _tables[index];
             print('🍽️ Opening table: ${table['title']}');
@@ -3085,4 +3386,253 @@ class MapScreenState extends State<MapScreen>
   }
 
   // End of MapScreenState
+
+  // ========================
+  // ISOCHRONE CIRCLE LAYER
+  // ========================
+
+  /// Generates a GeoJSON Polygon circle with [numPoints] vertices.
+  Map<String, dynamic> _buildCircleGeoJson(double lat, double lng, double radiusMeters, {int numPoints = 64}) {
+    const double earthRadius = 6371000; // meters
+    final List<List<double>> coords = [];
+
+    for (int i = 0; i <= numPoints; i++) {
+      final angle = (2 * pi * i) / numPoints;
+      final dLat = radiusMeters / earthRadius * (180 / pi);
+      final dLng = radiusMeters / (earthRadius * cos(lat * pi / 180)) * (180 / pi);
+      coords.add([
+        lng + dLng * cos(angle),
+        lat + dLat * sin(angle),
+      ]);
+    }
+
+    return {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': [coords],
+          },
+          'properties': {},
+        },
+      ],
+    };
+  }
+
+  Future<void> _toggleIsochrone({bool forceRefresh = false}) async {
+    if (_showIsochrone && !forceRefresh) {
+      await _removeIsochrone();
+      setState(() {
+        _showIsochrone = false;
+        _mysteryTables = []; // Clear mystery markers when pulse deactivated
+      });
+      // Re-render to remove mystery markers from GeoJSON
+      _lastFetchCameraState = null; // Force re-fetch
+      _fetchTablesInViewport();
+      return;
+    }
+
+    if (_currentPosition == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location not available yet')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _showIsochrone = true);
+
+    try {
+      // ~80 meters per minute walking speed
+      final radiusMeters = _isochroneMinutes * 80.0;
+
+      final geoJson = _buildCircleGeoJson(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        radiusMeters,
+      );
+
+      if (_mapboxMap == null) return;
+      final style = _mapboxMap!.style;
+      final geoJsonStr = jsonEncode(geoJson);
+
+      const sourceId = 'isochrone-source';
+      const fillLayerId = 'isochrone-fill';
+      const lineLayerId = 'isochrone-outline';
+
+      await _removeIsochrone();
+
+      await style.addSource(
+        GeoJsonSource(id: sourceId, data: geoJsonStr),
+      );
+
+      // Base fill — subtle indigo wash
+      const fillColor = Color(0xFF3F51B5);
+      const lineColor = Color(0xCC3F51B5);
+
+      await style.addLayerAt(
+        FillLayer(
+          id: fillLayerId,
+          sourceId: sourceId,
+          fillColor: fillColor.value,
+          fillOpacity: 0.12,
+        ),
+        LayerPosition(below: 'clusters'),
+      );
+
+      await style.addLayerAt(
+        LineLayer(
+          id: lineLayerId,
+          sourceId: sourceId,
+          lineColor: lineColor.value,
+          lineWidth: 2.0,
+        ),
+        LayerPosition(below: 'clusters'),
+      );
+
+      // Add 2 ripple ring sources + layers
+      for (int i = 0; i < 2; i++) {
+        final rippleSourceId = 'isochrone-ripple-$i';
+        final rippleLayerId = 'isochrone-ripple-line-$i';
+
+        // Start with a tiny circle (will be expanded by animation)
+        final tinyCircle = _buildCircleGeoJson(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          1.0, // 1 meter — basically invisible
+        );
+
+        await style.addSource(
+          GeoJsonSource(id: rippleSourceId, data: jsonEncode(tinyCircle)),
+        );
+
+        await style.addLayerAt(
+          LineLayer(
+            id: rippleLayerId,
+            sourceId: rippleSourceId,
+            lineColor: fillColor.value,
+            lineWidth: 3.0,
+            lineOpacity: 0.0, // Starts invisible
+          ),
+          LayerPosition(below: 'clusters'),
+        );
+      }
+
+      print('✅ Isochrone circle: ${_isochroneMinutes}min / ${radiusMeters.toInt()}m radius');
+
+      // Start ripple scan animation
+      _startIsochronePulse();
+
+      // ═══ Mystery Tables: Re-fetch to reveal hidden tables in range ═══
+      _lastFetchCameraState = null; // Force re-fetch
+      _fetchTablesInViewport();
+    } catch (e) {
+      print('❌ Isochrone toggle error: $e');
+    }
+  }
+
+  Future<void> _removeIsochrone() async {
+    _stopIsochronePulse();
+    if (_mapboxMap == null) return;
+    final style = _mapboxMap!.style;
+
+    try {
+      // Remove ripple layers & sources
+      for (int i = 0; i < 2; i++) {
+        final rippleLayerId = 'isochrone-ripple-line-$i';
+        final rippleSourceId = 'isochrone-ripple-$i';
+        if (await style.styleLayerExists(rippleLayerId)) {
+          await style.removeStyleLayer(rippleLayerId);
+        }
+        if (await style.styleSourceExists(rippleSourceId)) {
+          await style.removeStyleSource(rippleSourceId);
+        }
+      }
+
+      if (await style.styleLayerExists('isochrone-fill')) {
+        await style.removeStyleLayer('isochrone-fill');
+      }
+      if (await style.styleLayerExists('isochrone-outline')) {
+        await style.removeStyleLayer('isochrone-outline');
+      }
+      if (await style.styleSourceExists('isochrone-source')) {
+        await style.removeStyleSource('isochrone-source');
+      }
+    } catch (e) {
+      print('⚠️ Isochrone remove error: $e');
+    }
+  }
+
+  // ── Ripple Scanning Animation ──
+
+  void _startIsochronePulse() {
+    _stopIsochronePulse();
+    _isochronePulsePhase = 0.0;
+
+    final fullRadius = _isochroneMinutes * 80.0;
+
+    // ~15fps — smooth enough, light on the style engine
+    _isochronePulseTimer = Timer.periodic(
+      const Duration(milliseconds: 66),
+      (_) {
+        if (!mounted || _mapboxMap == null || !_showIsochrone || _currentPosition == null) {
+          _stopIsochronePulse();
+          return;
+        }
+
+        // Advance phase: one full ripple cycle ~4 seconds (60 ticks * 66ms ≈ 4s)
+        _isochronePulsePhase += 1.0 / 60.0;
+        if (_isochronePulsePhase > 1.0) _isochronePulsePhase -= 1.0;
+
+        try {
+          final style = _mapboxMap!.style;
+
+          // Two ripple rings, staggered 50% apart
+          for (int i = 0; i < 2; i++) {
+            // Each ring's progress: 0 → 1, offset by 0.5
+            double progress = (_isochronePulsePhase + i * 0.5) % 1.0;
+
+            // Ring expands from 10% to 100% of full radius
+            final radius = fullRadius * (0.1 + 0.9 * progress);
+
+            // Opacity: fade in quickly then fade out as it expands
+            // Peak at ~20% progress, gone by 100%
+            double opacity;
+            if (progress < 0.2) {
+              opacity = progress / 0.2 * 0.6; // Ramp up to 0.6
+            } else {
+              opacity = 0.6 * (1.0 - (progress - 0.2) / 0.8); // Fade to 0
+            }
+
+            // Line width: thicker at start, thinner as it expands
+            final lineWidth = 4.0 * (1.0 - progress * 0.7);
+
+            // Update the ring's geometry
+            final circleGeoJson = _buildCircleGeoJson(
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+              radius,
+            );
+
+            final sourceId = 'isochrone-ripple-$i';
+            final layerId = 'isochrone-ripple-line-$i';
+
+            style.setStyleSourceProperty(sourceId, 'data', jsonEncode(circleGeoJson));
+            style.setStyleLayerProperty(layerId, 'line-opacity', opacity);
+            style.setStyleLayerProperty(layerId, 'line-width', lineWidth);
+          }
+        } catch (_) {
+          // Layer may have been removed
+        }
+      },
+    );
+  }
+
+  void _stopIsochronePulse() {
+    _isochronePulseTimer?.cancel();
+    _isochronePulseTimer = null;
+  }
 }

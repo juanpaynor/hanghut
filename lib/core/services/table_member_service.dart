@@ -1,5 +1,6 @@
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
+import 'package:bitemates/core/services/friends_going_service.dart';
 
 class TableMemberService {
   // Helper: get user display name for notification copy
@@ -48,6 +49,18 @@ class TableMemberService {
               .eq('table_id', tableId)
               .eq('user_id', user.id);
 
+          // Notify friends asynchronously after re-join
+          final tableTitle = (await SupabaseConfig.client
+                  .from('tables')
+                  .select('title')
+                  .eq('id', tableId)
+                  .maybeSingle())?['title'] ?? 'an activity';
+          FriendsGoingService().notifyFriendsOfJoin(
+            entityType: 'table',
+            entityId: tableId,
+            entityTitle: tableTitle,
+          );
+
           return {'success': true, 'message': 'Successfully joined the table!'};
         }
 
@@ -67,7 +80,7 @@ class TableMemberService {
       // Get table info to check status, capacity, and approval setting
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests, title, location_name, host_id, datetime, requires_approval')
+          .select('status, max_guests, title, location_name, host_id, datetime, requires_approval, visibility, filters')
           .eq('id', tableId)
           .single();
 
@@ -77,6 +90,82 @@ class TableMemberService {
           'message': 'This table is no longer accepting members',
         };
       }
+
+      // ═══ Visibility Check ═══
+      final visibility = table['visibility'] as String? ?? 'public';
+      if (visibility == 'followers_only') {
+        // Check if user follows the host
+        final hostId = table['host_id'] as String;
+        final followCheck = await SupabaseConfig.client
+            .from('follows')
+            .select('follower_id')
+            .eq('follower_id', user.id)
+            .eq('following_id', hostId)
+            .maybeSingle();
+        if (followCheck == null) {
+          return {
+            'success': false,
+            'message': 'This hangout is for followers only. Follow the host first!',
+          };
+        }
+      }
+
+      // ═══ Advanced Filter Enforcement ═══
+      final rawFilters = table['filters'];
+      if (rawFilters != null && rawFilters is Map && rawFilters.isNotEmpty) {
+        final filters = Map<String, dynamic>.from(rawFilters);
+        final enforcement = filters['enforcement'] as String? ?? 'soft';
+
+        if (enforcement == 'hard') {
+          // Fetch user profile for comparison
+          final userProfile = await SupabaseConfig.client
+              .from('users')
+              .select('gender_identity, date_of_birth')
+              .eq('id', user.id)
+              .single();
+
+          // Gender check
+          final genderFilter = filters['gender'] as String?;
+          if (genderFilter != null && genderFilter != 'everyone') {
+            final userGender = (userProfile['gender_identity'] as String?)?.toLowerCase() ?? '';
+            bool genderMatch = false;
+            if (genderFilter == 'women_only' && userGender == 'female') genderMatch = true;
+            if (genderFilter == 'men_only' && userGender == 'male') genderMatch = true;
+            if (genderFilter == 'nonbinary_only' && userGender == 'non-binary') genderMatch = true;
+            if (!genderMatch) {
+              return {
+                'success': false,
+                'message': 'This hangout has a gender requirement you don\'t match.',
+              };
+            }
+          }
+
+          // Age check
+          final ageMin = filters['age_min'] as int?;
+          final ageMax = filters['age_max'] as int?;
+          if (ageMin != null || ageMax != null) {
+            final dobStr = userProfile['date_of_birth'] as String?;
+            if (dobStr != null) {
+              final dob = DateTime.tryParse(dobStr);
+              if (dob != null) {
+                final now = DateTime.now();
+                int age = now.year - dob.year;
+                if (now.month < dob.month || (now.month == dob.month && now.day < dob.day)) {
+                  age--;
+                }
+                if ((ageMin != null && age < ageMin) || (ageMax != null && age > ageMax)) {
+                  return {
+                    'success': false,
+                    'message': 'This hangout has an age requirement ($ageMin–$ageMax) you don\'t match.',
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+
+      final requiresApproval = table['requires_approval'] == true;
 
       // Count current members
       final currentMembers = await SupabaseConfig.client
@@ -91,8 +180,6 @@ class TableMemberService {
       if (currentCount >= maxGuests) {
         return {'success': false, 'message': 'This table is full'};
       }
-
-      final requiresApproval = table['requires_approval'] == true;
 
       if (requiresApproval) {
         // Host approval required — insert as pending
@@ -142,6 +229,14 @@ class TableMemberService {
           eventTime: DateTime.parse(table['datetime']),
         );
       }
+
+      // Notify friends who are already in this table
+      final tableTitle = table['title'] ?? 'an activity';
+      FriendsGoingService().notifyFriendsOfJoin(
+        entityType: 'table',
+        entityId: tableId,
+        entityTitle: tableTitle,
+      );
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
@@ -283,7 +378,10 @@ class TableMemberService {
               id,
               display_name,
               bio,
-              trust_score
+              user_photos (
+                photo_url,
+                is_primary
+              )
             )
           ''')
           .eq('table_id', tableId)
@@ -344,6 +442,68 @@ class TableMemberService {
     } catch (e) {
       print('❌ Error checking membership: $e');
       return null;
+    }
+  }
+
+  /// Accept an invite (invited user accepts the pending membership)
+  Future<Map<String, dynamic>> acceptInvite(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      await SupabaseConfig.client
+          .from('table_members')
+          .update({
+            'status': 'joined',
+            'approved_at': DateTime.now().toIso8601String(),
+            'joined_at': DateTime.now().toIso8601String(),
+          })
+          .eq('table_id', tableId)
+          .eq('user_id', user.id)
+          .eq('status', 'pending');
+
+      // Schedule event reminder
+      try {
+        final table = await SupabaseConfig.client
+            .from('tables')
+            .select('title, location_name, datetime')
+            .eq('id', tableId)
+            .single();
+
+        if (table['datetime'] != null) {
+          NotificationService().scheduleEventReminder(
+            tableId: tableId,
+            title: table['title'] ?? 'Event',
+            venueName: table['location_name'] ?? '',
+            eventTime: DateTime.parse(table['datetime']),
+          );
+        }
+      } catch (_) {}
+
+      return {'success': true, 'message': 'You\'re in! 🎉'};
+    } catch (e) {
+      print('❌ Error accepting invite: $e');
+      return {'success': false, 'message': 'Failed to accept invite'};
+    }
+  }
+
+  /// Decline an invite
+  Future<Map<String, dynamic>> declineInvite(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      await SupabaseConfig.client
+          .from('table_members')
+          .update({'status': 'declined'})
+          .eq('table_id', tableId)
+          .eq('user_id', user.id)
+          .eq('status', 'pending');
+
+      return {'success': true, 'message': 'Invite declined'};
+    } catch (e) {
+      print('❌ Error declining invite: $e');
+      return {'success': false, 'message': 'Failed to decline invite'};
     }
   }
 }

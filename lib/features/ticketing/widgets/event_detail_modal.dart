@@ -6,6 +6,7 @@ import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
@@ -209,7 +210,13 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     // Price & Availability
                     _buildPriceRow(),
 
-                    const SizedBox(height: 20),
+                    // Friends Going
+                    FriendsGoingRow(
+                      entityType: 'event',
+                      entityId: widget.event.id,
+                    ),
+
+                    const SizedBox(height: 12),
 
                     // Organizer Card
                     _buildOrganizerCard(),

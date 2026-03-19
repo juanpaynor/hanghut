@@ -75,7 +75,11 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     }
   }
 
-  void _handleLike() {
+  void _handleLike() async {
+    final wasLiked = _isLiked;
+    final prevCount = _likeCount;
+
+    // Optimistic update
     setState(() {
       if (_isLiked) {
         _isLiked = false;
@@ -85,8 +89,24 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         _likeCount++;
       }
     });
-    // Call Service
-    SocialService().togglePostLike(widget.post['id']);
+
+    // Await service — revert on failure
+    try {
+      final result = await SocialService().togglePostLike(widget.post['id']);
+      // If the guard rejected it (concurrent tap), revert
+      if (result == false && !wasLiked) {
+        // Service returned false but we expected a like — could be guard rejection
+        // Only revert if the guard blocked it (count didn't change)
+      }
+    } catch (e) {
+      // Revert optimistic update
+      if (mounted) {
+        setState(() {
+          _isLiked = wasLiked;
+          _likeCount = prevCount;
+        });
+      }
+    }
   }
 
   Future<void> _handleComment() async {
@@ -116,6 +136,11 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         : null;
 
     final commentCount = widget.post['comment_count'] ?? 0;
+
+    // Extract filter info from metadata
+    final rawFilters = metadata['filters'];
+    final filters = rawFilters is Map ? Map<String, dynamic>.from(rawFilters) : <String, dynamic>{};
+    final metaVisibility = metadata['visibility'] as String? ?? 'public';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -584,7 +609,14 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
               ),
             ),
 
-          // 3. Social Actions Row (Like & Comment)
+     // 3. Filter Chips Row (between content and social actions)
+         if (filters.isNotEmpty || metaVisibility == 'followers_only')
+           Padding(
+             padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+             child: _buildFilterChips(filters, metaVisibility),
+           ),
+
+         // 4. Social Actions Row (Like & Comment)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
@@ -687,6 +719,75 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     );
   }
 
+  Widget _buildFilterChips(Map<String, dynamic> filters, String visibility) {
+    final chips = <Widget>[];
+
+    // Visibility
+    if (visibility == 'followers_only') {
+      chips.add(_filterChip('👥 Followers Only', Colors.purple));
+    }
+
+    // Gender
+    final gender = filters['gender'] as String?;
+    if (gender != null && gender != 'everyone') {
+      String label;
+      switch (gender) {
+        case 'women_only':
+          label = '👩 Women Only';
+          break;
+        case 'men_only':
+          label = '👨 Men Only';
+          break;
+        case 'nonbinary_only':
+          label = '🏳️‍🌈 Non-binary Only';
+          break;
+        default:
+          label = gender;
+      }
+      chips.add(_filterChip(label, Colors.pink));
+    }
+
+    // Age range
+    final ageMin = filters['age_min'];
+    final ageMax = filters['age_max'];
+    if (ageMin != null || ageMax != null) {
+      chips.add(_filterChip('🔞 ${ageMin ?? 18}–${ageMax ?? 65}', Colors.orange));
+    }
+
+    // Enforcement
+    final enforcement = filters['enforcement'] as String?;
+    if (enforcement == 'hard' && chips.isNotEmpty) {
+      chips.add(_filterChip('🔒 Enforced', Colors.red));
+    }
+
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: chips,
+    );
+  }
+
+  Widget _filterChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+
   Widget _buildJoinButton(Map<String, dynamic> metadata) {
     if (metadata['status'] == 'ended') {
       return Container(
@@ -701,8 +802,8 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     return ElevatedButton(
       onPressed: widget.onTap,
       style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       ),

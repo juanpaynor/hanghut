@@ -291,10 +291,22 @@ class NotificationService {
                 final body =
                     newRecord['body'] as String? ??
                     'You have a new notification';
+                // Build payload from DB record so tapping the toast routes correctly
+                final Map<String, dynamic> toastPayload = {
+                  'type': newRecord['type'] ?? '',
+                  'entity_id': newRecord['entity_id'] ?? '',
+                };
+                // Merge metadata keys (e.g. table_id, chat_type) if present
+                final meta = newRecord['metadata'];
+                if (meta is Map) {
+                  toastPayload.addAll(Map<String, dynamic>.from(meta));
+                }
+
                 showNotification(
                   id: DateTime.now().millisecondsSinceEpoch % 100000,
                   title: title,
                   body: body,
+                  payload: jsonEncode(toastPayload),
                   channelId: 'bitemates_social',
                   channelName: 'Social Activity',
                 );

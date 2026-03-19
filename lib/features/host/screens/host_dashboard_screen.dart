@@ -217,7 +217,7 @@ class _ExperiencesTab extends StatelessWidget {
   }
 }
 
-class _ExperienceCard extends StatelessWidget {
+class _ExperienceCard extends StatefulWidget {
   final Map<String, dynamic> experience;
   final VoidCallback onRefresh;
 
@@ -228,128 +228,233 @@ class _ExperienceCard extends StatelessWidget {
   });
 
   @override
+  State<_ExperienceCard> createState() => _ExperienceCardState();
+}
+
+class _ExperienceCardState extends State<_ExperienceCard> {
+  bool _isDeleting = false;
+
+  Future<void> _confirmDelete() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Experience?'),
+        content: const Text(
+          'This will permanently delete this experience, all its schedules, and associated media. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      setState(() => _isDeleting = true);
+      try {
+        await HostService().deleteExperience(widget.experience['id'] as String);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Experience deleted'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          widget.onRefresh();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          setState(() => _isDeleting = false);
+        }
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final experience = widget.experience;
     final images = (experience['images'] as List?)?.cast<String>() ?? [];
     final isVerified = experience['verified_by_hanghut'] == true;
     final price = experience['price_per_person'];
     final currency = experience['currency'] ?? 'PHP';
 
-    return GestureDetector(
-      onTap: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => CreateExperienceScreen(
-              partnerId: experience['partner_id'],
-              existingExperience: experience,
-            ),
+    return Opacity(
+      opacity: _isDeleting ? 0.5 : 1.0,
+      child: GestureDetector(
+        onTap: _isDeleting
+            ? null
+            : () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CreateExperienceScreen(
+                      partnerId: experience['partner_id'],
+                      existingExperience: experience,
+                    ),
+                  ),
+                );
+                widget.onRefresh();
+              },
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-        );
-        onRefresh();
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Image
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(16),
-              ),
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: images.isNotEmpty
-                    ? Image.network(images.first, fit: BoxFit.cover)
-                    : Container(
-                        color: Colors.grey[200],
-                        child: const Icon(
-                          Icons.image_outlined,
-                          size: 40,
-                          color: Colors.grey,
-                        ),
-                      ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          experience['title'] ?? '',
-                          style: GoogleFonts.inter(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                            color: Colors.black87,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Image
+              ClipRRect(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: images.isNotEmpty
+                      ? Image.network(images.first, fit: BoxFit.cover)
+                      : Container(
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.image_outlined,
+                            size: 40,
+                            color: Colors.grey,
                           ),
                         ),
-                      ),
-                      // Verification badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isVerified
-                              ? Colors.green[50]
-                              : Colors.orange[50],
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isVerified
-                                  ? Icons.verified
-                                  : Icons.hourglass_empty,
-                              size: 12,
-                              color: isVerified
-                                  ? Colors.green[700]
-                                  : Colors.orange[700],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            experience['title'] ?? '',
+                            style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                              color: Colors.black87,
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              isVerified ? 'Live' : 'Pending Review',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        // Verification badge
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isVerified
+                                ? Colors.green[50]
+                                : Colors.orange[50],
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                isVerified
+                                    ? Icons.verified
+                                    : Icons.hourglass_empty,
+                                size: 12,
                                 color: isVerified
                                     ? Colors.green[700]
                                     : Colors.orange[700],
                               ),
+                              const SizedBox(width: 4),
+                              Text(
+                                isVerified ? 'Live' : 'Pending Review',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: isVerified
+                                      ? Colors.green[700]
+                                      : Colors.orange[700],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        // Popup menu
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert, size: 20, color: Colors.grey),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CreateExperienceScreen(
+                                    partnerId: experience['partner_id'],
+                                    existingExperience: experience,
+                                  ),
+                                ),
+                              ).then((_) => widget.onRefresh());
+                            } else if (value == 'delete') {
+                              _confirmDelete();
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.edit_outlined, size: 18),
+                                  SizedBox(width: 8),
+                                  Text('Edit'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                  SizedBox(width: 8),
+                                  Text('Delete', style: TextStyle(color: Colors.red)),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '$currency ${price?.toStringAsFixed(0) ?? '0'} / person',
-                    style: GoogleFonts.inter(
-                      color: AppTheme.primaryColor,
-                      fontWeight: FontWeight.w600,
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    Text(
+                      '$currency ${price?.toStringAsFixed(0) ?? '0'} / person',
+                      style: GoogleFonts.inter(
+                        color: AppTheme.primaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

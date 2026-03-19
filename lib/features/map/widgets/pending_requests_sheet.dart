@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
 class PendingRequestsSheet extends StatefulWidget {
   final String tableId;
@@ -187,9 +188,20 @@ class _PendingRequestsSheetState extends State<PendingRequestsSheet> {
     final user = request['users'] as Map<String, dynamic>?;
     final name = user?['display_name'] ?? 'Unknown';
     final bio = user?['bio'] as String?;
-    final trustScore = user?['trust_score'] as int? ?? 50;
     final userId = request['user_id'] as String;
     final isActionLoading = request['_loading'] == true;
+
+    // Resolve profile photo from user_photos
+    String? photoUrl;
+    final userPhotos = user?['user_photos'];
+    if (userPhotos != null && userPhotos is List && userPhotos.isNotEmpty) {
+      final photos = List<Map<String, dynamic>>.from(userPhotos);
+      final primary = photos.firstWhere(
+        (p) => p['is_primary'] == true,
+        orElse: () => photos.first,
+      );
+      photoUrl = primary['photo_url'] as String?;
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -201,58 +213,53 @@ class _PendingRequestsSheetState extends State<PendingRequestsSheet> {
       ),
       child: Row(
         children: [
-          // Avatar
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: Colors.grey[300],
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+          // Avatar — tappable to view profile
+          GestureDetector(
+            onTap: () => _openProfile(userId),
+            child: CircleAvatar(
+              radius: 24,
+              backgroundColor: Colors.grey[300],
+              backgroundImage:
+                  photoUrl != null ? NetworkImage(photoUrl) : null,
+              child: photoUrl == null
+                  ? Text(
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    )
+                  : null,
             ),
           ),
           const SizedBox(width: 14),
 
-          // Info
+          // Info — tappable to view profile
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (bio != null && bio.isNotEmpty) ...[
-                  const SizedBox(height: 2),
+            child: GestureDetector(
+              onTap: () => _openProfile(userId),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    bio,
-                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ],
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(Icons.shield, size: 14, color: Colors.blue[400]),
-                    const SizedBox(width: 4),
+                  if (bio != null && bio.isNotEmpty) ...[
+                    const SizedBox(height: 2),
                     Text(
-                      'Trust: $trustScore',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.blue[400],
-                        fontWeight: FontWeight.w600,
-                      ),
+                      bio,
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
 
@@ -304,6 +311,15 @@ class _PendingRequestsSheetState extends State<PendingRequestsSheet> {
               ],
             ),
         ],
+      ),
+    );
+  }
+
+  void _openProfile(String userId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => UserProfileScreen(userId: userId),
       ),
     );
   }

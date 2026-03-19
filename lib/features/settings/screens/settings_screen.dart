@@ -31,6 +31,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notifPostComments = true;
   bool _isLoadingPrefs = true;
 
+  // Privacy
+  bool _hideActivityFromFriends = false;
+
   @override
   void initState() {
     super.initState();
@@ -44,7 +47,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final response = await SupabaseConfig.client
           .from('users')
-          .select('notification_preferences')
+          .select('notification_preferences, hide_activity_from_friends')
           .eq('id', userId)
           .single();
 
@@ -57,6 +60,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _notifChatMessages = prefs['chat_messages'] as bool? ?? true;
           _notifPostLikes = prefs['post_likes'] as bool? ?? true;
           _notifPostComments = prefs['post_comments'] as bool? ?? true;
+          _hideActivityFromFriends =
+              response['hide_activity_from_friends'] as bool? ?? false;
           _isLoadingPrefs = false;
         });
       }
@@ -237,6 +242,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 value: _hideDistance,
                 // Nomadtable style has pink toggles for these
                 onChanged: (val) => setState(() => _hideDistance = val),
+              ),
+              SettingsSwitchTile(
+                icon: Icons.people_outline,
+                title: 'Hide my activity from friends',
+                subtitle: 'Friends won\'t see you on events or activities',
+                value: _hideActivityFromFriends,
+                onChanged: (val) async {
+                  setState(() => _hideActivityFromFriends = val);
+                  try {
+                    final userId =
+                        SupabaseConfig.client.auth.currentUser?.id;
+                    if (userId != null) {
+                      await SupabaseConfig.client
+                          .from('users')
+                          .update({'hide_activity_from_friends': val})
+                          .eq('id', userId);
+                    }
+                  } catch (e) {
+                    print('Error updating activity privacy: $e');
+                  }
+                },
               ),
               ListTile(
                 leading: Icon(

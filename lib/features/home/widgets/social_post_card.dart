@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_linkify/flutter_linkify.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/core/services/social_service.dart';
@@ -15,6 +13,7 @@ import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart'
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
+import 'package:bitemates/features/home/widgets/mention_text.dart';
 
 class SocialPostCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -76,7 +75,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
     }
   }
 
-  void _handleLike() {
+  void _handleLike() async {
+    final wasLiked = _isLiked;
+    final prevCount = _likeCount;
+
     // Optimistic Update
     setState(() {
       if (_isLiked) {
@@ -87,8 +89,19 @@ class _SocialPostCardState extends State<SocialPostCard> {
         _likeCount++;
       }
     });
-    // Call Service
-    SocialService().togglePostLike(widget.post['id']);
+
+    // Await service — revert on failure
+    try {
+      await SocialService().togglePostLike(widget.post['id']);
+    } catch (e) {
+      // Revert optimistic update
+      if (mounted) {
+        setState(() {
+          _isLiked = wasLiked;
+          _likeCount = prevCount;
+        });
+      }
+    }
   }
 
   void _handleBookmark() {
@@ -383,25 +396,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
                 if (content.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: Linkify(
-                      onOpen: (link) async {
-                        final Uri uri = Uri.parse(link.url);
-                        if (await canLaunchUrl(uri)) {
-                          await launchUrl(
-                            uri,
-                            mode: LaunchMode.externalApplication,
-                          );
-                        }
-                      },
+                    child: MentionText(
                       text: content,
                       style: TextStyle(
                         fontSize: 15,
                         height: 1.5,
                         color: Theme.of(context).textTheme.bodyLarge?.color,
-                      ),
-                      linkStyle: const TextStyle(
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline,
                       ),
                     ),
                   ),

@@ -7,6 +7,7 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/main.dart'; // For navigatorKey
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 
 
 class PushNotificationService {
@@ -192,8 +193,19 @@ class PushNotificationService {
           );
         }
       }
-    } else if (data['type'] == 'table_join') {
-      final tableId = data['table_id']?.toString();
+    } else if (data['type'] == 'table_join' ||
+        data['type'] == 'join_request' ||
+        data['type'] == 'approved' ||
+        data['type'] == 'declined' ||
+        data['type'] == 'hangout_invite' ||
+        data['type'] == 'follower_hangout' ||
+        data['type'] == 'friend_joined' ||
+        data['type'] == 'event_reminder' ||
+        data['type'] == 'ticket_purchase' ||
+        data['type'] == 'host_status_update') {
+      // All table-related notifications — open map with table detail
+      final tableId =
+          data['table_id']?.toString() ?? data['entity_id']?.toString();
       if (tableId != null) {
         navigatorKey.currentState?.pushAndRemoveUntil(
           MaterialPageRoute(
@@ -204,6 +216,20 @@ class PushNotificationService {
           ),
           (route) => false,
         );
+      }
+    } else if (data['type'] == 'like' || data['type'] == 'comment') {
+      // Social notifications — open the post detail
+      final postId =
+          data['post_id']?.toString() ?? data['entity_id']?.toString();
+      if (postId != null) {
+        final navContext = navigatorKey.currentContext;
+        if (navContext != null) {
+          Navigator.of(navContext).push(
+            MaterialPageRoute(
+              builder: (_) => PostDetailScreen(postId: postId),
+            ),
+          );
+        }
       }
     } else if (data['type'] == 'broadcast') {
       // Admin broadcast notification — route to target screen or default to Feed
@@ -229,6 +255,15 @@ class PushNotificationService {
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (_) => MainNavigationScreen(initialIndex: tabIndex),
+        ),
+        (route) => false,
+      );
+    } else {
+      // Unknown type — fallback to home feed
+      print('⚠️ Unknown notification type: ${data['type']}, opening feed');
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(initialIndex: 0),
         ),
         (route) => false,
       );

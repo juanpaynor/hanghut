@@ -164,6 +164,54 @@ class HostService {
 
     return response;
   }
+
+  /// Deletes an experience and its associated schedules.
+  Future<void> deleteExperience(String tableId) async {
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId == null) throw Exception('Not authenticated');
+
+    // 1. Get experience details for cleanup
+    final experience = await _supabase
+        .from('tables')
+        .select()
+        .eq('id', tableId)
+        .eq('host_id', userId)
+        .single();
+
+    // 2. Delete associated schedules
+    await _supabase
+        .from('experience_schedules')
+        .delete()
+        .eq('table_id', tableId);
+
+    // 3. Delete the experience from tables
+    await _supabase
+        .from('tables')
+        .delete()
+        .eq('id', tableId)
+        .eq('host_id', userId);
+
+    // 4. Cleanup storage images
+    final images = (experience['images'] as List?)?.cast<String>() ?? [];
+    for (final url in images) {
+      try {
+        final uri = Uri.parse(url);
+        final fileName = uri.pathSegments.last;
+        await _supabase.storage.from('experiences').remove([fileName]);
+      } catch (_) {}
+    }
+
+    // 5. Cleanup video if present
+    final videoUrl = experience['video_url'] as String?;
+    if (videoUrl != null) {
+      try {
+        final uri = Uri.parse(videoUrl);
+        final fileName = uri.pathSegments.last;
+        await _supabase.storage.from('experience-videos').remove([fileName]);
+      } catch (_) {}
+    }
+  }
+
   // ─── Schedules ───────────────────────────────────────────────────────────
 
   /// Returns all schedules for a specific experience.

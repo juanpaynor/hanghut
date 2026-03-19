@@ -215,7 +215,7 @@ class _UserListTabState extends State<_UserListTab> {
             backgroundColor: Colors.grey[200],
             backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
             child: avatarUrl == null
-                ? Text(displayName[0].toUpperCase())
+                ? Text(displayName.isNotEmpty ? displayName[0].toUpperCase() : '?')
                 : null,
           ),
           title: Text(displayName),

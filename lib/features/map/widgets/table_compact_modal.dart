@@ -9,6 +9,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
+import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -25,6 +26,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
   bool _isLoading = false;
   Map<String, dynamic>? _membershipStatus;
   bool _isHost = false;
+  bool _isInvited = false;
   List<String> _memberPhotoUrls = [];
   int _totalMembers = 0;
   int _pendingCount = 0;
@@ -133,6 +135,12 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
     _isHost = widget.table['host_id'] == user.id;
 
+    // Check if user was invited
+    final invitedIds = widget.table['invited_user_ids'];
+    if (invitedIds is List && invitedIds.contains(user.id)) {
+      _isInvited = true;
+    }
+
     if (!_isHost) {
       final status = await _memberService.getUserMembershipStatus(
         widget.table['id'],
@@ -167,7 +175,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
     final displayVenue =
         widget.table['location_name'] ?? widget.table['venue_name'];
 
-    final matchScore = widget.matchData != null
+    final matchScore = (widget.matchData != null && widget.matchData!['score'] != null)
         ? (widget.matchData!['score'] * 100).toInt()
         : 0;
 
@@ -547,7 +555,13 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     ),
                   ),
 
-                  const SizedBox(height: 20),
+                  // Friends Going
+                  FriendsGoingRow(
+                    entityType: 'table',
+                    entityId: widget.table['id'],
+                  ),
+
+                  const SizedBox(height: 12),
 
                   // Description
                   if (widget.table['description'] != null &&
@@ -705,15 +719,64 @@ class _TableCompactModalState extends State<TableCompactModal> {
           ],
         );
       } else if (status == 'pending') {
+        if (_isInvited) {
+          // Invited user — show Accept / Decline
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _acceptInvite,
+                  icon: const Icon(Icons.check, size: 20),
+                  label: const Text('Accept'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 52,
+                child: ElevatedButton(
+                  onPressed: _declineInvite,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    foregroundColor: Colors.red,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: const Icon(Icons.close, size: 22),
+                ),
+              ),
+            ],
+          );
+        }
         return ElevatedButton(
           onPressed: _cancelRequest,
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.orange[50], // Very light orange
             foregroundColor: Colors.orange[800],
+            padding: EdgeInsets.zero,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),
             elevation: 0,
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
           ),
           child: const Text('Request Pending'),
         );
@@ -898,6 +961,61 @@ class _TableCompactModalState extends State<TableCompactModal> {
     await _memberService.leaveTable(widget.table['id']);
 
     if (mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<void> _acceptInvite() async {
+    setState(() => _isLoading = true);
+    final result = await _memberService.acceptInvite(widget.table['id']);
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+      if (result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message'] ?? 'You\'re in! 🎉'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Open chat after accepting
+        final venueName =
+            widget.table['venue_name'] ??
+            widget.table['title'] ??
+            widget.table['location_name'] ??
+            'Unknown Venue';
+
+        Navigator.pop(context, true);
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          enableDrag: true,
+          builder: (context) => ChatScreen(
+            channelId: 'table_${widget.table['id']}',
+            tableId: widget.table['id'],
+            tableTitle: venueName,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['message'] ?? 'Failed to accept invite'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _declineInvite() async {
+    setState(() => _isLoading = true);
+    await _memberService.declineInvite(widget.table['id']);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invite declined')),
+      );
       Navigator.pop(context, true);
     }
   }

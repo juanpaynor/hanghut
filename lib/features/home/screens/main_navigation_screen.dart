@@ -166,6 +166,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             _mapScreenKey.currentState?.showStoryDetails(story);
           });
         },
+        onSeeAllHangouts: () {
+          setState(() {
+            _selectedIndex = 1;
+          });
+        },
       ),
       MapScreen(key: _mapScreenKey),
       const ActivityScreen(),
