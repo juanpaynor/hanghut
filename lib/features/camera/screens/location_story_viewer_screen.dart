@@ -5,18 +5,24 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/camera/widgets/story_viewers_sheet.dart';
 
 class LocationStoryViewerScreen extends StatefulWidget {
   final Map<String, dynamic> initialStory;
   final String? clusterId;
+  final List<Map<String, dynamic>>? allUserStories;
+  final int startUserIndex;
 
   const LocationStoryViewerScreen({
     super.key,
     required this.initialStory,
     this.clusterId,
+    this.allUserStories,
+    this.startUserIndex = 0,
   });
 
   @override
@@ -32,6 +38,11 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   bool _isPopping = false;
   bool _isPaused = false;
 
+  // Cross-user navigation
+  List<Map<String, dynamic>> _userQueue = [];
+  int _currentUserIndex = 0;
+  bool _isLoadingNextUser = false;
+
   // Progress animation
   late AnimationController _progressController;
 
@@ -39,6 +50,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   VideoPlayerController? _videoController;
   bool _videoInitialized = false;
   bool _videoError = false;
+
+  // Story viewers tracking
+  final Map<String, int> _viewerCounts = {}; // postId -> count
+  final Set<String> _recordedViews = {}; // postIds we've already recorded
 
   // Timer for image stories
   static const _imageDuration = Duration(seconds: 5);
@@ -48,6 +63,8 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     super.initState();
     _progressController = AnimationController(vsync: this);
     _stories = [widget.initialStory];
+    _userQueue = widget.allUserStories ?? [];
+    _currentUserIndex = widget.startUserIndex;
     _fetchClusterStories();
     AnalyticsService().logScreenView('story_viewer');
   }
@@ -276,13 +293,31 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     final story = _stories[index];
     final postId = story['id'];
 
+    // Stop current playback before modifying the list
+    _progressController.removeStatusListener(_onProgressComplete);
+    _progressController.stop();
+    _videoController?.dispose();
+    _videoController = null;
+
     if (mounted) {
       setState(() {
         _stories.removeAt(index);
         if (_stories.isEmpty) {
           Navigator.pop(context);
+          return;
         }
+        // Adjust index: if we deleted the last story, move back
+        if (_currentIndex >= _stories.length) {
+          _currentIndex = _stories.length - 1;
+        }
+        _videoInitialized = false;
+        _videoError = false;
       });
+
+      // Start playing the next/current story
+      if (_stories.isNotEmpty) {
+        _startCurrentStory();
+      }
     }
 
     try {
@@ -309,8 +344,18 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     _videoError = false;
     _videoInitialized = false;
 
-    final storyId = _stories[_currentIndex]['id']?.toString();
-    if (storyId != null) AnalyticsService().logViewStory(storyId);
+    final story = _stories[_currentIndex];
+    final storyId = story['id']?.toString();
+    if (storyId != null) {
+      AnalyticsService().logViewStory(storyId);
+      _recordView(storyId, story['user_id']);
+    }
+
+    // Fetch viewer count if this is the owner's story
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    if (storyId != null && story['user_id'] == currentUserId) {
+      _fetchViewerCount(storyId);
+    }
 
     if (_isVideo) {
       _startVideoStory();
@@ -319,12 +364,59 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     }
   }
 
+  /// Record that the current user viewed this story (fire-and-forget).
+  /// Skips if viewer is the author or if already recorded this session.
+  void _recordView(String postId, String? authorId) {
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    if (currentUserId == null) return;
+    if (currentUserId == authorId) return; // Don't count self-views
+    if (_recordedViews.contains(postId)) return; // Already recorded this session
+
+    _recordedViews.add(postId);
+
+    // Fire-and-forget upsert
+    Supabase.instance.client
+        .from('story_views')
+        .upsert(
+          {'post_id': postId, 'viewer_id': currentUserId, 'viewed_at': DateTime.now().toUtc().toIso8601String()},
+          onConflict: 'post_id,viewer_id',
+        )
+        .then((_) => debugPrint('👁️ Recorded view for story $postId'))
+        .catchError((e) => debugPrint('⚠️ Failed to record story view: $e'));
+  }
+
+  /// Fetch the viewer count for an owner's story.
+  Future<void> _fetchViewerCount(String postId) async {
+    try {
+      final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+      var query = Supabase.instance.client
+          .from('story_views')
+          .select('id')
+          .eq('post_id', postId);
+
+      if (currentUserId != null) {
+        query = query.neq('viewer_id', currentUserId);
+      }
+
+      final response = await query;
+      final count = (response as List).length;
+      if (mounted) {
+        setState(() {
+          _viewerCounts[postId] = count;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to fetch viewer count: $e');
+    }
+  }
+
   void _startImageStory() {
+    _progressController.removeStatusListener(_onProgressComplete);
     _progressController.stop();
     _progressController.reset();
     _progressController.duration = _imageDuration;
-    _progressController.forward();
     _progressController.addStatusListener(_onProgressComplete);
+    _progressController.forward();
   }
 
   void _startVideoStory() async {
@@ -341,11 +433,12 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       setState(() => _videoInitialized = true);
 
       // Set progress duration to video duration
+      _progressController.removeStatusListener(_onProgressComplete);
       _progressController.stop();
       _progressController.reset();
       _progressController.duration = _videoController!.value.duration;
-      _progressController.forward();
       _progressController.addStatusListener(_onProgressComplete);
+      _progressController.forward();
 
       _videoController!.play();
     } catch (e) {
@@ -354,11 +447,12 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       setState(() => _videoError = true);
 
       // Auto-advance after 3 seconds on error
+      _progressController.removeStatusListener(_onProgressComplete);
       _progressController.stop();
       _progressController.reset();
       _progressController.duration = const Duration(seconds: 3);
-      _progressController.forward();
       _progressController.addStatusListener(_onProgressComplete);
+      _progressController.forward();
     }
   }
 
@@ -371,7 +465,15 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
   void _goNext() {
     if (_currentIndex >= _stories.length - 1) {
-      // Last story — close
+      // Last story for this user — try advancing to next user
+      if (_userQueue.isNotEmpty && _currentUserIndex < _userQueue.length - 1) {
+        _advanceToUser(_currentUserIndex + 1);
+        return;
+      }
+      // No more users — clean up and close
+      _progressController.removeStatusListener(_onProgressComplete);
+      _progressController.stop();
+      _videoController?.pause();
       if (mounted && !_isPopping) {
         _isPopping = true;
         Navigator.pop(context);
@@ -393,7 +495,12 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
   void _goPrevious() {
     if (_currentIndex <= 0) {
-      // Restart current story
+      // First story for this user — try going to previous user
+      if (_userQueue.isNotEmpty && _currentUserIndex > 0) {
+        _advanceToUser(_currentUserIndex - 1, goToLast: true);
+        return;
+      }
+      // No previous user — restart current story
       _progressController.removeStatusListener(_onProgressComplete);
       _videoController?.dispose();
       _videoController = null;
@@ -411,6 +518,99 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       _videoError = false;
     });
     _startCurrentStory();
+  }
+
+  /// Switch to a different user in the queue and fetch their stories.
+  Future<void> _advanceToUser(int newUserIndex, {bool goToLast = false}) async {
+    if (newUserIndex < 0 || newUserIndex >= _userQueue.length) return;
+
+    _progressController.removeStatusListener(_onProgressComplete);
+    _progressController.stop();
+    _videoController?.dispose();
+    _videoController = null;
+
+    setState(() {
+      _currentUserIndex = newUserIndex;
+      _isLoadingNextUser = true;
+      _videoInitialized = false;
+      _videoError = false;
+    });
+
+    final nextUser = _userQueue[newUserIndex];
+    final userId = nextUser['author_id'] as String?;
+
+    if (userId == null) {
+      // Fallback — close
+      if (mounted && !_isPopping) {
+        _isPopping = true;
+        Navigator.pop(context);
+      }
+      return;
+    }
+
+    try {
+      final cutoff = DateTime.now().subtract(const Duration(hours: 24)).toUtc().toIso8601String();
+      final List<dynamic> response = await Supabase.instance.client
+          .from('posts')
+          .select('*, user:user_id(id, display_name, avatar_url, user_photos(photo_url, is_primary))')
+          .eq('is_story', true)
+          .eq('user_id', userId)
+          .gte('created_at', cutoff)
+          .order('created_at', ascending: false);
+
+      final fetched = List<Map<String, dynamic>>.from(response);
+
+      // Enrich avatar from user_photos
+      for (final story in fetched) {
+        final userData = story['user'] as Map?;
+        if (userData != null) {
+          String? avatarUrl = userData['avatar_url'] as String?;
+          if (avatarUrl == null && userData['user_photos'] != null) {
+            final photos = userData['user_photos'] as List;
+            if (photos.isNotEmpty) {
+              final primary = photos.firstWhere(
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              );
+              avatarUrl = primary['photo_url'] as String?;
+            }
+          }
+          story['users'] = {
+            'display_name': userData['display_name'],
+            'avatar_url': avatarUrl,
+          };
+        }
+      }
+
+      if (fetched.isEmpty) {
+        // No stories for this user — skip to next
+        if (goToLast && newUserIndex > 0) {
+          _advanceToUser(newUserIndex - 1, goToLast: true);
+        } else if (!goToLast && newUserIndex < _userQueue.length - 1) {
+          _advanceToUser(newUserIndex + 1);
+        } else if (mounted && !_isPopping) {
+          _isPopping = true;
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _stories = fetched;
+          _currentIndex = goToLast ? fetched.length - 1 : 0;
+          _isLoadingNextUser = false;
+        });
+        await _fetchInteractionsForStories();
+        _startCurrentStory();
+      }
+    } catch (e) {
+      debugPrint('Error advancing to next user: $e');
+      if (mounted && !_isPopping) {
+        _isPopping = true;
+        Navigator.pop(context);
+      }
+    }
   }
 
   void _pause() {
@@ -486,6 +686,11 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
         onVerticalDragUpdate: (details) {
           if (details.delta.dy > 10 && mounted && !_isPopping) {
             _isPopping = true;
+            // Stop everything before popping to prevent _onProgressComplete
+            // from firing a second Navigator.pop (which would kill the FeedScreen).
+            _progressController.removeStatusListener(_onProgressComplete);
+            _progressController.stop();
+            _videoController?.pause();
             Navigator.pop(context);
           }
         },
@@ -536,6 +741,15 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
               alignment: Alignment.bottomCenter,
               child: _buildFooter(),
             ),
+
+            // Loading overlay for user transitions
+            if (_isLoadingNextUser)
+              Container(
+                color: Colors.black54,
+                child: const Center(
+                  child: CircularProgressIndicator(color: Colors.white),
+                ),
+              ),
           ],
         ),
       ),
@@ -565,12 +779,17 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       }
 
       if (_videoInitialized && _videoController != null) {
-        return FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _videoController!.value.size.width,
-            height: _videoController!.value.size.height,
-            child: VideoPlayer(_videoController!),
+        // Guard against 0×0 dimensions (common on Android / certain codecs)
+        final vw = _videoController!.value.size.width;
+        final vh = _videoController!.value.size.height;
+        return SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: vw > 0 ? vw : 1,
+              height: vh > 0 ? vh : 1,
+              child: VideoPlayer(_videoController!),
+            ),
           ),
         );
       }
@@ -589,7 +808,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       }
       return Image.network(
         imageUrl,
-        fit: BoxFit.cover,
+        fit: BoxFit.contain,
         width: double.infinity,
         height: double.infinity,
         loadingBuilder: (context, child, progress) {
@@ -711,7 +930,14 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
           ),
           // Close button
           GestureDetector(
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              if (_isPopping) return;
+              _isPopping = true;
+              _progressController.removeStatusListener(_onProgressComplete);
+              _progressController.stop();
+              _videoController?.pause();
+              Navigator.pop(context);
+            },
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: const BoxDecoration(
@@ -885,6 +1111,48 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
                 const Spacer(),
 
+                // Viewer count (own stories only)
+                if (isOwner) ...[
+                  GestureDetector(
+                    onTap: () {
+                      _pause();
+                      final storyId = story['id']?.toString();
+                      if (storyId == null) return;
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (context) => StoryViewersSheet(
+                          postId: storyId,
+                          initialCount: _viewerCounts[storyId] ?? 0,
+                        ),
+                      ).then((_) {
+                        if (mounted) _resume();
+                      });
+                    },
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.visibility_outlined,
+                          color: Colors.white,
+                          size: 26,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${_viewerCounts[story['id']?.toString()] ?? 0}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                ],
+
                 // Delete button (own stories only)
                 if (isOwner)
                   GestureDetector(
@@ -929,6 +1197,27 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
                     },
                     child: const Icon(
                       Icons.delete_outline,
+                      color: Colors.white70,
+                      size: 26,
+                    ),
+                  ),
+
+                // Report button (other people's stories)
+                if (!isOwner)
+                  GestureDetector(
+                    onTap: () {
+                      _pause();
+                      ReportModal.show(
+                        context,
+                        targetType: 'post',
+                        targetId: story['id']?.toString() ?? '',
+                        targetName: story['user']?['display_name'],
+                      ).then((_) {
+                        if (mounted) _resume();
+                      });
+                    },
+                    child: const Icon(
+                      Icons.flag_outlined,
                       color: Colors.white70,
                       size: 26,
                     ),

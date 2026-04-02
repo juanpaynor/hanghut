@@ -109,6 +109,8 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
         return Colors.blue;
       case 'trip':
         return Colors.purple;
+      case 'group':
+        return Colors.teal;
       default:
         return Theme.of(context).primaryColor; // Table
     }
@@ -278,6 +280,8 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
           channelId = metadata['bucket_id'] ?? 'trip_${chat['chat_id']}';
         } else if (type == 'dm') {
           channelId = 'direct_${chat['chat_id']}';
+        } else if (type == 'group') {
+          channelId = 'group_${chat['chat_id']}';
         } else {
           // Table
           channelId = 'table_${chat['chat_id']}';

@@ -106,7 +106,7 @@ class ProfileParallaxHeader extends StatelessWidget {
                 ),
               ),
 
-            // 2. Gradient Overlay (cinematic bottom fade)
+            // 2. Gradient Overlay (cinematic bottom fade — smoother)
             Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -114,12 +114,13 @@ class ProfileParallaxHeader extends StatelessWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withValues(alpha: 0.15),
-                    Colors.black.withValues(alpha: 0.65),
-                    Colors.black.withValues(alpha: 0.9),
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.08),
+                    Colors.black.withValues(alpha: 0.45),
+                    Colors.black.withValues(alpha: 0.78),
                     Theme.of(context).scaffoldBackgroundColor,
                   ],
-                  stops: const [0.2, 0.45, 0.7, 0.9, 1.0],
+                  stops: const [0.0, 0.3, 0.5, 0.7, 0.85, 1.0],
                 ),
               ),
             ),
@@ -130,7 +131,7 @@ class ProfileParallaxHeader extends StatelessWidget {
               left: 20,
               right: 20,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Character Class Badge — gradient pill (tappable on own profile)
@@ -157,6 +158,11 @@ class ProfileParallaxHeader extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (onBadgeEdit != null)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 5),
+                                child: Icon(Icons.edit, color: Colors.white70, size: 11),
+                              ),
                             Text(
                               characterClass.toUpperCase(),
                               style: const TextStyle(
@@ -175,7 +181,7 @@ class ProfileParallaxHeader extends StatelessWidget {
                       .slideX(begin: -0.2, end: 0),
                   const SizedBox(height: 10),
 
-                  // Display Name — bold white with cleaner shadow
+                  // Display Name — bold, centered
                   Text(
                         displayName,
                         style: TextStyle(
@@ -197,6 +203,7 @@ class ProfileParallaxHeader extends StatelessWidget {
                             ),
                           ],
                         ),
+                        textAlign: TextAlign.center,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       )

@@ -80,7 +80,8 @@ class MapScreenState extends State<MapScreen>
 
   // Isochrone layer state
   bool _showIsochrone = false;
-  int _isochroneMinutes = 10;
+  bool _isTableModalOpen = false;
+  int _isochroneMinutes = 15;
   Timer? _isochronePulseTimer;
   double _isochronePulsePhase = 0.0;
 
@@ -161,16 +162,16 @@ class MapScreenState extends State<MapScreen>
     if (mounted) {
       // Small delay to let camera start flying
       await Future.delayed(const Duration(milliseconds: 300));
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (context) => LocationStoryViewerScreen(
-          initialStory: story,
-          clusterId:
-              story['external_place_id'] ??
-              story['event_id'] ??
-              story['table_id'],
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => LocationStoryViewerScreen(
+            initialStory: story,
+            clusterId:
+                story['external_place_id'] ??
+                story['event_id'] ??
+                story['table_id'],
+          ),
         ),
       );
     }
@@ -206,26 +207,29 @@ class MapScreenState extends State<MapScreen>
         table: table,
       );
 
-      // 4. Pan camera to the table's location
+      // 4. Pan camera to the table's location (offset south so marker sits in top half)
       final lat = (table['location_lat'] ?? table['latitude']) as num?;
       final lng = (table['location_lng'] ?? table['longitude']) as num?;
 
       if (lat != null && lng != null && _mapboxMap != null) {
+        // Shift center south by ~0.003° so the marker lands in the upper quarter
+        // of the screen (bottom half will be covered by the sheet)
+        final offsetLat = lat.toDouble() - 0.0015;
         _mapboxMap?.flyTo(
           CameraOptions(
             center: Point(
-              coordinates: Position(lng.toDouble(), lat.toDouble()),
+              coordinates: Position(lng.toDouble(), offsetLat),
             ),
-            zoom: 16.0,
+          zoom: 17.5,
             pitch: 50.0,
           ),
-          MapAnimationOptions(duration: 1200),
+          MapAnimationOptions(duration: 800),
         );
       }
 
       // 5. Open Modal
       if (mounted) {
-        // Center of screen for morph effect
+        setState(() => _isTableModalOpen = true);
         final size = MediaQuery.of(context).size;
         final center = Offset(size.width / 2, size.height / 2);
 
@@ -234,7 +238,9 @@ class MapScreenState extends State<MapScreen>
             center: center,
             page: TableCompactModal(table: table, matchData: matchData),
           ),
-        );
+        ).then((_) {
+          if (mounted) setState(() => _isTableModalOpen = false);
+        });
       }
     } catch (e) {
       print('❌ Error showing table details: $e');
@@ -503,7 +509,7 @@ class MapScreenState extends State<MapScreen>
           ),
 
           // Active User Count Pill
-          if (_activeUserCount > 0)
+          if (_activeUserCount > 0 && !_isTableModalOpen)
             Positioned(
               top: 60,
               left: 0,
@@ -586,6 +592,7 @@ class MapScreenState extends State<MapScreen>
             ),
 
           // Filter Chips Row
+          if (!_isTableModalOpen)
           Positioned(
             top: 100,
             left: 0,
@@ -628,6 +635,7 @@ class MapScreenState extends State<MapScreen>
           ),
 
           // Map Controls (upper-right)
+          if (!_isTableModalOpen)
           Positioned(
             right: 16,
             top: 180, // Lowered to avoid overlapping filter chips
@@ -690,61 +698,7 @@ class MapScreenState extends State<MapScreen>
             ),
           ),
 
-          // Isochrone Minute Picker Pill
-          if (_showIsochrone)
-            Positioned(
-              right: 16,
-              bottom: 120,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [5, 10, 15].map((mins) {
-                    final isSelected = _isochroneMinutes == mins;
-                    return GestureDetector(
-                      onTap: () {
-                        if (_isochroneMinutes != mins) {
-                          setState(() => _isochroneMinutes = mins);
-                          // Re-fetch with new time
-                          _toggleIsochrone(forceRefresh: true);
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? Colors.indigo
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          '${mins}m',
-                          style: TextStyle(
-                            color: isSelected ? Colors.white : Colors.black87,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
+          // Isochrone is fixed at 15 minutes — no picker needed
 
           // Cloud Transition (Map Only)
           if (_showCloudIntro)
@@ -1082,7 +1036,8 @@ class MapScreenState extends State<MapScreen>
                   index < _mysteryTables.length) {
                 final table = _mysteryTables[index];
                 stackedItems.add({...table, 'type': 'table'}); // Treat as table in sheet
-              } else if (index != null &&
+              } else if ((type == 'table' || type == 'experience') &&
+                  index != null &&
                   index is int &&
                   index < _tables.length) {
                 final table = _tables[index];
@@ -1135,16 +1090,16 @@ class MapScreenState extends State<MapScreen>
             final story = _stories[index];
             if (mounted) {
               print('📸 Opening Location Story Viewer for: ${story['id']}');
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => LocationStoryViewerScreen(
-                  initialStory: story,
-                  clusterId:
-                      story['external_place_id'] ??
-                      story['event_id'] ??
-                      story['table_id'],
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => LocationStoryViewerScreen(
+                    initialStory: story,
+                    clusterId:
+                        story['external_place_id'] ??
+                        story['event_id'] ??
+                        story['table_id'],
+                  ),
                 ),
               );
             }
@@ -1266,16 +1221,16 @@ class MapScreenState extends State<MapScreen>
           final story = _stories[index];
           if (mounted) {
             print('📸 Opening Location Story Viewer for: ${story['id']}');
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (context) => LocationStoryViewerScreen(
-                initialStory: story,
-                clusterId:
-                    story['external_place_id'] ??
-                    story['event_id'] ??
-                    story['table_id'],
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => LocationStoryViewerScreen(
+                  initialStory: story,
+                  clusterId:
+                      story['external_place_id'] ??
+                      story['event_id'] ??
+                      story['table_id'],
+                ),
               ),
             );
           }
@@ -1443,15 +1398,39 @@ class MapScreenState extends State<MapScreen>
     }
 
     print('🚀 Launching TableCompactModal via LiquidMorphRoute');
-    // Calculate center offset from tap position
-    final center = Offset(tapPosition.x, tapPosition.y);
 
+    // Fly the camera to center the marker in the top half of the screen
+    final lat = (table['location_lat'] ?? table['latitude']) as num?;
+    final lng = (table['location_lng'] ?? table['longitude']) as num?;
+
+    if (lat != null && lng != null && _mapboxMap != null) {
+      // Shift center south by ~0.003° so the marker lands in the upper quarter
+      final offsetLat = lat.toDouble() - 0.0015;
+      _mapboxMap?.flyTo(
+        CameraOptions(
+          center: Point(
+            coordinates: Position(lng.toDouble(), offsetLat),
+          ),
+          zoom: 17.5,
+          pitch: 50.0,
+        ),
+        MapAnimationOptions(duration: 800),
+      );
+    }
+
+    // Use screen center for the morph reveal
+    final size = MediaQuery.of(context).size;
+    final center = Offset(size.width / 2, size.height / 2);
+
+    setState(() => _isTableModalOpen = true);
     Navigator.of(context).push(
       LiquidMorphRoute(
         center: center,
         page: TableCompactModal(table: table, matchData: matchData),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() => _isTableModalOpen = false);
+    });
   }
 
   // PHASE 1: Handle cluster tap
@@ -1585,8 +1564,8 @@ class MapScreenState extends State<MapScreen>
         final double zoomDiff = (cameraState.zoom - _lastFetchCameraState!.zoom)
             .abs();
 
-        // Thresholds: 2km or 1.0 zoom level change (increased to reduce DB queries)
-        if (dist < 5000 && zoomDiff < 2.0) {
+        // Thresholds: 10km or 2.0 zoom level change (PostGIS makes refetch cheap, but no need to spam)
+        if (dist < 10000 && zoomDiff < 2.0) {
           print(
             'Skipping fetch: Moved ${dist.toStringAsFixed(0)}m, Zoom diff ${zoomDiff.toStringAsFixed(2)}',
           );
@@ -1948,7 +1927,7 @@ class MapScreenState extends State<MapScreen>
             'icon_id': imageId,
             'description': table['venue_name'],
             'index': i,
-            'type': 'table',
+            'type': table['is_experience'] == true ? 'experience' : 'table',
           },
         });
       }
@@ -3233,7 +3212,8 @@ class MapScreenState extends State<MapScreen>
                   idx < _mysteryTables.length) {
                 final table = _mysteryTables[idx];
                 stackedItems.add({...table, 'type': 'table'});
-              } else if (idx != null && idx < _tables.length) {
+              } else if ((type == 'table' || type == 'experience') &&
+                  idx != null && idx < _tables.length) {
                 final table = _tables[idx];
                 stackedItems.add({...table, 'type': 'table'});
               }
@@ -3282,16 +3262,16 @@ class MapScreenState extends State<MapScreen>
             final story = _stories[index];
             if (mounted) {
               print('📸 Opening Location Story Viewer for: ${story['id']}');
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => LocationStoryViewerScreen(
-                  initialStory: story,
-                  clusterId:
-                      story['external_place_id'] ??
-                      story['event_id'] ??
-                      story['table_id'],
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => LocationStoryViewerScreen(
+                    initialStory: story,
+                    clusterId:
+                        story['external_place_id'] ??
+                        story['event_id'] ??
+                        story['table_id'],
+                  ),
                 ),
               );
             }
@@ -3306,7 +3286,8 @@ class MapScreenState extends State<MapScreen>
             if (mounted) {
               _openTableModal(context, table, matchData, screenCoordinate);
             }
-          } else if (index != null && index < _tables.length) {
+          } else if ((markerType == 'table' || markerType == 'experience') &&
+              index != null && index < _tables.length) {
             final table = _tables[index];
             print('🍽️ Opening table: ${table['title']}');
 

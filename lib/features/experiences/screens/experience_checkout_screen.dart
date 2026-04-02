@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/services/experience_service.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
+import 'package:intl_phone_field/country_picker_dialog.dart';
 
 class ExperienceCheckoutScreen extends StatefulWidget {
   final Map<String, dynamic> experience;
@@ -28,23 +31,48 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
   final _formKey = GlobalKey<FormState>();
 
   final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
+  String _completePhoneNumber = '';
 
   bool _isProcessing = false;
+  bool _subscribedToNewsletter = true;
 
   @override
   void initState() {
     super.initState();
-    // In a real app, pre-fill from Auth Service or User Profile if available locally
-    // _nameController.text = currentUser.name;
-    // _phoneController.text = currentUser.phone;
+    _fetchUserProfile();
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _emailController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  Future<void> _fetchUserProfile() async {
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user != null) {
+      try {
+        _emailController.text = user.email ?? '';
+
+        final data = await SupabaseConfig.client
+            .from('users')
+            .select('display_name')
+            .eq('id', user.id)
+            .single();
+
+        if (mounted) {
+          setState(() {
+            _nameController.text = data['display_name'] ?? '';
+          });
+        }
+      } catch (e) {
+        print('⚠️ Failed to fetch profile: $e');
+      }
+    }
   }
 
   Future<void> _handleConfirmAndPay() async {
@@ -55,7 +83,10 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
     try {
       final guestDetails = {
         'name': _nameController.text.trim(),
-        'phone': _phoneController.text.trim(),
+        'email': _emailController.text.trim(),
+        'phone': _completePhoneNumber.isNotEmpty
+            ? _completePhoneNumber
+            : _phoneController.text.trim(),
       };
 
       final result = await _experienceService.createPaymentIntent(
@@ -63,6 +94,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
         scheduleId: widget.schedule['id'],
         quantity: widget.quantity,
         guestDetails: guestDetails,
+        subscribedToNewsletter: _subscribedToNewsletter,
       );
 
       final paymentUrl = result['payment_url'];
@@ -71,7 +103,6 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
         if (await canLaunchUrl(uri)) {
           await launchUrl(uri, mode: LaunchMode.externalApplication);
           if (mounted) {
-            // Pop back to the details screen, or entirely out
             Navigator.of(context).pop(); // Pops the checkout
             Navigator.of(context).pop(); // Pops the Modal
           }
@@ -136,7 +167,6 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                           widget.experience['images'][0],
                           fit: BoxFit.cover,
                         ),
-                        // Gradient to make the title readable
                         DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
@@ -168,7 +198,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 1. Sleek Summary Text
+                  // 1. Summary
                   Text(
                     widget.experience['title'] ?? 'Experience',
                     style: GoogleFonts.outfit(
@@ -180,18 +210,12 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      Icon(
-                        Icons.calendar_today_outlined,
-                        size: 18,
-                        color: Colors.grey[600],
-                      ),
+                      Icon(Icons.calendar_today_outlined, size: 18, color: Colors.grey[600]),
                       const SizedBox(width: 8),
                       Text(
                         DateFormat('EEEE, MMM d').format(start),
                         style: GoogleFonts.inter(
-                          color: Colors.grey[800],
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                          color: Colors.grey[800], fontSize: 16, fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -199,32 +223,24 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Icon(
-                        Icons.access_time_outlined,
-                        size: 18,
-                        color: Colors.grey[600],
-                      ),
+                      Icon(Icons.access_time_outlined, size: 18, color: Colors.grey[600]),
                       const SizedBox(width: 8),
                       Text(
                         DateFormat('h:mm a').format(start),
                         style: GoogleFonts.inter(
-                          color: Colors.grey[800],
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                          color: Colors.grey[800], fontSize: 16, fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 32),
 
-                  // 2. Primary Guest Details
+                  // 2. Guest Details
                   Text(
                     'GUEST DETAILS',
                     style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[500],
-                      letterSpacing: 1.2,
+                      fontSize: 12, fontWeight: FontWeight.bold,
+                      color: Colors.grey[500], letterSpacing: 1.2,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -244,9 +260,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                             child: Text(
                               'You are booking for ${widget.quantity} guests. We just need the primary contact\'s details.',
                               style: GoogleFonts.inter(
-                                color: Colors.blue[900],
-                                fontSize: 14,
-                                height: 1.4,
+                                color: Colors.blue[900], fontSize: 14, height: 1.4,
                               ),
                             ),
                           ),
@@ -278,71 +292,117 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                               prefixIcon: const Icon(Icons.person_outline),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.grey[300]!,
-                                ),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.grey[300]!,
-                                ),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.deepPurple,
-                                ),
+                                borderSide: const BorderSide(color: Colors.deepPurple),
                               ),
                             ),
-                            validator: (value) => value!.trim().isEmpty
-                                ? 'Name is required'
-                                : null,
+                            validator: (value) =>
+                                value!.trim().isEmpty ? 'Name is required' : null,
                           ),
                           const SizedBox(height: 20),
                           TextFormField(
-                            controller: _phoneController,
-                            keyboardType: TextInputType.phone,
+                            controller: _emailController,
+                            keyboardType: TextInputType.emailAddress,
                             decoration: InputDecoration(
-                              labelText: 'Phone Number',
-                              prefixIcon: const Icon(Icons.phone_outlined),
+                              labelText: 'Email Address',
+                              prefixIcon: const Icon(Icons.email_outlined),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.grey[300]!,
-                                ),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.grey[300]!,
-                                ),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                  color: Colors.deepPurple,
+                                borderSide: const BorderSide(color: Colors.deepPurple),
+                              ),
+                            ),
+                            validator: (value) => value == null
+                                ? 'Required'
+                                : (!value.contains('@') ? 'Invalid email' : null),
+                          ),
+                          const SizedBox(height: 20),
+                          IntlPhoneField(
+                            controller: _phoneController,
+                            decoration: InputDecoration(
+                              labelText: 'Phone Number',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: Colors.grey[300]!),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(color: Colors.deepPurple),
+                              ),
+                            ),
+                            initialCountryCode: 'PH',
+                            dropdownIconPosition: IconPosition.trailing,
+                            flagsButtonPadding: const EdgeInsets.only(left: 8),
+                            dropdownTextStyle: const TextStyle(fontSize: 16),
+                            pickerDialogStyle: PickerDialogStyle(
+                              backgroundColor: Colors.white,
+                              countryCodeStyle: const TextStyle(color: Colors.black54),
+                              countryNameStyle: const TextStyle(
+                                color: Colors.black87, fontSize: 16,
+                              ),
+                              searchFieldInputDecoration: InputDecoration(
+                                hintText: 'Search country',
+                                hintStyle: const TextStyle(color: Colors.black38),
+                                prefixIcon: const Icon(Icons.search, color: Colors.black54),
+                                filled: true,
+                                fillColor: Colors.grey[100],
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none,
                                 ),
                               ),
                             ),
-                            validator: (value) => value!.trim().isEmpty
-                                ? 'Phone is required for updates'
-                                : null,
+                            onChanged: (phone) {
+                              _completePhoneNumber = phone.completeNumber;
+                            },
                           ),
                         ],
                       ),
                     ),
                   ),
+
+                  const SizedBox(height: 16),
+
+                  // --- NEWSLETTER OPT-IN ---
+                  CheckboxListTile(
+                    value: _subscribedToNewsletter,
+                    onChanged: (val) => setState(() => _subscribedToNewsletter = val ?? true),
+                    title: Text(
+                      'Subscribe to updates from this organizer',
+                      style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[800]),
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    activeColor: Colors.deepPurple,
+                  ),
+
                   const SizedBox(height: 40),
 
                   // 3. Price Breakdown
                   Text(
                     'PRICE BREAKDOWN',
                     style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[500],
-                      letterSpacing: 1.2,
+                      fontSize: 12, fontWeight: FontWeight.bold,
+                      color: Colors.grey[500], letterSpacing: 1.2,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -366,17 +426,12 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                           children: [
                             Text(
                               '$currency ${widget.unitPrice.toStringAsFixed(0)} x ${widget.quantity} guests',
-                              style: GoogleFonts.inter(
-                                color: Colors.grey[600],
-                                fontSize: 16,
-                              ),
+                              style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 16),
                             ),
                             Text(
                               '$currency ${total.toStringAsFixed(0)}',
                               style: GoogleFonts.inter(
-                                color: Colors.grey[800],
-                                fontWeight: FontWeight.w600,
-                                fontSize: 16,
+                                color: Colors.grey[800], fontWeight: FontWeight.w600, fontSize: 16,
                               ),
                             ),
                           ],
@@ -391,17 +446,13 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                             Text(
                               'Total (PHP)',
                               style: GoogleFonts.outfit(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                                color: Colors.black87,
+                                fontWeight: FontWeight.bold, fontSize: 18, color: Colors.black87,
                               ),
                             ),
                             Text(
                               '$currency ${total.toStringAsFixed(0)}',
                               style: GoogleFonts.outfit(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 24,
-                                color: Colors.black87,
+                                fontWeight: FontWeight.bold, fontSize: 24, color: Colors.black87,
                               ),
                             ),
                           ],
@@ -436,19 +487,13 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
             ),
             child: _isProcessing
                 ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
+                    height: 20, width: 20,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                   )
                 : Text(
                     'Confirm and Pay',
                     style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                      fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white,
                     ),
                   ),
           ),

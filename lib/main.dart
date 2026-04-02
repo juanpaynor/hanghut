@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -81,6 +82,19 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Ensure the app renders behind system bars and accounts for their insets.
+  // On Android 15+ edge-to-edge is enforced; this makes the nav bar
+  // transparent so Flutter's MediaQuery.padding reports the correct bottom
+  // inset and SafeArea / BottomNavigationBar work out of the box.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.dark,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.dark,
+    systemNavigationBarContrastEnforced: false,
+  ));
 
   // Initialize Workmanager
   Workmanager().initialize(

@@ -7,6 +7,7 @@ import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
@@ -299,6 +300,32 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 child: const Padding(
                   padding: EdgeInsets.all(8.0),
                   child: Icon(Icons.share, color: Colors.black87, size: 20),
+                ),
+              ),
+            ),
+          ),
+
+          // Report Button (next to share)
+          Positioned(
+            top: 12,
+            left: 56,
+            child: Material(
+              color: Colors.white,
+              elevation: 2,
+              shape: const CircleBorder(),
+              child: InkWell(
+                onTap: () {
+                  ReportModal.show(
+                    context,
+                    targetType: 'post',
+                    targetId: widget.event.id,
+                    targetName: widget.event.title,
+                  );
+                },
+                customBorder: const CircleBorder(),
+                child: const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Icon(Icons.flag_outlined, color: Colors.grey, size: 20),
                 ),
               ),
             ),

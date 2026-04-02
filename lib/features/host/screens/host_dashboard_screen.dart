@@ -8,6 +8,7 @@ import 'package:bitemates/features/host/screens/host_booking_detail_screen.dart'
 import 'package:bitemates/features/host/screens/bank_accounts_screen.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class HostDashboardScreen extends StatefulWidget {
   final Map<String, dynamic> partner;
@@ -1469,16 +1470,223 @@ class _EarningsTab extends StatefulWidget {
 class _EarningsTabState extends State<_EarningsTab> {
   late Future<Map<String, dynamic>> _earningsFuture;
 
+  // Pagination state for payouts
+  final List<Map<String, dynamic>> _payouts = [];
+  bool _payoutsLoading = true;
+  bool _payoutsHasMore = true;
+  static const int _pageSize = 20;
+
+  // Pagination state for transactions
+  final List<Map<String, dynamic>> _transactions = [];
+  bool _transactionsLoading = true;
+  bool _transactionsHasMore = true;
+
+  // Wallet state
+  Map<String, dynamic>? _walletInfo;
+  bool _walletLoading = true;
+
   @override
   void initState() {
     super.initState();
     _earningsFuture = widget.hostService.getEarningsSummary(widget.partnerId);
+    _loadPayouts();
+    _loadTransactions();
+    _loadWalletInfo();
+  }
+
+  Future<void> _loadWalletInfo() async {
+    try {
+      // Fetch both: lightweight DB info (KYC status) + real Xendit balance
+      final results = await Future.wait([
+        widget.hostService.getWalletInfo(widget.partnerId),
+        widget.hostService.getSubaccountBalance(widget.partnerId).catchError((_) => <String, dynamic>{}),
+      ]);
+
+      final dbInfo = results[0];
+      final balanceInfo = results[1];
+
+      if (mounted) {
+        setState(() {
+          _walletInfo = {
+            ...dbInfo,
+            ...balanceInfo,
+          };
+          _walletLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _walletLoading = false);
+    }
   }
 
   void _refreshEarnings() {
     setState(() {
       _earningsFuture = widget.hostService.getEarningsSummary(widget.partnerId);
+      _payouts.clear();
+      _payoutsHasMore = true;
+      _transactions.clear();
+      _transactionsHasMore = true;
+      _walletLoading = true;
     });
+    _loadPayouts();
+    _loadTransactions();
+    _loadWalletInfo();
+  }
+
+  Future<void> _loadPayouts() async {
+    if (!_payoutsHasMore) return;
+    setState(() => _payoutsLoading = true);
+    try {
+      final results = await widget.hostService.getPayoutHistory(
+        widget.partnerId,
+        offset: _payouts.length,
+        limit: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _payouts.addAll(results);
+        _payoutsHasMore = results.length >= _pageSize;
+        _payoutsLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _payoutsLoading = false);
+    }
+  }
+
+  Future<void> _loadTransactions() async {
+    if (!_transactionsHasMore) return;
+    setState(() => _transactionsLoading = true);
+    try {
+      final results = await widget.hostService.getTransactionHistory(
+        widget.partnerId,
+        offset: _transactions.length,
+        limit: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _transactions.addAll(results);
+        _transactionsHasMore = results.length >= _pageSize;
+        _transactionsLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _transactionsLoading = false);
+    }
+  }
+
+  void _showTransactionDetail(BuildContext context, Map<String, dynamic> tx) {
+    final title = tx['title'] as String? ?? 'Transaction';
+    final amount = (tx['amount'] as num?)?.toDouble() ?? 0;
+    final grossAmount = (tx['gross_amount'] as num?)?.toDouble() ?? 0;
+    final platformFee = (tx['platform_fee'] as num?)?.toDouble() ?? 0;
+    final status = tx['status'] as String? ?? 'completed';
+    final type = tx['type'] as String? ?? 'experience';
+    final createdAt =
+        DateTime.tryParse(tx['created_at'] ?? '') ?? DateTime.now();
+    final intentId = tx['intent_id'] as String?;
+    final isRefund = status == 'refunded' || amount < 0;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Icon + status header
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: isRefund ? Colors.red[50] : Colors.green[50],
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(
+                isRefund
+                    ? Icons.undo_rounded
+                    : (type == 'experience'
+                        ? Icons.explore_outlined
+                        : Icons.event_outlined),
+                size: 28,
+                color: isRefund ? Colors.red[600] : Colors.green[600],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              isRefund ? 'Refund' : 'Earning',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isRefund ? Colors.red[600] : Colors.green[700],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${isRefund ? '-' : '+'}₱${amount.abs().toStringAsFixed(2)}',
+              style: GoogleFonts.inter(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: isRefund ? Colors.red[700] : Colors.green[800],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Details
+            _DetailRow(label: type == 'experience' ? 'Experience' : 'Event', value: title),
+            _DetailRow(
+              label: 'Date',
+              value: DateFormat('MMM d, yyyy · h:mm a').format(createdAt),
+            ),
+            _DetailRow(
+              label: 'Gross Amount',
+              value: '₱${grossAmount.abs().toStringAsFixed(2)}',
+            ),
+            if (!isRefund)
+              _DetailRow(
+                label: 'Platform Fee',
+                value: '-₱${platformFee.abs().toStringAsFixed(2)}',
+              ),
+            _DetailRow(
+              label: isRefund ? 'Refunded' : 'Net Payout',
+              value: '₱${amount.abs().toStringAsFixed(2)}',
+              isBold: true,
+            ),
+            if (intentId != null)
+              _DetailRow(
+                label: 'Reference',
+                value: intentId.length > 12
+                    ? '${intentId.substring(0, 12)}…'
+                    : intentId,
+              ),
+            const SizedBox(height: 20),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1569,7 +1777,13 @@ class _EarningsTabState extends State<_EarningsTab> {
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
+
+              // ═══ Xendit Wallet Card ═══
+              if (!_walletLoading && _walletInfo != null && _walletInfo!['xendit_account_id'] != null)
+                _buildWalletCard(),
+
+              const SizedBox(height: 16),
 
               // Request payout button
               SizedBox(
@@ -1611,28 +1825,81 @@ class _EarningsTabState extends State<_EarningsTab> {
                 ),
               ),
               const SizedBox(height: 12),
-              FutureBuilder<List<Map<String, dynamic>>>(
-                future: widget.hostService.getPayoutHistory(widget.partnerId),
-                builder: (context, payoutSnapshot) {
-                  final payouts = payoutSnapshot.data ?? [];
-                  if (payouts.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'No payouts yet',
-                          style: GoogleFonts.inter(color: Colors.grey[400]),
-                        ),
+              if (_payouts.isEmpty && !_payoutsLoading)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'No payouts yet',
+                      style: GoogleFonts.inter(color: Colors.grey[400]),
+                    ),
+                  ),
+                )
+              else ...[
+                ...List.generate(_payouts.length, (i) =>
+                  _PayoutHistoryItem(payout: _payouts[i]),
+                ),
+                if (_payoutsLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else if (_payoutsHasMore)
+                  Center(
+                    child: TextButton(
+                      onPressed: _loadPayouts,
+                      child: Text(
+                        'Load More',
+                        style: GoogleFonts.inter(fontWeight: FontWeight.w600),
                       ),
-                    );
-                  }
-                  return Column(
-                    children: payouts
-                        .map((p) => _PayoutHistoryItem(payout: p))
-                        .toList(),
-                  );
-                },
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 28),
+
+              // Transaction history
+              Text(
+                'Transaction History',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                  color: Colors.black87,
+                ),
               ),
+              const SizedBox(height: 12),
+              if (_transactions.isEmpty && !_transactionsLoading)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'No transactions yet',
+                      style: GoogleFonts.inter(color: Colors.grey[400]),
+                    ),
+                  ),
+                )
+              else ...[
+                ...List.generate(_transactions.length, (i) =>
+                  GestureDetector(
+                    onTap: () => _showTransactionDetail(context, _transactions[i]),
+                    child: _TransactionHistoryItem(transaction: _transactions[i]),
+                  ),
+                ),
+                if (_transactionsLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else if (_transactionsHasMore)
+                  Center(
+                    child: TextButton(
+                      onPressed: _loadTransactions,
+                      child: Text(
+                        'Load More',
+                        style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+              ],
             ],
           ),
         );
@@ -1780,6 +2047,397 @@ class _EarningsTabState extends State<_EarningsTab> {
       ),
     );
   }
+
+  Widget _buildWalletCard() {
+    final accountId = _walletInfo!['xendit_account_id'] as String;
+    final receivable = (_walletInfo!['platform_fee_receivable'] as num?)?.toDouble() ?? 0.0;
+    final kycStatus = _walletInfo!['kyc_status'] as String? ?? 'not_started';
+    final availableWallet = (_walletInfo!['available_balance'] as num?)?.toDouble() ?? 0.0;
+    final pendingSettlement = (_walletInfo!['pending_settlement'] as num?)?.toDouble() ?? 0.0;
+
+    Color kycColor;
+    String kycLabel;
+    IconData kycIcon;
+    switch (kycStatus) {
+      case 'verified':
+        kycColor = Colors.green;
+        kycLabel = 'Verified';
+        kycIcon = Icons.verified;
+        break;
+      case 'submitted':
+        kycColor = Colors.orange;
+        kycLabel = 'Pending Review';
+        kycIcon = Icons.hourglass_top;
+        break;
+      default:
+        kycColor = Colors.grey;
+        kycLabel = 'Not Started';
+        kycIcon = Icons.info_outline;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.account_balance_wallet, color: Colors.blue[700], size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Xendit Wallet',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    Text(
+                      accountId.length > 20 ? '${accountId.substring(0, 20)}...' : accountId,
+                      style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500]),
+                    ),
+                  ],
+                ),
+              ),
+              // KYC Badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: kycColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(kycIcon, size: 13, color: kycColor),
+                    const SizedBox(width: 4),
+                    Text(
+                      kycLabel,
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: kycColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          // Wallet Balance
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Available',
+                      style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500]),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '₱${availableWallet.toStringAsFixed(2)}',
+                      style: GoogleFonts.inter(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (pendingSettlement > 0)
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Pending Settlement',
+                        style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500]),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '₱${pendingSettlement.toStringAsFixed(2)}',
+                        style: GoogleFonts.inter(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.orange[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+
+          // Platform Fee Receivable
+          if (receivable > 0) ...[
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber[50],
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber[200]!),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.amber[800], size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Outstanding platform fee: ₱${receivable.toStringAsFixed(2)}',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.amber[900],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 16),
+
+          // Top-up button
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _showTopUpSheet(context),
+              icon: const Icon(Icons.add_circle_outline, size: 18),
+              label: Text(
+                'Top Up Wallet',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                side: BorderSide(color: Colors.blue[400]!),
+                foregroundColor: Colors.blue[700],
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTopUpSheet(BuildContext context) {
+    final presets = [500.0, 1000.0, 5000.0, 10000.0];
+    double? selectedAmount;
+    final customController = TextEditingController();
+    bool isProcessing = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: EdgeInsets.fromLTRB(
+              24, 16, 24,
+              MediaQuery.of(ctx).viewInsets.bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Handle
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Top Up Wallet',
+                  style: GoogleFonts.inter(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Funds go directly to your sub-wallet for covering refunds and fees.',
+                  style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 20),
+
+                // Preset amounts
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: presets.map((amt) {
+                    final isSelected = selectedAmount == amt;
+                    return ChoiceChip(
+                      label: Text(
+                        '₱${amt.toStringAsFixed(0)}',
+                        style: GoogleFonts.inter(
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      selected: isSelected,
+                      selectedColor: AppTheme.primaryColor,
+                      backgroundColor: Colors.grey[100],
+                      onSelected: (_) {
+                        setSheetState(() {
+                          selectedAmount = amt;
+                          customController.clear();
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 16),
+
+                // Custom amount
+                TextField(
+                  controller: customController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Or enter custom amount',
+                    prefixText: '₱ ',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  ),
+                  onChanged: (val) {
+                    final parsed = double.tryParse(val);
+                    if (parsed != null) {
+                      setSheetState(() => selectedAmount = parsed);
+                    }
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                // Confirm
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: (selectedAmount == null || selectedAmount! < 100 || isProcessing)
+                        ? null
+                        : () async {
+                            setSheetState(() => isProcessing = true);
+                            try {
+                              final result = await widget.hostService.topUpWallet(
+                                partnerId: widget.partnerId,
+                                amount: selectedAmount!,
+                              );
+                              if (!ctx.mounted) return;
+                              Navigator.pop(ctx);
+
+                              final paymentUrl = result['payment_url'] as String?;
+                              if (paymentUrl != null) {
+                                final uri = Uri.parse(paymentUrl);
+                                if (await canLaunchUrl(uri)) {
+                                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                }
+                              }
+
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Top-up link created for ₱${selectedAmount!.toStringAsFixed(0)}'),
+                                    backgroundColor: Colors.green[700],
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              setSheetState(() => isProcessing = false);
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed: $e'),
+                                    backgroundColor: Colors.red[700],
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryColor,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: isProcessing
+                        ? const SizedBox(
+                            width: 20, height: 20,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                        : Text(
+                            selectedAmount != null
+                                ? 'Top Up ₱${selectedAmount!.toStringAsFixed(0)}'
+                                : 'Select an amount',
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                  ),
+                ),
+                if (selectedAmount != null && selectedAmount! < 100)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Minimum top-up amount is ₱100',
+                      style: GoogleFonts.inter(fontSize: 12, color: Colors.red[600]),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _EarningsStat extends StatelessWidget {
@@ -1883,6 +2541,161 @@ class _PayoutHistoryItem extends StatelessWidget {
                 fontWeight: FontWeight.w700,
                 color: statusColor,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TransactionHistoryItem extends StatelessWidget {
+  final Map<String, dynamic> transaction;
+
+  const _TransactionHistoryItem({required this.transaction});
+
+  @override
+  Widget build(BuildContext context) {
+    final title = transaction['title'] as String? ?? 'Transaction';
+    final amount = (transaction['amount'] as num?)?.toDouble() ?? 0;
+    final status = transaction['status'] as String? ?? 'completed';
+    final type = transaction['type'] as String? ?? 'experience';
+    final createdAt =
+        DateTime.tryParse(transaction['created_at'] ?? '') ?? DateTime.now();
+
+    final isRefund = status == 'refunded' || amount < 0;
+    final displayAmount = amount.abs();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isRefund
+              ? Colors.red.withOpacity(0.2)
+              : Colors.grey[200]!,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: isRefund
+                  ? Colors.red[50]
+                  : Colors.green[50],
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              isRefund
+                  ? Icons.undo_rounded
+                  : (type == 'experience'
+                      ? Icons.explore_outlined
+                      : Icons.event_outlined),
+              size: 18,
+              color: isRefund ? Colors.red[600] : Colors.green[600],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  DateFormat('MMM d, yyyy · h:mm a').format(createdAt),
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${isRefund ? '-' : '+'}₱${displayAmount.toStringAsFixed(2)}',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: isRefund ? Colors.red[600] : Colors.green[700],
+                ),
+              ),
+              const SizedBox(height: 2),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isRefund
+                      ? Colors.red[50]
+                      : Colors.green[50],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  isRefund ? 'REFUND' : type.toUpperCase(),
+                  style: GoogleFonts.inter(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: isRefund ? Colors.red[600] : Colors.green[700],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool isBold;
+
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.isBold = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: Colors.grey[600],
+            ),
+          ),
+          Flexible(
+            child: Text(
+              value,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+                color: Colors.black87,
+              ),
+              textAlign: TextAlign.end,
             ),
           ),
         ],

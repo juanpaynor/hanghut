@@ -1,8 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/home/widgets/mention_overlay.dart';
+import 'package:bitemates/features/home/widgets/mention_text.dart';
+import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 
 class CommentsBottomSheet extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -17,6 +25,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   final TextEditingController _commentController = TextEditingController();
   final FocusNode _inputFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
+  final ImagePicker _imagePicker = ImagePicker();
   List<Map<String, dynamic>> _comments = [];
   bool _isLoading = true;
   bool _isPosting = false;
@@ -27,6 +36,14 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   // Reply state
   String? _replyingToId;
   String? _replyingToName;
+
+  // Media attachment state
+  File? _selectedImage;
+  String? _selectedGifUrl;
+
+  // Mention state
+  bool _showMentionOverlay = false;
+  String? _mentionQuery;
 
   // Expand/collapse state for reply threads
   final Set<String> _expandedThreads = {};
@@ -46,10 +63,12 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     super.initState();
     _loadComments();
     _scrollController.addListener(_onScroll);
+    _commentController.addListener(_onTextChanged);
   }
 
   @override
   void dispose() {
+    _commentController.removeListener(_onTextChanged);
     _commentController.dispose();
     _inputFocusNode.dispose();
     _scrollController.dispose();
@@ -128,7 +147,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
   Future<void> _postComment() async {
     final text = _commentController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _selectedImage == null && _selectedGifUrl == null) return;
 
     setState(() => _isPosting = true);
 
@@ -136,15 +155,28 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       final postId = widget.post['id']?.toString();
       if (postId == null || postId.isEmpty) return;
 
+      // Resolve @mentions to UUIDs
+      List<String>? mentionedUserIds;
+      final mentionRegex = RegExp(r'@([a-zA-Z0-9_]+)');
+      final usernames = mentionRegex.allMatches(text).map((m) => m.group(1)!).toSet().toList();
+      if (usernames.isNotEmpty) {
+        final usernameToId = await SocialService().resolveUsernames(usernames);
+        mentionedUserIds = usernameToId.values.toList();
+      }
+
       final comment = await SocialService().addComment(
         postId: postId,
         content: text,
         parentId: _replyingToId,
+        imageFile: _selectedImage,
+        gifUrl: _selectedGifUrl,
+        mentionedUserIds: mentionedUserIds,
       );
 
       if (comment != null && mounted) {
         _commentController.clear();
         _clearReplyState();
+        _clearMedia();
         // If posting a reply, auto-expand that thread
         if (comment['parent_id'] != null) {
           _expandedThreads.add(comment['parent_id']);
@@ -156,6 +188,102 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     } finally {
       if (mounted) setState(() => _isPosting = false);
     }
+  }
+
+  // --- Mention Detection ---
+
+  void _onTextChanged() {
+    final text = _commentController.text;
+    final cursorPos = _commentController.selection.baseOffset;
+    if (cursorPos < 0 || cursorPos > text.length) {
+      _hideMentionOverlay();
+      return;
+    }
+
+    final beforeCursor = text.substring(0, cursorPos);
+    final mentionMatch = RegExp(r'@([a-zA-Z0-9_]*)$').firstMatch(beforeCursor);
+
+    if (mentionMatch != null) {
+      final query = mentionMatch.group(1) ?? '';
+      setState(() {
+        _showMentionOverlay = true;
+        _mentionQuery = query;
+      });
+    } else {
+      _hideMentionOverlay();
+    }
+  }
+
+  void _hideMentionOverlay() {
+    if (_showMentionOverlay) {
+      setState(() {
+        _showMentionOverlay = false;
+        _mentionQuery = null;
+      });
+    }
+  }
+
+  void _onMentionSelected(Map<String, dynamic> user) {
+    final username = user['username'] as String? ?? '';
+    if (username.isEmpty) return;
+
+    final text = _commentController.text;
+    final cursorPos = _commentController.selection.baseOffset;
+    final beforeCursor = text.substring(0, cursorPos);
+    final atIndex = beforeCursor.lastIndexOf('@');
+    if (atIndex < 0) return;
+
+    final afterCursor = text.substring(cursorPos);
+    final newText = '${text.substring(0, atIndex)}@$username $afterCursor';
+    _commentController.text = newText;
+    final newCursorPos = atIndex + username.length + 2;
+    _commentController.selection = TextSelection.collapsed(offset: newCursorPos);
+    _hideMentionOverlay();
+  }
+
+  // --- Media Pickers ---
+
+  Future<void> _pickImage() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+      if (image != null && mounted) {
+        setState(() {
+          _selectedImage = File(image.path);
+          _selectedGifUrl = null; // Mutually exclusive
+        });
+      }
+    } catch (e) {
+      debugPrint('Error picking image: $e');
+    }
+  }
+
+  Future<void> _pickGif() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => TenorGifPicker(
+        onGifSelected: (gifUrl) {
+          setState(() {
+            _selectedGifUrl = gifUrl;
+            _selectedImage = null; // Mutually exclusive
+          });
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
+
+  void _clearMedia() {
+    setState(() {
+      _selectedImage = null;
+      _selectedGifUrl = null;
+    });
   }
 
   Future<void> _toggleLike(String commentId) async {
@@ -541,10 +669,74 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                           ),
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          comment['content'] ?? '',
-                          style: const TextStyle(fontSize: 14, height: 1.3),
+                        MentionText(
+                          text: comment['content'] ?? '',
+                          style: TextStyle(
+                            fontSize: 14,
+                            height: 1.3,
+                            color: Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black,
+                          ),
                         ),
+                        // Attached image
+                        if (comment['image_url'] != null && (comment['image_url'] as String).isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => FullScreenImageViewer(
+                                    imageUrl: comment['image_url'],
+                                  ),
+                                ),
+                              );
+                            },
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: CachedNetworkImage(
+                                imageUrl: comment['image_url'],
+                                maxHeightDiskCache: 400,
+                                fit: BoxFit.cover,
+                                placeholder: (context, url) => Container(
+                                  height: 120,
+                                  color: Colors.grey[200],
+                                  child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                                ),
+                                errorWidget: (context, url, error) => Container(
+                                  height: 60,
+                                  color: Colors.grey[100],
+                                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        // Attached GIF
+                        if (comment['gif_url'] != null && (comment['gif_url'] as String).isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.network(
+                              comment['gif_url'],
+                              fit: BoxFit.cover,
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return Container(
+                                  height: 100,
+                                  color: Colors.grey[200],
+                                  child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                                );
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  height: 60,
+                                  color: Colors.grey[100],
+                                  child: const Icon(Icons.gif_box_outlined, color: Colors.grey),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -731,15 +923,42 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
   // --- Input Area with Reply Banner ---
 
+  String? _currentUserAvatarUrl;
+
   Widget _buildInputArea() {
-    final currentUser = SupabaseConfig.client.auth.currentUser;
-    final userMetadata = currentUser?.userMetadata;
-    final avatarUrl = userMetadata?['avatar_url'];
+    // Fetch current user avatar from user_photos if not cached
+    if (_currentUserAvatarUrl == null) {
+      final userId = SupabaseConfig.client.auth.currentUser?.id;
+      if (userId != null) {
+        SupabaseConfig.client
+            .from('user_photos')
+            .select('photo_url')
+            .eq('user_id', userId)
+            .eq('is_primary', true)
+            .limit(1)
+            .then((res) {
+          if (res.isNotEmpty && mounted) {
+            setState(() {
+              _currentUserAvatarUrl = res[0]['photo_url'] as String?;
+            });
+          }
+        }).catchError((_) {});
+      }
+    }
+    final avatarUrl = _currentUserAvatarUrl;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasMedia = _selectedImage != null || _selectedGifUrl != null;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Mention overlay (positioned above input)
+        if (_showMentionOverlay && _mentionQuery != null)
+          MentionOverlay(
+            query: _mentionQuery!,
+            onUserSelected: _onMentionSelected,
+          ),
+
         // Reply-to banner
         if (_replyingToId != null)
           Container(
@@ -769,13 +988,91 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             ),
           ),
 
-        // Input
+        // Media preview strip
+        if (hasMedia)
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            color: isDark ? Colors.grey[900] : Colors.grey[50],
+            child: Row(
+              children: [
+                // Image preview
+                if (_selectedImage != null)
+                  Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(
+                          _selectedImage!,
+                          width: 60,
+                          height: 60,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: -4,
+                        right: -4,
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedImage = null),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                // GIF preview
+                if (_selectedGifUrl != null)
+                  Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          _selectedGifUrl!,
+                          width: 80,
+                          height: 60,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: -4,
+                        right: -4,
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedGifUrl = null),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                const Spacer(),
+                Text(
+                  _selectedImage != null ? '📷 Image' : '🎞️ GIF',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+              ],
+            ),
+          ),
+
+        // Input row with action buttons
         Container(
           padding: EdgeInsets.fromLTRB(
-            16,
             12,
-            16,
-            12 + MediaQuery.of(context).viewInsets.bottom,
+            8,
+            12,
+            8 + MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom,
           ),
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,
@@ -787,6 +1084,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
           ),
           child: Row(
             children: [
+              // Avatar
               CircleAvatar(
                 radius: 16,
                 backgroundColor: isDark ? Colors.grey[700] : Colors.grey[300],
@@ -801,7 +1099,38 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                       )
                     : null,
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
+
+              // Action buttons (image, GIF)
+              GestureDetector(
+                onTap: _selectedImage == null ? _pickImage : null,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.image_outlined,
+                    size: 22,
+                    color: _selectedImage != null
+                        ? Theme.of(context).primaryColor
+                        : Colors.grey[500],
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: _selectedGifUrl == null ? _pickGif : null,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.gif_box_outlined,
+                    size: 22,
+                    color: _selectedGifUrl != null
+                        ? Colors.orange[600]
+                        : Colors.grey[500],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+
+              // Text field
               Expanded(
                 child: TextField(
                   controller: _commentController,
@@ -832,6 +1161,8 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 ),
               ),
               const SizedBox(width: 8),
+
+              // Send button
               GestureDetector(
                 onTap: _isPosting ? null : _postComment,
                 child: Container(
@@ -840,7 +1171,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                     color: _isPosting ? Colors.grey[300] : Colors.blue,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
+                  child: const Icon(
                     Icons.arrow_upward,
                     color: Colors.white,
                     size: 20,

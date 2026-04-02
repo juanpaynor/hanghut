@@ -606,11 +606,8 @@ class _CreateTableModalState extends State<CreateTableModal> {
       final title = '${_userName ?? "Someone"} wants to $activity';
       final description = _descriptionController.text.trim(); // NEW
 
-      // Auto-GIF: If user didn't pick an image, search Tenor based on activity
+      // Only use GIF if user explicitly selected one (no auto-GIF fallback)
       String? finalImageUrl = _selectedGifUrl;
-      if (finalImageUrl == null || finalImageUrl.isEmpty) {
-        finalImageUrl = await _getAutoGifUrl(activity);
-      }
 
       await _tableService.createTable(
         latitude: _venueLat!,

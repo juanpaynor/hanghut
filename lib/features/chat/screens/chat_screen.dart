@@ -22,13 +22,14 @@ import 'package:bitemates/features/chat/widgets/chat_input_bar.dart';
 import 'package:bitemates/features/chat/widgets/chat_message_list.dart';
 import 'package:bitemates/features/chat/screens/chat_info_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
   final String tableTitle;
   final String channelId;
-  final String chatType; // 'table' or 'trip'
+  final String chatType; // 'table', 'trip', 'dm', or 'group'
 
   const ChatScreen({
     super.key,
@@ -125,6 +126,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             .update({'last_read_at': now})
             .eq('chat_id', widget.tableId)
             .eq('user_id', _currentUserId!);
+      } else if (widget.chatType == 'group') {
+        await SupabaseConfig.client
+            .from('group_members')
+            .update({'last_read_at': now})
+            .eq('group_id', widget.tableId)
+            .eq('user_id', _currentUserId!);
       } else {
         await SupabaseConfig.client
             .from('table_members')
@@ -173,6 +180,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _isHost = false;
       });
+      return;
+    }
+
+    if (widget.chatType == 'group') {
+      try {
+        final group = await SupabaseConfig.client
+            .from('groups')
+            .select('created_by')
+            .eq('id', widget.tableId)
+            .single();
+        setState(() {
+          _isHost = group['created_by'] == _currentUserId;
+        });
+      } catch (e) {
+        print('❌ CHAT: Error checking group owner status - $e');
+      }
       return;
     }
 
@@ -274,6 +297,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
 
+    if (widget.chatType == 'group') {
+      SupabaseConfig.client
+          .channel('group_members:${widget.tableId}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'group_members',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'group_id',
+              value: widget.tableId,
+            ),
+            callback: (payload) {
+              _loadParticipants();
+            },
+          )
+          .subscribe();
+      return;
+    }
+
     SupabaseConfig.client
         .channel('table_participants:${widget.tableId}')
         .onPostgresChanges(
@@ -308,21 +351,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _loadParticipants() async {
     try {
-      final query = widget.chatType == 'trip'
-          ? SupabaseConfig.client
-                .from('trip_chat_participants')
-                .select('user_id')
-                .eq('chat_id', widget.tableId)
-          : (widget.chatType == 'dm' || widget.chatType == 'direct')
-          ? SupabaseConfig.client
-                .from('direct_chat_participants')
-                .select('user_id')
-                .eq('chat_id', widget.tableId)
-          : SupabaseConfig.client
-                .from('table_members')
-                .select('user_id, arrival_status')
-                .eq('table_id', widget.tableId)
-                .inFilter('status', ['approved', 'joined', 'attended']);
+      final dynamic query;
+      if (widget.chatType == 'trip') {
+        query = SupabaseConfig.client
+            .from('trip_chat_participants')
+            .select('user_id')
+            .eq('chat_id', widget.tableId);
+      } else if (widget.chatType == 'dm' || widget.chatType == 'direct') {
+        query = SupabaseConfig.client
+            .from('direct_chat_participants')
+            .select('user_id')
+            .eq('chat_id', widget.tableId);
+      } else if (widget.chatType == 'group') {
+        query = SupabaseConfig.client
+            .from('group_members')
+            .select('user_id')
+            .eq('group_id', widget.tableId)
+            .eq('status', 'approved');
+      } else {
+        query = SupabaseConfig.client
+            .from('table_members')
+            .select('user_id, arrival_status')
+            .eq('table_id', widget.tableId)
+            .inFilter('status', ['approved', 'joined', 'attended']);
+      }
 
       final response = await query;
 
@@ -333,7 +385,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       for (var p in response) {
         final uid = p['user_id'] as String;
         userIds.add(uid);
-        if (widget.chatType != 'trip' && widget.chatType != 'dm' && widget.chatType != 'direct') {
+        if (widget.chatType == 'table') {
           statusMap[uid] = p['arrival_status'] ?? 'joined';
         }
       }
@@ -509,6 +561,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       } else if (widget.chatType == 'dm') {
         tableName = 'direct_messages';
         idColumn = 'chat_id';
+      } else if (widget.chatType == 'group') {
+        tableName = 'messages';
+        idColumn = 'group_id';
       } else {
         tableName = 'messages';
         idColumn = 'table_id';
@@ -1019,6 +1074,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'message_type': contentType,
           if (replyToId != null) 'reply_to_id': replyToId,
         });
+      } else if (widget.chatType == 'group') {
+        await SupabaseConfig.client.from('messages').insert({
+          'group_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': content,
+          'content_type': contentType,
+          if (replyToId != null) 'reply_to_id': replyToId,
+        });
       } else {
         await SupabaseConfig.client.from('messages').insert({
           'table_id': widget.tableId,
@@ -1254,6 +1317,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     Map<String, dynamic> message,
     bool deleteForEveryone,
   ) async {
+    // Resolve the correct table based on chat type
+    String messagesTable = 'messages';
+    if (widget.chatType == 'dm') messagesTable = 'direct_messages';
+    if (widget.chatType == 'trip') messagesTable = 'trip_messages';
+
     try {
       if (_useTelegramMode) {
         // In Telegram mode: delete from local DB and Supabase
@@ -1262,7 +1330,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (deleteForEveryone) {
           // Delete from Supabase (for everyone)
           await SupabaseConfig.client
-              .from('messages')
+              .from(messagesTable)
               .delete()
               .eq('id', messageId);
         }
@@ -1288,7 +1356,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       } else {
         // Legacy mode: mark as deleted in Supabase
         await SupabaseConfig.client
-            .from('messages')
+            .from(messagesTable)
             .update({
               'deleted_at': DateTime.now().toIso8601String(),
               'deleted_for_everyone': deleteForEveryone,
@@ -2157,6 +2225,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 onTap: () {
                   Navigator.pop(context);
                   _handleDelete(message, true);
+                },
+              ),
+            ],
+            if (!isOwnMessage) ...[
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.flag_outlined, color: Colors.red),
+                title: const Text(
+                  'Report Message',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  ReportModal.show(
+                    context,
+                    targetType: 'message',
+                    targetId: message['id'] ?? '',
+                    targetName: message['senderName'],
+                  );
                 },
               ),
             ],

@@ -41,13 +41,15 @@ serve(async (req) => {
         // Find the partner associated with this user
         const { data: partner, error: partnerError } = await supabaseClient
             .from('partners')
-            .select('*')
+            .select('*, xendit_account_id, split_rule_id, platform_fee_receivable')
             .eq('user_id', user.id)
             .single()
 
         if (partnerError || !partner) {
             throw new Error('Partner account not found for this user')
         }
+
+        console.log(`🔍 PAYOUT DEBUG: user.id=${user.id}, partner.id=${partner.id}, partner.business_name=${partner.business_name}`)
 
         // Validate Bank Account ownership
         const { data: bankAccount, error: bankError } = await supabaseClient
@@ -70,6 +72,8 @@ serve(async (req) => {
             .eq('status', 'completed')
             .is('payout_id', null)
 
+        console.log(`🔍 PAYOUT DEBUG: eventTransactions count=${eventTransactions?.length ?? 0}, error=${eventTxError?.message ?? 'none'}`)
+
         if (eventTxError) throw new Error('Failed to fetch eligible event transactions')
 
         // Fetch Experience Transactions
@@ -79,6 +83,8 @@ serve(async (req) => {
             .eq('partner_id', partner.id)
             .eq('status', 'completed')
             .is('payout_id', null)
+
+        console.log(`🔍 PAYOUT DEBUG: expTransactions count=${expTransactions?.length ?? 0}, error=${expTxError?.message ?? 'none'}`)
 
         if (expTxError) throw new Error('Failed to fetch eligible experience transactions')
 
@@ -92,6 +98,8 @@ serve(async (req) => {
 
         const calculatedAmount = eventSum + expSum;
 
+        console.log(`🔍 PAYOUT DEBUG: eventSum=${eventSum}, expSum=${expSum}, calculatedAmount=${calculatedAmount}, requestedAmount=${amount}`)
+
         // Validate Balance
         if (calculatedAmount <= 0) {
             throw new Error('No funds available for payout')
@@ -103,20 +111,19 @@ serve(async (req) => {
             throw new Error(`Insufficient balance. Available: ${calculatedAmount}, Requested: ${amount}`)
         }
 
-        // 6. AUTO-APPROVAL CHECK
         // 7. CHECK AUTO-APPROVAL
         const limit = Number(partner.payout_limit) || 50000 // Default 50k
-        const isAutoApprovable = partner.auto_approve_enabled && calculatedAmount <= limit
+        const isAutoApprovable = partner.auto_approve_enabled && amount <= limit
         const initialStatus = isAutoApprovable ? 'processing' : 'pending_request'
 
-        // 7. Insert Payout Record (Immutable Lock)
+        // 7. Insert Payout Record — uses the REQUESTED amount, not the full balance
         const { data: payout, error: insertError } = await supabaseClient
             .from('payouts')
             .insert({
                 partner_id: partner.id,
-                amount: calculatedAmount, // Use the precise calculated sum
-                currency: 'PHP', // Defaulting to PHP for now
-                bank_name: bankAccount.bank_code, // e.g. PH_BDO
+                amount: amount, // Use the partner's requested amount
+                currency: 'PHP',
+                bank_name: bankAccount.bank_code,
                 bank_account_number: bankAccount.account_number,
                 bank_account_name: bankAccount.account_holder_name,
                 status: initialStatus,
@@ -127,15 +134,36 @@ serve(async (req) => {
 
         if (insertError) throw new Error('Failed to create payout record: ' + insertError.message)
 
-        // 9. RECONCILIATION: LINK TRANSACTIONS (CRITICAL)
+        // 9. RECONCILIATION: LINK ONLY ENOUGH TRANSACTIONS TO COVER REQUESTED AMOUNT
         let linkFailed = false;
+        let accumulated = 0;
+        const eventTxIdsToLink: string[] = [];
+        const expTxIdsToLink: string[] = [];
 
-        const eventTxIds = (eventTransactions || []).map((tx: any) => tx.id)
-        if (eventTxIds.length > 0) {
+        // Accumulate event transactions until we cover the requested amount
+        for (const tx of (eventTransactions || []) as any[]) {
+            if (accumulated >= amount) break;
+            eventTxIdsToLink.push(tx.id);
+            accumulated += Number(tx.organizer_payout) || 0;
+        }
+
+        // If event transactions weren't enough, accumulate experience transactions
+        if (accumulated < amount) {
+            for (const tx of (expTransactions || []) as any[]) {
+                if (accumulated >= amount) break;
+                expTxIdsToLink.push(tx.id);
+                accumulated += Number(tx.host_payout) || 0;
+            }
+        }
+
+        console.log(`🔍 PAYOUT LINK: linking ${eventTxIdsToLink.length} event txs + ${expTxIdsToLink.length} exp txs (accumulated=${accumulated} for requested=${amount})`);
+
+        // Link selected event transactions
+        if (eventTxIdsToLink.length > 0) {
             const { error: linkError } = await supabaseClient
                 .from('transactions')
                 .update({ payout_id: payout.id })
-                .in('id', eventTxIds)
+                .in('id', eventTxIdsToLink)
 
             if (linkError) {
                 console.error('CRITICAL: Failed to link event transactions to payout', linkError)
@@ -143,12 +171,12 @@ serve(async (req) => {
             }
         }
 
-        const expTxIds = (expTransactions || []).map((tx: any) => tx.id)
-        if (expTxIds.length > 0) {
+        // Link selected experience transactions
+        if (expTxIdsToLink.length > 0) {
             const { error: linkError } = await supabaseClient
                 .from('experience_transactions')
                 .update({ payout_id: payout.id })
-                .in('id', expTxIds)
+                .in('id', expTxIdsToLink)
 
             if (linkError) {
                 console.error('CRITICAL: Failed to link experience transactions to payout', linkError)
@@ -171,13 +199,48 @@ serve(async (req) => {
             } else {
                 try {
                     // Xendit Payouts V2 API
+                    // XenPlatform: Disburse from partner's sub-wallet
+                    const payoutHeaders: Record<string, string> = {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Basic ${btoa(xenditSecret + ':')}`,
+                        'Idempotency-key': payout.id,
+                    };
+                    if (partner.xendit_account_id) {
+                        payoutHeaders['for-user-id'] = partner.xendit_account_id;
+                    }
+
+                    // Auto-deduct platform_fee_receivable from payout
+                    let payoutAmount = amount;
+                    let feeDeducted = 0;
+                    const receivable = Number(partner.platform_fee_receivable) || 0;
+                    if (receivable > 0 && partner.xendit_account_id) {
+                        feeDeducted = Math.min(receivable, amount);
+                        payoutAmount = amount - feeDeducted;
+                        console.log(`💰 Auto-deducting ₱${feeDeducted} from payout (platform_fee_receivable: ₱${receivable})`);
+
+                        if (payoutAmount <= 0) {
+                            // Entire payout goes to settling receivable
+                            await supabaseClient.from('payouts').update({
+                                status: 'completed',
+                                admin_notes: `Entire payout of ₱${amount} used to settle platform fee receivable`,
+                            }).eq('id', payout.id);
+
+                            await supabaseClient.from('partners').update({
+                                platform_fee_receivable: receivable - amount,
+                            }).eq('id', partner.id);
+
+                            return new Response(JSON.stringify({
+                                success: true,
+                                payout: payout,
+                                fee_deducted: amount,
+                                message: `Entire payout used to settle ₱${amount} of outstanding platform fees`,
+                            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+                        }
+                    }
+
                     const response = await fetch('https://api.xendit.co/v2/payouts', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Basic ${btoa(xenditSecret + ':')}`,
-                            'Idempotency-key': payout.id // Use our payout ID as idempotency key
-                        },
+                        headers: payoutHeaders,
                         body: JSON.stringify({
                             reference_id: payout.id,
                             channel_code: bankAccount.bank_code,
@@ -185,9 +248,9 @@ serve(async (req) => {
                                 account_holder_name: bankAccount.account_holder_name,
                                 account_number: bankAccount.account_number
                             },
-                            amount: amount,
+                            amount: payoutAmount,
                             currency: 'PHP',
-                            description: `Payout for ${partner.business_name}`
+                            description: `Payout for ${partner.business_name}${feeDeducted > 0 ? ` (₱${feeDeducted} deducted for platform fees)` : ''}`
                         })
                     })
 
@@ -199,15 +262,22 @@ serve(async (req) => {
 
                     xenditResponse = responseData
 
-                    // Update Payout with Xendit IDs
                     await supabaseClient
                         .from('payouts')
                         .update({
-                            xendit_external_id: responseData.reference_id, // Should match payout.id
+                            xendit_external_id: responseData.reference_id,
                             xendit_disbursement_id: responseData.id,
-                            status: 'processing' // Confirmed processing by Xendit
+                            status: 'processing'
                         })
                         .eq('id', payout.id)
+
+                    // Update platform_fee_receivable if we deducted
+                    if (feeDeducted > 0) {
+                        await supabaseClient.from('partners').update({
+                            platform_fee_receivable: receivable - feeDeducted,
+                        }).eq('id', partner.id);
+                        console.log(`✅ Settled ₱${feeDeducted} of platform_fee_receivable`);
+                    }
 
                 } catch (xenditErr) {
                     console.error('Xendit Payout Failed:', xenditErr)
@@ -219,6 +289,19 @@ serve(async (req) => {
                             admin_notes: `Auto-approval failed: ${xenditErr.message}`
                         })
                         .eq('id', payout.id)
+
+                    // 🔧 FIX: Unlink transactions so balance is correct for next attempt
+                    await supabaseClient
+                        .from('transactions')
+                        .update({ payout_id: null })
+                        .eq('payout_id', payout.id)
+
+                    await supabaseClient
+                        .from('experience_transactions')
+                        .update({ payout_id: null })
+                        .eq('payout_id', payout.id)
+
+                    console.log(`🔓 Transactions unlinked from failed auto-payout ${payout.id}`)
                 }
             }
         }
@@ -227,7 +310,7 @@ serve(async (req) => {
             JSON.stringify({
                 success: true,
                 payout: payout,
-                balance_after: 0 // Sweep model always clears balance
+                balance_after: calculatedAmount - amount // Remaining balance
             }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )

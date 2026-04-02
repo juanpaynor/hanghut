@@ -355,7 +355,7 @@ class HostService {
         .from('experience_transactions')
         .select('gross_amount, platform_fee, host_payout, status')
         .eq('partner_id', partnerId)
-        .eq('status', 'completed');
+        .inFilter('status', ['completed', 'refunded']);
 
     final expTransactions = List<Map<String, dynamic>>.from(expResponse);
 
@@ -402,20 +402,95 @@ class HostService {
     return {
       'total_gross': totalGross,
       'total_fees': totalFees,
-      'total_payout': totalPayout,  // All-time net earnings
+      'total_payout': totalPayout,  // All-time net earnings (minus refunds)
       'available_balance': totalPayout - totalWithdrawn,  // What's left to withdraw
       'total_withdrawn': totalWithdrawn,
       'transaction_count': expTransactions.length + eventTransactions.length,
     };
   }
 
+  /// Returns transaction history for this host partner (earnings + refunds).
+  Future<List<Map<String, dynamic>>> getTransactionHistory(
+    String partnerId, {
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    // Fetch experience transactions with experience title
+    final expResponse = await _supabase
+        .from('experience_transactions')
+        .select('id, gross_amount, platform_fee, host_payout, status, created_at, purchase_intent_id, experience:tables!table_id(title)')
+        .eq('partner_id', partnerId)
+        .inFilter('status', ['completed', 'refunded'])
+        .order('created_at', ascending: false)
+        .range(offset, offset + limit - 1);
+
+    final expTransactions = List<Map<String, dynamic>>.from(expResponse);
+
+    // Fetch event transactions with event title
+    final eventResponse = await _supabase
+        .from('transactions')
+        .select('id, gross_amount, platform_fee, organizer_payout, status, created_at, purchase_intent_id, event:events!event_id(title)')
+        .eq('partner_id', partnerId)
+        .inFilter('status', ['completed', 'refunded'])
+        .order('created_at', ascending: false)
+        .range(offset, offset + limit - 1);
+
+    final eventTransactions = List<Map<String, dynamic>>.from(eventResponse);
+
+    // Normalize and merge
+    final List<Map<String, dynamic>> all = [];
+
+    for (final t in expTransactions) {
+      all.add({
+        'id': t['id'],
+        'title': (t['experience'] as Map<String, dynamic>?)?['title'] ?? 'Experience',
+        'amount': (t['host_payout'] as num?)?.toDouble() ?? 0,
+        'gross_amount': (t['gross_amount'] as num?)?.toDouble() ?? 0,
+        'platform_fee': (t['platform_fee'] as num?)?.toDouble() ?? 0,
+        'status': t['status'],
+        'type': 'experience',
+        'created_at': t['created_at'],
+        'intent_id': t['purchase_intent_id'],
+      });
+    }
+
+    for (final t in eventTransactions) {
+      all.add({
+        'id': t['id'],
+        'title': (t['event'] as Map<String, dynamic>?)?['title'] ?? 'Event',
+        'amount': (t['organizer_payout'] as num?)?.toDouble() ?? 0,
+        'gross_amount': (t['gross_amount'] as num?)?.toDouble() ?? 0,
+        'platform_fee': (t['platform_fee'] as num?)?.toDouble() ?? 0,
+        'status': t['status'],
+        'type': 'event',
+        'created_at': t['created_at'],
+        'intent_id': t['purchase_intent_id'],
+      });
+    }
+
+    // Sort by date descending
+    all.sort((a, b) {
+      final aDate = DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(2000);
+      final bDate = DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(2000);
+      return bDate.compareTo(aDate);
+    });
+
+    return all;
+  }
+
   /// Returns payout history for this host.
-  Future<List<Map<String, dynamic>>> getPayoutHistory(String partnerId) async {
+  Future<List<Map<String, dynamic>>> getPayoutHistory(
+    String partnerId, {
+    int offset = 0,
+    int limit = 20,
+  }) async {
     final response = await _supabase
         .from('payouts')
         .select()
         .eq('partner_id', partnerId)
-        .order('created_at', ascending: false);
+        .order('created_at', ascending: false)
+        .range(offset, offset + limit - 1);
+
 
     return List<Map<String, dynamic>>.from(response);
   }
@@ -494,5 +569,58 @@ class HostService {
         .from('bank_accounts')
         .update({'is_primary': true})
         .eq('id', accountId);
+  }
+
+  // ─── Wallet (XenPlatform) ─────────────────────────────────────────────
+
+  /// Fetches the partner's real Xendit sub-wallet balance via edge function.
+  /// Returns { available_balance, pending_settlement, platform_fee_receivable,
+  ///           currency, has_subaccount, xendit_account_id }.
+  Future<Map<String, dynamic>> getSubaccountBalance(String partnerId) async {
+    final response = await _supabase.functions.invoke(
+      'get-subaccount-balance',
+      body: {'partner_id': partnerId},
+    );
+
+    if (response.status != 200) {
+      final error = response.data;
+      throw Exception(error?['error'] ?? 'Failed to fetch wallet balance');
+    }
+
+    return Map<String, dynamic>.from(response.data);
+  }
+
+  /// Fetches the partner's wallet info from the partners table (lightweight, no Xendit call).
+  /// Returns { xendit_account_id, platform_fee_receivable, kyc_status }.
+  Future<Map<String, dynamic>> getWalletInfo(String partnerId) async {
+    final response = await _supabase
+        .from('partners')
+        .select('xendit_account_id, platform_fee_receivable, kyc_status')
+        .eq('id', partnerId)
+        .single();
+
+    return response;
+  }
+
+  /// Calls the topup-wallet edge function to create a payment link.
+  /// Returns the response with payment_url.
+  Future<Map<String, dynamic>> topUpWallet({
+    required String partnerId,
+    required double amount,
+  }) async {
+    final response = await _supabase.functions.invoke(
+      'topup-wallet',
+      body: {
+        'partner_id': partnerId,
+        'amount': amount,
+      },
+    );
+
+    if (response.status != 200) {
+      final error = response.data;
+      throw Exception(error?['error'] ?? 'Failed to create top-up payment');
+    }
+
+    return Map<String, dynamic>.from(response.data);
   }
 }

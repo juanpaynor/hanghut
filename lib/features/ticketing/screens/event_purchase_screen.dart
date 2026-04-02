@@ -30,6 +30,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   Timer? _pollingTimer;
   bool _isPaymentInProgress = false;
   int _consecutiveErrors = 0;
+  bool _subscribedToNewsletter = true;
 
   // Event Details (for Fees)
   Event? _fullEvent;
@@ -434,6 +435,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       // NEW PARAMS
       if (_selectedTier != null) 'tier_id': _selectedTier!.id,
       if (_appliedPromoCode != null) 'promo_code': _appliedPromoCode,
+      'subscribed_to_newsletter': _subscribedToNewsletter,
     };
 
     final response = await SupabaseConfig.client.functions.invoke(
@@ -835,6 +837,22 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                           ),
                         ),
                       ),
+
+                    const SizedBox(height: 16),
+
+                    // --- NEWSLETTER OPT-IN ---
+                    CheckboxListTile(
+                      value: _subscribedToNewsletter,
+                      onChanged: (val) => setState(() => _subscribedToNewsletter = val ?? true),
+                      title: const Text(
+                        'Subscribe to updates from this organizer',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      activeColor: Colors.deepPurple,
+                    ),
 
                     const SizedBox(height: 32),
 

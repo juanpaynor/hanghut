@@ -42,7 +42,8 @@ function formatEventDate(isoDate: string): string {
             month: 'long',
             day: 'numeric',
             hour: 'numeric',
-            minute: '2-digit'
+            minute: '2-digit',
+            timeZone: 'Asia/Manila', // PHT (UTC+8) — server runs in UTC
         })
     } catch (e) {
         return isoDate || 'Date Error'
@@ -123,7 +124,7 @@ async function generateInvoicePdf(data: EmailRequest): Promise<Uint8Array> {
     // RIGHT: Invoice Meta
     const metaX = width - 250
     page.drawText('DATE', { x: metaX, y: infoY + 10, size: 9, font: boldFont, color: grayColor })
-    page.drawText(new Date().toLocaleDateString(), { x: metaX, y: infoY - 5, size: 11, font: font, color: rgb(0.1, 0.1, 0.1) })
+    page.drawText(new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Manila' }), { x: metaX, y: infoY - 5, size: 11, font: font, color: rgb(0.1, 0.1, 0.1) })
 
     page.drawText('REFERENCE', { x: metaX + 100, y: infoY + 10, size: 9, font: boldFont, color: grayColor })
     page.drawText(data.transaction_ref.substring(0, 12), { x: metaX + 100, y: infoY - 5, size: 11, font: font, color: rgb(0.1, 0.1, 0.1) })

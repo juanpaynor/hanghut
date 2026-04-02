@@ -134,7 +134,7 @@ class _FriendsGoingRowState extends State<FriendsGoingRow> {
                     Positioned(
                       left: i * 22.0,
                       child: _FriendAvatar(
-                        avatarUrl: displayFriends[i]['avatar_url'] as String?,
+                        avatarUrl: displayFriends[i]['photo_url'] as String?,
                         size: 32,
                       ),
                     ),
@@ -270,7 +270,7 @@ class _FriendsListSheet extends StatelessWidget {
         ),
         ...friends.map((friend) => ListTile(
               leading: _FriendAvatar(
-                avatarUrl: friend['avatar_url'] as String?,
+                avatarUrl: friend['photo_url'] as String?,
                 size: 40,
               ),
               title: Text(

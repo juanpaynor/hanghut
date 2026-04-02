@@ -121,7 +121,7 @@ serve(async (req) => {
         if (organizerId) {
             const { data: partner } = await supabaseClient
                 .from('partners')
-                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket')
+                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket, xendit_account_id, split_rule_id')
                 .eq('id', organizerId)
                 .single()
 
@@ -310,6 +310,12 @@ serve(async (req) => {
             amount: Math.round(intent.total_amount),
             currency: 'PHP',
             country: 'PH',
+            // Only include payment channels activated in Xendit Dashboard
+            // Excludes: QR_PH, OTC (7-Eleven/Cebuana/Palawan), BILLEASE
+            allowed_payment_channels: [
+                'CARDS',
+                'GCASH',
+            ],
             customer: {
                 // Append unique timestamp to reference_id to prevent DUPLICATE_ERROR from Xendit
                 reference_id: (user?.id ? `${user.id}_${Date.now()}` : `guest_${intent.id}_${Date.now()}`),
@@ -339,7 +345,23 @@ serve(async (req) => {
         const headers = new Headers()
         headers.set('Authorization', `Basic ${btoa(xenditKey + ':')}`)
         headers.set('Content-Type', 'application/json')
-        // headers.set('api-version', '2024-11-11') 
+
+        // XenPlatform: Route payment to organizer's sub-account with split rule
+        if (organizerId) {
+            const { data: orgPartner } = await supabaseAdmin
+                .from('partners')
+                .select('xendit_account_id, split_rule_id')
+                .eq('id', organizerId)
+                .single()
+
+            if (orgPartner?.xendit_account_id) {
+                headers.set('for-user-id', orgPartner.xendit_account_id)
+                if (orgPartner.split_rule_id) {
+                    headers.set('with-split-rule', orgPartner.split_rule_id)
+                }
+                console.log(`🏦 XenPlatform: routing to sub-account ${orgPartner.xendit_account_id}, split rule ${orgPartner.split_rule_id}`)
+            }
+        }
 
         const xenditResponse = await fetch('https://api.xendit.co/sessions', {
             method: 'POST',

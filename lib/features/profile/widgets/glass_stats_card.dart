@@ -23,27 +23,27 @@ class GlassStatsCard extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: isDark
                   ? [
-                      Colors.white.withValues(alpha: 0.08),
-                      Colors.white.withValues(alpha: 0.04),
+                      Colors.white.withValues(alpha: 0.12),
+                      Colors.white.withValues(alpha: 0.06),
                     ]
                   : [
-                      Colors.white.withValues(alpha: 0.85),
-                      Colors.white.withValues(alpha: 0.6),
+                      Colors.white.withValues(alpha: 0.92),
+                      Colors.white.withValues(alpha: 0.75),
                     ],
             ),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
               color: isDark
-                  ? Colors.white.withValues(alpha: 0.12)
-                  : Colors.white.withValues(alpha: 0.9),
-              width: 1.5,
+                  ? Colors.white.withValues(alpha: 0.08)
+                  : Colors.white.withValues(alpha: 0.7),
+              width: 1,
             ),
             boxShadow: [
               BoxShadow(
@@ -103,7 +103,7 @@ class GlassStatsCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // Value
-            Text(
+             Text(
               value,
               style: TextStyle(
                 fontSize: 22,

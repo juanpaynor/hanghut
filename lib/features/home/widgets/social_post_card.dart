@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
+
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
@@ -40,7 +40,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
   Map<String, dynamic>? _attachedEvent;
   bool _isLoadingEvent = false;
   late int _commentCount;
-  late bool _isBookmarked;
+
+
+  // Inline video playback
+  VideoPlayerController? _videoController;
+  bool _videoInitialized = false;
+  bool _isMuted = true;
 
   @override
   void initState() {
@@ -48,8 +53,43 @@ class _SocialPostCardState extends State<SocialPostCard> {
     _isLiked = widget.post['user_has_liked'] ?? false;
     _likeCount = widget.post['likes_count'] ?? 0;
     _commentCount = widget.post['comment_count'] ?? 0;
-    _isBookmarked = widget.post['user_has_bookmarked'] ?? false;
+
     _fetchAttachedEvent();
+    _initVideoIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant SocialPostCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Sync like state when parent rebuilds with fresh data (e.g. pull-to-refresh)
+    if (oldWidget.post['id'] != widget.post['id']) {
+      _isLiked = widget.post['user_has_liked'] ?? false;
+      _likeCount = widget.post['likes_count'] ?? 0;
+      _commentCount = widget.post['comment_count'] ?? 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  void _initVideoIfNeeded() {
+    final videoUrl = widget.post['video_url'] as String?;
+    if (videoUrl != null && videoUrl.isNotEmpty) {
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl))
+        ..setLooping(true)
+        ..setVolume(0) // Start muted
+        ..initialize().then((_) {
+          if (mounted) {
+            setState(() => _videoInitialized = true);
+            _videoController!.play();
+          }
+        }).catchError((e) {
+          debugPrint('Video init error: $e');
+        });
+    }
   }
 
   Future<void> _fetchAttachedEvent() async {
@@ -104,31 +144,6 @@ class _SocialPostCardState extends State<SocialPostCard> {
     }
   }
 
-  void _handleBookmark() {
-    setState(() {
-      _isBookmarked = !_isBookmarked;
-    });
-    SocialService().toggleBookmark(widget.post['id']);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _isBookmarked
-              ? 'Post saved to bookmarks'
-              : 'Post removed from bookmarks',
-        ),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  void _handleShare() {
-    final content = widget.post['content'] as String? ?? '';
-    final userName = widget.post['user']?['display_name'] ?? 'Someone';
-    Share.share(
-      'Check out this post by $userName on HangHut:\n\n$content',
-      subject: 'Post by $userName',
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -546,25 +561,6 @@ class _SocialPostCardState extends State<SocialPostCard> {
                         color: Colors.grey[600],
                         activeColor: Colors.blueAccent,
                       ),
-                      const Spacer(),
-                      _buildActionButton(
-                        icon: Icons.share_rounded,
-                        label: '',
-                        onTap: _handleShare,
-                        color: Colors.grey[600],
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isBookmarked
-                              ? Icons.bookmark_rounded
-                              : Icons.bookmark_border_rounded,
-                          color: _isBookmarked
-                              ? Theme.of(context).primaryColor
-                              : Colors.grey[600],
-                        ),
-                        onPressed: _handleBookmark,
-                        visualDensity: VisualDensity.compact,
-                      ),
                     ],
                   ),
                 ),
@@ -578,54 +574,67 @@ class _SocialPostCardState extends State<SocialPostCard> {
     );
   }
 
-  /// Build video thumbnail with play overlay
+  /// Build inline video player (tap to play/pause, mute button, double-tap for fullscreen)
   Widget _buildVideoThumbnail(String videoUrl, String? posterUrl) {
-    return GestureDetector(
-      onTap: () => _openVideoPlayer(videoUrl),
-      child: ClipRRect(
+    if (_videoInitialized && _videoController != null) {
+      final isPlaying = _videoController!.value.isPlaying;
+      return GestureDetector(
+        onTap: () {
+          setState(() {
+            if (_videoController!.value.isPlaying) {
+              _videoController!.pause();
+            } else {
+              _videoController!.play();
+            }
+          });
+        },
+        onDoubleTap: () => _openVideoPlayer(videoUrl),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Poster image or dark placeholder
-            if (posterUrl != null && posterUrl.isNotEmpty)
-              CachedNetworkImage(
-                imageUrl: posterUrl,
-                width: double.infinity,
-                height: 250,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Container(
-                  height: 250,
-                  color: Colors.grey[900],
-                ),
-              )
-            else
-              Container(
-                height: 250,
-                width: double.infinity,
-                color: Colors.grey[900],
-                child: Icon(Icons.videocam, color: Colors.grey[600], size: 48),
-              ),
-            // Dark overlay
-            Container(
-              height: 250,
-              width: double.infinity,
-              color: Colors.black.withOpacity(0.3),
+            AspectRatio(
+              aspectRatio: _videoController!.value.aspectRatio,
+              child: VideoPlayer(_videoController!),
             ),
-            // Play button
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 12,
-                  ),
-                ],
+            // Play/Pause overlay
+            if (!isPlaying)
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.5),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: 36,
+                ),
               ),
-              child: const Icon(Icons.play_arrow_rounded, size: 40, color: Colors.black87),
+            // Mute/unmute button (bottom-right)
+            Positioned(
+              bottom: 12,
+              right: 12,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _isMuted = !_isMuted;
+                    _videoController!.setVolume(_isMuted ? 0 : 1);
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
             ),
             // Video badge
             Positioned(
@@ -649,6 +658,40 @@ class _SocialPostCardState extends State<SocialPostCard> {
             ),
           ],
         ),
+      );
+    }
+
+    // Loading / fallback state — show poster with loading spinner
+    return GestureDetector(
+      onTap: () => _openVideoPlayer(videoUrl),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (posterUrl != null && posterUrl.isNotEmpty)
+            CachedNetworkImage(
+              imageUrl: posterUrl,
+              width: double.infinity,
+              height: 250,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => Container(
+                height: 250,
+                color: Colors.grey[900],
+              ),
+            )
+          else
+            Container(
+              height: 250,
+              width: double.infinity,
+              color: Colors.grey[900],
+              child: Icon(Icons.videocam, color: Colors.grey[600], size: 48),
+            ),
+          Container(
+            height: 250,
+            width: double.infinity,
+            color: Colors.black.withOpacity(0.3),
+          ),
+          const CircularProgressIndicator(color: Colors.white),
+        ],
       ),
     );
   }

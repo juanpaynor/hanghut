@@ -9,6 +9,8 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
+import 'package:bitemates/features/experiences/widgets/write_review_sheet.dart';
 
 class ExperienceDetailModal extends StatefulWidget {
   final Map<String, dynamic> experience;
@@ -35,10 +37,18 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
   int _guestCount = 1;
   int _currentImageIndex = 0;
 
+  // Reviews
+  List<Map<String, dynamic>> _reviews = [];
+  Map<String, dynamic> _ratingData = {'average': 0.0, 'count': 0, 'communication': 0.0, 'value': 0.0, 'organization': 0.0};
+  bool _isLoadingReviews = true;
+  bool _canReview = false;
+  bool _hasReviewed = false;
+
   @override
   void initState() {
     super.initState();
     _fetchSchedules();
+    _fetchReviews();
   }
 
   @override
@@ -65,7 +75,80 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
     }
   }
 
+  Future<void> _fetchReviews() async {
+    try {
+      final experienceId = widget.experience['id'];
+      final results = await Future.wait([
+        _experienceService.getReviews(experienceId),
+        _experienceService.getAverageRating(experienceId),
+        _experienceService.hasCompletedBooking(experienceId),
+      ]);
+
+      final reviews = results[0] as List<Map<String, dynamic>>;
+      final ratingData = results[1] as Map<String, dynamic>;
+      final hasBooking = results[2] as bool;
+
+      final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
+      final alreadyReviewed = reviews.any((r) {
+        final user = r['user'];
+        return user is Map && user['id'] == currentUserId;
+      });
+
+      if (mounted) {
+        setState(() {
+          _reviews = reviews;
+          _ratingData = ratingData;
+          _canReview = hasBooking && !alreadyReviewed;
+          _hasReviewed = alreadyReviewed;
+          _isLoadingReviews = false;
+        });
+      }
+    } catch (e) {
+      print('Error fetching reviews: $e');
+      if (mounted) setState(() => _isLoadingReviews = false);
+    }
+  }
+
+  Widget _buildCategoryBar(String label, double value) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 120,
+          child: Text(
+            label,
+            style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[700]),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: value / 5.0,
+              minHeight: 8,
+              backgroundColor: Colors.grey[200],
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.amber),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 28,
+          child: Text(
+            value > 0 ? value.toStringAsFixed(1) : '–',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+      ],
+    );
+  }
+
   void _handleBookNow() {
+
     if (_selectedSchedule == null) {
       _showSchedulePicker(context);
       return;
@@ -206,6 +289,31 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                     ),
                   ),
                 ),
+                actions: [
+                  if (hostId.isNotEmpty &&
+                      hostId != SupabaseConfig.client.auth.currentUser?.id)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.flag_outlined, color: Colors.grey, size: 20),
+                          onPressed: () {
+                            ReportModal.show(
+                              context,
+                              targetType: 'post',
+                              targetId: widget.experience['id']?.toString() ?? '',
+                              targetName: title,
+                            );
+                          },
+                          tooltip: 'Report Experience',
+                        ),
+                      ),
+                    ),
+                ],
                 flexibleSpace: FlexibleSpaceBar(
                   stretchModes: const [StretchMode.zoomBackground],
                   background: Stack(
@@ -656,6 +764,243 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                           ),
                         ),
                       ],
+
+                      // ── REVIEWS SECTION ──
+                      const SizedBox(height: 32),
+                      const Divider(height: 1),
+                      const SizedBox(height: 32),
+
+                      Text(
+                        'Reviews',
+                        style: GoogleFonts.outfit(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      if (_isLoadingReviews)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      else if (_ratingData['count'] == 0)
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(Icons.star_outline_rounded, size: 48, color: Colors.grey[300]),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No reviews yet',
+                                style: GoogleFonts.inter(fontSize: 16, color: Colors.grey[500]),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Be the first to share your experience!',
+                                style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[400]),
+                              ),
+                            ],
+                          ),
+                        )
+                      else ...[
+                        // Average rating header
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              (_ratingData['average'] as double).toStringAsFixed(1),
+                              style: GoogleFonts.outfit(
+                                fontSize: 48,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: List.generate(5, (i) {
+                                      final avg = _ratingData['average'] as double;
+                                      return Icon(
+                                        i < avg.round()
+                                            ? Icons.star_rounded
+                                            : Icons.star_outline_rounded,
+                                        color: Colors.amber,
+                                        size: 22,
+                                      );
+                                    }),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${_ratingData['count']} ${_ratingData['count'] == 1 ? 'review' : 'reviews'}',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Category breakdown
+                        _buildCategoryBar('Communication', _ratingData['communication'] as double),
+                        const SizedBox(height: 8),
+                        _buildCategoryBar('Value', _ratingData['value'] as double),
+                        const SizedBox(height: 8),
+                        _buildCategoryBar('Organization', _ratingData['organization'] as double),
+                        const SizedBox(height: 24),
+
+                        // Review cards
+                        ...(_reviews.take(5).map((review) {
+                          final user = review['user'] as Map<String, dynamic>?;
+                          final displayName = user?['display_name'] ?? 'Anonymous';
+                          final photoUrl = review['user_photo'] as String?;
+                          final rating = review['rating'] as int? ?? 0;
+                          final text = review['review_text'] as String?;
+                          final createdAt = review['created_at'] != null
+                              ? DateTime.tryParse(review['created_at'])
+                              : null;
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[50],
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 18,
+                                      backgroundImage: photoUrl != null
+                                          ? NetworkImage(photoUrl)
+                                          : null,
+                                      backgroundColor: Colors.grey[200],
+                                      child: photoUrl == null
+                                          ? Text(
+                                              displayName.isNotEmpty
+                                                  ? displayName[0].toUpperCase()
+                                                  : '?',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            displayName,
+                                            style: GoogleFonts.inter(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          if (createdAt != null)
+                                            Text(
+                                              DateFormat('MMM d, y').format(createdAt),
+                                              style: GoogleFonts.inter(
+                                                fontSize: 12,
+                                                color: Colors.grey[500],
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    Row(
+                                      children: List.generate(5, (i) {
+                                        return Icon(
+                                          i < rating
+                                              ? Icons.star_rounded
+                                              : Icons.star_outline_rounded,
+                                          color: Colors.amber,
+                                          size: 16,
+                                        );
+                                      }),
+                                    ),
+                                  ],
+                                ),
+                                if (text != null && text.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    text,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      height: 1.5,
+                                      color: Colors.grey[800],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        })),
+                      ],
+
+                      // Write a Review button
+                      if (_canReview)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                WriteReviewSheet.show(
+                                  context,
+                                  experienceId: widget.experience['id'],
+                                  experienceTitle: widget.experience['title'] ?? 'Experience',
+                                  onReviewSubmitted: _fetchReviews,
+                                );
+                              },
+                              icon: const Icon(Icons.rate_review_outlined),
+                              label: const Text('Write a Review'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.black87,
+                                side: BorderSide(color: Colors.grey[300]!),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (_hasReviewed)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle, size: 18, color: Colors.green[600]),
+                              const SizedBox(width: 8),
+                              Text(
+                                'You\'ve reviewed this experience',
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  color: Colors.green[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
 
                       const SizedBox(height: 32),
                       const Divider(height: 1),

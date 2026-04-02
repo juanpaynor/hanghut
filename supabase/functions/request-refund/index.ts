@@ -20,6 +20,7 @@ serve(async (req: Request) => {
         const sbServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
         const xenditKey = Deno.env.get('XENDIT_SECRET_KEY');
         const resendKey = Deno.env.get('RESEND_API_KEY');
+        const masterAccountId = Deno.env.get('XENDIT_MASTER_ACCOUNT_ID');
 
         if (!sbUrl) throw new Error('Missing SUPABASE_URL');
         if (!sbAnonKey) throw new Error('Missing SUPABASE_ANON_KEY');
@@ -64,11 +65,14 @@ serve(async (req: Request) => {
         let intentError;
         let organizerUserId;
         let eventOrExperienceTitle;
+        let partnerData: any = null;
 
         if (isExperience) {
-            const { data, error } = await supabaseClient
+            // Use admin client — RLS on experience_purchase_intents restricts to buyer (user_id),
+            // but the host (who issues refunds) is not the buyer. Auth check is done manually below.
+            const { data, error } = await supabaseAdmin
                 .from('experience_purchase_intents')
-                .select('*, experience:tables!table_id(title, host_id), transactions:experience_transactions(xendit_transaction_id, status)')
+                .select('*, experience:tables!table_id(title, host_id, partner_id), transactions:experience_transactions(xendit_transaction_id, status)')
                 .eq('id', intent_id)
                 .single();
 
@@ -76,10 +80,20 @@ serve(async (req: Request) => {
             intentError = error;
             organizerUserId = intent?.experience?.host_id;
             eventOrExperienceTitle = intent?.experience?.title;
+
+            // Look up partner XenPlatform details
+            if (intent?.experience?.partner_id) {
+                const { data: p } = await supabaseAdmin
+                    .from('partners')
+                    .select('xendit_account_id, split_rule_id, custom_percentage, platform_fee_receivable')
+                    .eq('id', intent.experience.partner_id)
+                    .single();
+                partnerData = p;
+            }
         } else {
             const { data, error } = await supabaseClient
                 .from('purchase_intents')
-                .select('*, event:events(title, organizer_id, organizer:partners!organizer_id(user_id)), transactions(xendit_transaction_id, status)')
+                .select('*, event:events(title, organizer_id, organizer:partners!organizer_id(user_id, xendit_account_id, split_rule_id, custom_percentage, platform_fee_receivable)), transactions(xendit_transaction_id, status)')
                 .eq('id', intent_id)
                 .single();
 
@@ -87,6 +101,7 @@ serve(async (req: Request) => {
             intentError = error;
             organizerUserId = intent?.event?.organizer?.user_id;
             eventOrExperienceTitle = intent?.event?.title;
+            partnerData = intent?.event?.organizer || null;
         }
 
         if (intentError || !intent) {
@@ -108,8 +123,29 @@ serve(async (req: Request) => {
             })
         }
 
-        // 3. Check locally if refundable
-        // 3. Check locally if refundable
+        // 3. Check locally if refundable (idempotency guard)
+        if (intent.status === 'refunded') {
+            return new Response(JSON.stringify({
+                error: 'This transaction has already been refunded',
+                code: 'ALREADY_REFUNDED',
+                current_status: intent.status
+            }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: 400,
+            })
+        }
+
+        if (intent.refunded_at) {
+            return new Response(JSON.stringify({
+                error: 'A refund has already been initiated for this transaction. Please wait for it to complete.',
+                code: 'REFUND_IN_PROGRESS',
+                refunded_at: intent.refunded_at
+            }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: 409,
+            })
+        }
+
         if (intent.status !== 'completed') {
             console.error(`Refund failed: Intent ${intent.id} status is ${intent.status}`)
             return new Response(JSON.stringify({
@@ -122,210 +158,290 @@ serve(async (req: Request) => {
             })
         }
 
-        // Get the transaction ID/Reference for Xendit
-        // We try transactions table first, fallback to intent.xendit_invoice_id
-        let xenditReference = intent.transactions?.[0]?.xendit_transaction_id;
+        // ============================================================
+        // RESOLVE XENDIT REFERENCE for Refund
+        // Xendit's /refunds API strictly requires either:
+        //   - payment_request_id (pr-xxx)  — for Payment Request / Sessions API
+        //   - invoice_id (inv-xxx / hex)   — for Invoice API
+        // 
+        // Strategy:
+        //   1. Check intent.xendit_invoice_id (if starts with pr- or inv-)
+        //   2. Check transactions table xendit_transaction_id (if starts with pr- or inv-)
+        //   3. Fallback: Search Xendit API by our reference_id / external_id
+        // ============================================================
+        const authHeader = `Basic ${btoa(xenditKey + ':')}`
 
-        if (!xenditReference && intent.xendit_invoice_id) {
-            console.log(`Using fallback xendit_invoice_id for Intent ${intent.id}`)
-            xenditReference = intent.xendit_invoice_id
+        // Helper: check if an ID is a usable Xendit refund reference
+        function isValidXenditRefundId(id: string | null | undefined): boolean {
+            if (!id) return false;
+            return id.startsWith('pr-') || id.startsWith('inv-') || id.startsWith('in-');
         }
 
+        let xenditReference: string | null = null;
+
+        // --- Candidate 1: intent.xendit_invoice_id ---
+        if (isValidXenditRefundId(intent.xendit_invoice_id)) {
+            xenditReference = intent.xendit_invoice_id;
+            console.log(`✅ Using xendit_invoice_id from intent: ${xenditReference}`);
+        }
+
+        // --- Candidate 2: transactions table ---
+        if (!xenditReference) {
+            const txId = intent.transactions?.[0]?.xendit_transaction_id;
+            if (isValidXenditRefundId(txId)) {
+                xenditReference = txId;
+                console.log(`✅ Using xendit_transaction_id from transactions: ${xenditReference}`);
+            } else if (txId) {
+                console.log(`⚠️ transactions.xendit_transaction_id exists but not refund-compatible: ${txId}`);
+            }
+        }
+
+        // --- Candidate 3: Raw hex xendit_invoice_id (old Invoice API format) ---
+        // Old Xendit Invoice IDs are 24-char hex strings (no prefix)
+        if (!xenditReference && intent.xendit_invoice_id && /^[0-9a-f]{24}$/.test(intent.xendit_invoice_id)) {
+            xenditReference = intent.xendit_invoice_id;
+            console.log(`✅ Using raw hex xendit_invoice_id (legacy Invoice): ${xenditReference}`);
+        }
+
+        // --- Candidate 4: Search Xendit API by our reference/external ID ---
         if (!xenditReference && intent.xendit_external_id) {
-            console.log(`Searching Xendit for external_id: ${intent.xendit_external_id}`)
+            console.log(`🔍 Searching Xendit APIs for external_id: ${intent.xendit_external_id}`);
 
-            // 1. Try Invoices (Legacy)
+            // 4a. Try Payment Requests API (Sessions API creates these)
             try {
-                const searchRes = await fetch(`https://api.xendit.co/v2/invoices?external_id=${intent.xendit_external_id}`, {
-                    headers: { 'Authorization': `Basic ${btoa(xenditKey + ':')}` }
-                })
+                const prRes = await fetch(
+                    `https://api.xendit.co/payment_requests?reference_id=${intent.xendit_external_id}`,
+                    { headers: { 'Authorization': authHeader } }
+                );
 
-                if (searchRes.ok) {
-                    const searchData = await searchRes.json()
-                    if (Array.isArray(searchData) && searchData.length > 0) {
-                        xenditReference = searchData[0].id;
-                        console.log(`Found missing Xendit ID via Invoice API: ${xenditReference}`)
+                if (prRes.ok) {
+                    const prData = await prRes.json();
+                    if (prData.data && Array.isArray(prData.data) && prData.data.length > 0) {
+                        const successfulPr = prData.data.find((pr: any) => pr.status === 'SUCCEEDED');
+                        const targetPr = successfulPr || prData.data[0];
+                        if (targetPr) {
+                            xenditReference = targetPr.id; // pr-xxx
+                            console.log(`✅ Found via Payment Request API: ${xenditReference}`);
+                        }
+                    }
+                } else {
+                    console.warn(`Payment Request search returned: ${prRes.status}`);
+                }
+            } catch (e) {
+                console.warn('Failed to search Payment Requests:', e);
+            }
+
+            // 4b. Try Invoice API (Legacy)
+            if (!xenditReference) {
+                try {
+                    const invRes = await fetch(
+                        `https://api.xendit.co/v2/invoices?external_id=${intent.xendit_external_id}`,
+                        { headers: { 'Authorization': authHeader } }
+                    );
+
+                    if (invRes.ok) {
+                        const invData = await invRes.json();
+                        if (Array.isArray(invData) && invData.length > 0) {
+                            xenditReference = invData[0].id;
+                            console.log(`✅ Found via Invoice API: ${xenditReference}`);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Failed to search Invoices:', e);
+                }
+            }
+
+            // Self-heal: backfill xendit_invoice_id in DB so next time it's instant
+            if (xenditReference) {
+                const table = isExperience ? 'experience_purchase_intents' : 'purchase_intents';
+                await supabaseAdmin.from(table)
+                    .update({ xendit_invoice_id: xenditReference })
+                    .eq('id', intent.id);
+                console.log(`🔧 Self-healed xendit_invoice_id for ${intent.id}`);
+            }
+        }
+
+        // Self-heal: backfill payment_method if unknown
+        if (xenditReference && (!intent.payment_method || intent.payment_method === 'unknown' || intent.payment_method === 'UNKNOWN')) {
+            try {
+                const endpoint = xenditReference.startsWith('pr-')
+                    ? `https://api.xendit.co/payment_requests/${xenditReference}`
+                    : `https://api.xendit.co/v2/invoices/${xenditReference}`;
+
+                const detailRes = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
+
+                if (detailRes.ok) {
+                    const data = await detailRes.json();
+                    let fetchedMethod = data.payment_channel || null;
+
+                    if (!fetchedMethod && data.payment_method) {
+                        const pm = data.payment_method;
+                        fetchedMethod = typeof pm === 'string' ? pm : (
+                            pm.ewallet?.channel_code || pm.retail_outlet?.channel_code ||
+                            pm.qr_code?.channel_code || pm.direct_debit?.channel_code ||
+                            pm.card?.channel_code || pm.virtual_account?.channel_code || pm.type
+                        );
+                    }
+
+                    if (fetchedMethod) {
+                        const table = isExperience ? 'experience_purchase_intents' : 'purchase_intents';
+                        await supabaseAdmin.from(table)
+                            .update({ payment_method: fetchedMethod })
+                            .eq('id', intent.id);
+                        intent.payment_method = fetchedMethod;
+                        console.log(`🔧 Self-healed payment_method: ${fetchedMethod}`);
                     }
                 }
             } catch (e) {
-                console.warn('Failed to search Xendit Invoices', e)
-            }
-
-            // 2. Try Payment Requests (New Sessions API)
-            if (!xenditReference) {
-                try {
-                    console.log(`Searching Xendit Payment Requests for reference_id: ${intent.xendit_external_id}`)
-                    // Payment Requests API uses 'reference_id'
-                    const prRes = await fetch(`https://api.xendit.co/payment_requests?reference_id=${intent.xendit_external_id}`, {
-                        headers: {
-                            'Authorization': `Basic ${btoa(xenditKey + ':')}`,
-                            // 'api-version': '2022-07-31' // Optional, but good practice if needed
-                        }
-                    })
-
-                    if (prRes.ok) {
-                        const prData = await prRes.json()
-                        // Response has 'data' array
-                        if (prData.data && Array.isArray(prData.data) && prData.data.length > 0) {
-                            // Find the one that is SUCCEEDED potentially? Or just the first one.
-                            // Ideally we want the one that is 'SUCCEEDED'
-                            const successfulPr = prData.data.find((pr: any) => pr.status === 'SUCCEEDED');
-                            const targetPr = successfulPr || prData.data[0];
-
-                            if (targetPr) {
-                                xenditReference = targetPr.id; // pr-...
-                                console.log(`Found missing Xendit ID via Payment Request API: ${xenditReference}`)
-                            }
-                        }
-                    } else {
-                        console.warn('Payment Request search failed status:', prRes.status)
-                    }
-                } catch (e) {
-                    console.warn('Failed to search Xendit Payment Requests', e)
-                }
-            }
-
-            // Self-heal DB if found
-            // Check for missing Payment Method and try to backfill
-            if (!intent.payment_method || intent.payment_method === 'unknown') {
-                console.log(`Payment method unknown for ${intent.id}, attempting to fetch...`);
-                let fetchedMethod = null;
-
-                if (xenditReference) {
-                    // Try to fetch Invoice/PR details
-                    const endpoint = xenditReference.startsWith('pr-')
-                        ? `https://api.xendit.co/payment_requests/${xenditReference}`
-                        : `https://api.xendit.co/v2/invoices/${xenditReference}`;
-
-                    try {
-                        const detailRes = await fetch(endpoint, {
-                            headers: { 'Authorization': `Basic ${btoa(xenditKey + ':')}` }
-                        });
-
-                        if (detailRes.ok) {
-                            const data = await detailRes.json();
-                            // Extract logic similar to webhook
-                            if (data.payment_channel) {
-                                fetchedMethod = data.payment_channel;
-                            } else if (data.payment_method) {
-                                const pm = data.payment_method;
-                                if (typeof pm === 'string') {
-                                    fetchedMethod = pm;
-                                } else {
-                                    fetchedMethod = pm.ewallet?.channel_code ||
-                                        pm.retail_outlet?.channel_code ||
-                                        pm.qr_code?.channel_code ||
-                                        pm.direct_debit?.channel_code ||
-                                        pm.card?.channel_code ||
-                                        pm.virtual_account?.channel_code ||
-                                        pm.type;
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('Failed to fetch Xendit details for payment method', e);
-                    }
-                }
-
-                if (fetchedMethod) {
-                    console.log(`✅ Backfilled payment method: ${fetchedMethod}`);
-                    // Update DB
-                    if (isExperience) {
-                        await supabaseAdmin.from('experience_purchase_intents')
-                            .update({ payment_method: fetchedMethod })
-                            .eq('id', intent.id);
-                    } else {
-                        await supabaseAdmin.from('purchase_intents')
-                            .update({ payment_method: fetchedMethod })
-                            .eq('id', intent.id);
-                    }
-
-                    // Update local object for email
-                    intent.payment_method = fetchedMethod;
-                }
+                console.warn('Failed to backfill payment_method:', e);
             }
         }
 
+        // --- Final check ---
         if (!xenditReference) {
-            // Fallback or error?
-            // Note: xendit_external_id in purchase_intents is OUR reference, not Xendit's ID.
-            // We need the ID returned by Xendit (e.g. pr-..., or invoice ID).
-            // If we didn't save it in transactions, we might be in trouble for old data, 
-            // but for new system getting it from transactions is correct.
-            console.error(`Refund failed: No Xendit Information found for Intent ${intent.id}`)
+            console.error(`❌ Refund failed: No valid Xendit ID found for Intent ${intent.id}`);
+            console.error(`   xendit_invoice_id: ${intent.xendit_invoice_id}`);
+            console.error(`   xendit_external_id: ${intent.xendit_external_id}`);
+            console.error(`   transactions[0].xendit_transaction_id: ${intent.transactions?.[0]?.xendit_transaction_id}`);
             return new Response(JSON.stringify({
-                error: 'Transaction record not found or missing Xendit Reference',
+                error: 'Could not resolve a valid Xendit reference for refund',
                 code: 'MISSING_XENDIT_REF',
-                details: 'Check transactions table or xendit_invoice_id. External ID lookup failed.'
+                details: 'No payment_request_id or invoice_id found. The payment may be too old or was not recorded properly.'
             }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: 400,
             })
         }
 
-        // 4. Call Xendit Refund API
-        // https://api.xendit.co/refunds
-        const xenditSecret = xenditKey
-        const authHeader = `Basic ${btoa(xenditSecret + ':')}`
+        // ============================================================
+        // 4. Call Xendit Refund API — XenPlatform Flow
+        // ============================================================
+        const refundAmount = amount || intent.total_amount;
 
-        // 4a. Balance Check (Optional but recommended)
-        try {
-            const balanceRes = await fetch('https://api.xendit.co/balance', {
-                headers: { 'Authorization': authHeader }
-            })
-            const balanceData = await balanceRes.json()
-            const availableBalance = balanceData.balance; // Assuming PHP
+        // Determine if this is a XenPlatform refund (partner has sub-account)
+        const hasSubAccount = partnerData?.xendit_account_id;
+        const platformPercentage = partnerData?.custom_percentage || 4; // Default 4%
+        const platformFee = Math.round(refundAmount * (platformPercentage / 100));
+        let transferId: string | null = null;
 
-            const refundAmount = amount || intent.total_amount;
+        if (hasSubAccount) {
+            // XenPlatform Refund Flow:
+            // 1. Transfer platform fee from MASTER → sub-wallet (so sub-wallet has enough)
+            // 2. Issue refund from sub-wallet (for-user-id header)
+            // 3. Track platform_fee_receivable (organizer owes HangHut)
+            // 4. Rollback transfer if refund fails
 
-            if (availableBalance < refundAmount) {
+            console.log(`🔄 XenPlatform refund: transferring ₱${platformFee} from MASTER → sub-wallet ${partnerData.xendit_account_id}`);
+
+            // Step 1: Transfer platform fee from MASTER to sub-wallet
+            try {
+                const transferResponse = await fetch('https://api.xendit.co/transfers', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': authHeader,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        reference: `refund-transfer-${intent_id}-${Date.now()}`,
+                        amount: platformFee,
+                        source_user_id: masterAccountId,
+                        destination_user_id: partnerData.xendit_account_id,
+                    }),
+                });
+
+                if (!transferResponse.ok) {
+                    const transferErr = await transferResponse.text();
+                    console.error('❌ MASTER → sub-wallet transfer failed:', transferErr);
+                    return new Response(JSON.stringify({
+                        error: 'Failed to transfer platform fee for refund',
+                        details: transferErr,
+                        code: 'TRANSFER_FAILED'
+                    }), {
+                        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                        status: 500,
+                    });
+                }
+
+                const transferData = await transferResponse.json();
+                transferId = transferData.id || transferData.transfer_id;
+                console.log(`✅ Transfer successful: ${transferId}`);
+            } catch (transferErr) {
+                console.error('❌ Transfer exception:', transferErr);
                 return new Response(JSON.stringify({
-                    error: `Insufficient Xendit Balance. Available: ${availableBalance}, Required: ${refundAmount}`,
-                    code: 'INSUFFICIENT_BALANCE',
-                    available_balance: availableBalance
+                    error: 'Transfer failed unexpectedly',
+                    code: 'TRANSFER_EXCEPTION'
                 }), {
                     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                    status: 402, // Payment Required
-                })
+                    status: 500,
+                });
             }
-        } catch (e) {
-            console.warn('Failed to check Xendit balance, proceeding anyway...', e)
+        } else {
+            // Legacy flow: balance check on master wallet
+            try {
+                const balanceRes = await fetch('https://api.xendit.co/balance', {
+                    headers: { 'Authorization': authHeader }
+                })
+                const balanceData = await balanceRes.json()
+
+                if (balanceData.balance < refundAmount) {
+                    return new Response(JSON.stringify({
+                        error: `Insufficient Xendit Balance. Available: ${balanceData.balance}, Required: ${refundAmount}`,
+                        code: 'INSUFFICIENT_BALANCE',
+                        available_balance: balanceData.balance
+                    }), {
+                        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                        status: 402,
+                    })
+                }
+            } catch (e) {
+                console.warn('Failed to check Xendit balance, proceeding anyway...', e)
+            }
         }
 
-        // Idempotency key?
-        const idempotencyKey = `refund-${intent_id}-${Date.now()}`
-
-        // Validate and Key Metadata
+        // Build Refund Payload
+        const idempotencyKey = `refund-${intent_id}-${Date.now()}`;
         const validReasons = ["FRAUDULENT", "DUPLICATE", "REQUESTED_BY_CUSTOMER", "CANCELLATION", "OTHERS"];
         const xenditReason = validReasons.includes(reason.toUpperCase()) ? reason.toUpperCase() : "OTHERS";
 
+        console.log(`📤 xenditReference resolved to: ${xenditReference}`);
+
+        let refundIdField: Record<string, string> = {};
+        if (xenditReference.startsWith('pr-')) {
+            refundIdField = { payment_request_id: xenditReference };
+        } else {
+            refundIdField = { invoice_id: xenditReference };
+        }
+
         const refundPayload = {
-            payment_request_id: xenditReference.startsWith('pr-') ? xenditReference : undefined,
-            invoice_id: xenditReference.startsWith('inv-') ? xenditReference : undefined,
-            payment_id: !xenditReference.startsWith('pr-') && !xenditReference.startsWith('inv-') ? xenditReference : undefined,
-            amount: amount || intent.total_amount,
+            ...refundIdField,
+            amount: refundAmount,
             reason: xenditReason,
             metadata: {
                 intent_id: intent_id,
                 user_id: user.id,
-                custom_reason: reason, // Store original specific reason here
+                custom_reason: reason,
                 intent_type: isExperience ? 'experience' : 'event'
             }
         }
 
-        // Cleanup undefined keys
         // @ts-ignore
         Object.keys(refundPayload).forEach(key => refundPayload[key] === undefined && delete refundPayload[key])
 
         console.log('Sending Refund Request to Xendit:', refundPayload)
 
+        // Build refund headers — add for-user-id if XenPlatform
+        const refundHeaders: Record<string, string> = {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey,
+        };
+        if (hasSubAccount) {
+            refundHeaders['for-user-id'] = partnerData.xendit_account_id;
+        }
+
         const xenditResponse = await fetch('https://api.xendit.co/refunds', {
             method: 'POST',
-            headers: {
-                'Authorization': authHeader,
-                'Content-Type': 'application/json',
-                'Idempotency-Key': idempotencyKey
-            },
+            headers: refundHeaders,
             body: JSON.stringify(refundPayload)
         })
 
@@ -333,10 +449,53 @@ serve(async (req: Request) => {
 
         if (!xenditResponse.ok) {
             console.error('Xendit Refund Error:', xenditData)
+
+            // ROLLBACK: If transfer succeeded but refund failed, reverse the transfer
+            if (hasSubAccount && transferId) {
+                console.log(`⚠️ ROLLBACK: Reversing transfer ${transferId}...`);
+                try {
+                    await fetch('https://api.xendit.co/transfers', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': authHeader,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            reference: `rollback-${intent_id}-${Date.now()}`,
+                            amount: platformFee,
+                            source_user_id: partnerData.xendit_account_id,
+                            destination_user_id: masterAccountId,
+                        }),
+                    });
+                    console.log('✅ Rollback transfer successful');
+                } catch (rollbackErr) {
+                    console.error('❌ CRITICAL: Rollback transfer FAILED:', rollbackErr);
+                    // Log for manual reconciliation
+                }
+            }
+
             return new Response(JSON.stringify({ error: xenditData.message || 'Failed to request refund from Xendit', details: xenditData }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: xenditResponse.status,
             })
+        }
+
+        // Track platform_fee_receivable if XenPlatform refund
+        if (hasSubAccount) {
+            const partnerId = isExperience ? intent.experience?.partner_id : intent.event?.organizer_id;
+            if (partnerId) {
+                const currentReceivable = partnerData.platform_fee_receivable || 0;
+                const { error: recvError } = await supabaseAdmin
+                    .from('partners')
+                    .update({ platform_fee_receivable: currentReceivable + platformFee })
+                    .eq('id', partnerId);
+
+                if (recvError) {
+                    console.error('⚠️ Failed to update platform_fee_receivable:', recvError);
+                } else {
+                    console.log(`💰 Updated platform_fee_receivable: ₱${currentReceivable} → ₱${currentReceivable + platformFee}`);
+                }
+            }
         }
 
         // 5. Success - Update Refund Tracking
@@ -350,6 +509,28 @@ serve(async (req: Request) => {
                         refunded_at: new Date().toISOString()
                     })
                     .eq('id', intent_id)
+
+                // Record a negative experience_transaction so refunds
+                // reduce the host's available balance and appear in history
+                try {
+                    await supabaseAdmin
+                        .from('experience_transactions')
+                        .insert({
+                            purchase_intent_id: intent_id,
+                            table_id: intent.table_id,
+                            host_id: intent.experience?.host_id,
+                            user_id: intent.user_id,
+                            partner_id: intent.experience?.partner_id || null,
+                            gross_amount: -refundAmount,
+                            platform_fee: 0,
+                            host_payout: -refundAmount,
+                            xendit_transaction_id: xenditData.id || null,
+                            status: 'refunded',
+                        })
+                    console.log(`✅ Recorded refund transaction for intent ${intent_id}: -${refundAmount}`)
+                } catch (txError) {
+                    console.error('Failed to record refund transaction:', txError)
+                }
             } else {
                 await supabaseAdmin
                     .from('purchase_intents')

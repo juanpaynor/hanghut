@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/create_post_modal.dart';
 import 'package:bitemates/features/home/widgets/trending_carousel.dart';
+import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/home/widgets/friends_moments_tray.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 
@@ -16,6 +17,7 @@ import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/story_service.dart';
+import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
@@ -34,7 +36,12 @@ class FeedScreen extends StatefulWidget {
   final Function(Map<String, dynamic>)? onStoryTap;
   final VoidCallback? onSeeAllHangouts;
 
-  const FeedScreen({super.key, this.onJoinTable, this.onStoryTap, this.onSeeAllHangouts});
+  const FeedScreen({
+    super.key,
+    this.onJoinTable,
+    this.onStoryTap,
+    this.onSeeAllHangouts,
+  });
 
   @override
   State<FeedScreen> createState() => _FeedScreenState();
@@ -55,6 +62,8 @@ class _FeedScreenState extends State<FeedScreen>
   List<Event> _trendingEvents = []; // New: Trending Events
   List<Map<String, dynamic>> _friendsStories = [];
   bool _isLoadingStories = false;
+  bool _hasMoreStories = false;
+  bool _isLoadingMoreStories = false;
   bool _isLoading = true;
   bool _isLoadingMore = false;
 
@@ -221,11 +230,17 @@ class _FeedScreenState extends State<FeedScreen>
         userLng: _userPosition?.longitude,
         limit: 10, // Fetch top 10 closest/soonest
       );
+      // Filter out mystery tables and experiences (experiences have their own carousel)
+      final filtered = tables
+          .where(
+            (t) => t['visibility'] != 'mystery' && t['is_experience'] != true,
+          )
+          .toList();
+      // Enrich with member avatars + friends data for Open Hangout cards
+      final enriched = await _tableService.enrichTablesWithMembers(filtered);
       if (mounted) {
         setState(() {
-          _trendingTables = tables
-              .where((t) => t['visibility'] != 'mystery')
-              .toList();
+          _trendingTables = enriched;
         });
       }
     } catch (e) {
@@ -263,24 +278,40 @@ class _FeedScreenState extends State<FeedScreen>
     }
   }
 
-  Future<void> _loadFriendsStories() async {
+  Future<void> _loadFriendsStories({int offset = 0}) async {
     if (!mounted) return;
-    setState(() => _isLoadingStories = true);
+    if (offset == 0) {
+      setState(() => _isLoadingStories = true);
+    } else {
+      setState(() => _isLoadingMoreStories = true);
+    }
     try {
       final followingOnly = _tabController.index == 1;
       final stories = await _storyService.getFriendsStories(
         followingOnly: followingOnly,
         limit: 20,
+        offset: offset,
       );
       if (mounted) {
         setState(() {
-          _friendsStories = stories;
+          if (offset == 0) {
+            _friendsStories = stories;
+          } else {
+            _friendsStories.addAll(stories);
+          }
+          _hasMoreStories = stories.length >= 20;
           _isLoadingStories = false;
+          _isLoadingMoreStories = false;
         });
       }
     } catch (e) {
       print('❌ Error loading friends stories: $e');
-      if (mounted) setState(() => _isLoadingStories = false);
+      if (mounted) {
+        setState(() {
+          _isLoadingStories = false;
+          _isLoadingMoreStories = false;
+        });
+      }
     }
   }
 
@@ -521,6 +552,7 @@ class _FeedScreenState extends State<FeedScreen>
                         ],
                       ),
                     ),
+                    actionsPadding: const EdgeInsets.only(right: 9),
                     actions: [
                       // Search Icon
                       Material(
@@ -631,78 +663,83 @@ class _FeedScreenState extends State<FeedScreen>
                       child: FriendsMomentsTray(
                         stories: _friendsStories,
                         isLoading: _isLoadingStories,
+                        hasMore: _hasMoreStories,
+                        onAddStory: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const StoryCameraScreen(),
+                            ),
+                          ).then((_) => _loadFriendsStories());
+                        },
+                        onLoadMore: () {
+                          if (!_isLoadingMoreStories) {
+                            _loadFriendsStories(offset: _friendsStories.length);
+                          }
+                        },
                         onStoryTap: (story) async {
+                          final authorId = story['author_id']?.toString();
+                          final storyIndex = _friendsStories.indexOf(story);
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => LocationStoryViewerScreen(
                                 initialStory: story,
-                                clusterId: story['author_id'] ??
+                                clusterId:
+                                    authorId ??
                                     story['external_place_id'] ??
                                     story['event_id'] ??
                                     story['table_id'],
+                                allUserStories: _friendsStories,
+                                startUserIndex: storyIndex != -1
+                                    ? storyIndex
+                                    : 0,
                               ),
                             ),
                           );
-                          // Refresh stories tray when returning (user may have deleted a story)
-                          _loadFriendsStories();
-                        },
-                      ),
-                    ),
 
-                  // ═══════════════════════════════════════════
-                  // 3. CATEGORY FILTER CHIPS (Moved up, For You only)
-                  // ═══════════════════════════════════════════
-                  if (_tabController.index == 0)
-                    SliverToBoxAdapter(
-                      child: Container(
-                        height: 40,
-                        margin: const EdgeInsets.only(bottom: 12, top: 14),
-                        child: ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _categories.length,
-                          separatorBuilder: (c, i) => const SizedBox(width: 8),
-                          itemBuilder: (context, index) {
-                            final category = _categories[index];
-                            final isSelected = category == _selectedCategory;
-                            return GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedCategory = category;
+                          // Mark stories as viewed
+                          if (authorId != null) {
+                            _storyService.markStoriesViewed(authorId);
+                          }
+
+                          // Optimistic local update: mark as seen & move to end of unseen group
+                          if (mounted) {
+                            setState(() {
+                              final idx = _friendsStories.indexWhere(
+                                (s) => s['author_id'] == authorId,
+                              );
+                              if (idx >= 0) {
+                                _friendsStories[idx] = {
+                                  ..._friendsStories[idx],
+                                  'is_seen': true,
+                                };
+                                // Re-sort: own first, then unseen, then seen
+                                _friendsStories.sort((a, b) {
+                                  final aOwn = a['is_own'] == true ? 0 : 1;
+                                  final bOwn = b['is_own'] == true ? 0 : 1;
+                                  if (aOwn != bOwn) return aOwn.compareTo(bOwn);
+                                  final aSeen = a['is_seen'] == true ? 1 : 0;
+                                  final bSeen = b['is_seen'] == true ? 1 : 0;
+                                  if (aSeen != bSeen)
+                                    return aSeen.compareTo(bSeen);
+                                  // Within same group, sort by closeness DESC then time DESC
+                                  final aScore =
+                                      (a['closeness_score'] ?? 0) as int;
+                                  final bScore =
+                                      (b['closeness_score'] ?? 0) as int;
+                                  if (aScore != bScore)
+                                    return bScore.compareTo(aScore);
+                                  final aTime =
+                                      a['latest_story_time']?.toString() ?? '';
+                                  final bTime =
+                                      b['latest_story_time']?.toString() ?? '';
+                                  return bTime.compareTo(aTime);
                                 });
-                              },
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? Theme.of(context).primaryColor
-                                      : Colors.grey[100],
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? Theme.of(context).primaryColor
-                                        : Colors.grey[300]!,
-                                  ),
-                                ),
-                                child: Text(
-                                  category,
-                                  style: TextStyle(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : Colors.black87,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                              }
+                            });
+                          }
+                        },
                       ),
                     ),
 
@@ -710,22 +747,29 @@ class _FeedScreenState extends State<FeedScreen>
                   // 4. DISCOVER SECTION (Merged Experiences + Events)
                   // ═══════════════════════════════════════════
                   if (_tabController.index == 0 &&
-                      (_trendingExperiences.isNotEmpty || _trendingEvents.isNotEmpty) &&
+                      (_trendingExperiences.isNotEmpty ||
+                          _trendingEvents.isNotEmpty) &&
                       _selectedCategory != 'Discussions')
                     SliverToBoxAdapter(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildSectionHeader('Discover', onSeeAll: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => DiscoverListScreen(
-                                  items: [..._trendingExperiences, ..._trendingEvents],
+                          _buildSectionHeader(
+                            'Discover',
+                            onSeeAll: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => DiscoverListScreen(
+                                    items: [
+                                      ..._trendingExperiences,
+                                      ..._trendingEvents,
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            );
-                          }),
+                              );
+                            },
+                          ),
                           Padding(
                             padding: const EdgeInsets.only(bottom: 20),
                             child: TrendingCarousel(
@@ -746,10 +790,11 @@ class _FeedScreenState extends State<FeedScreen>
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (context) => ExperienceDetailModal(
-                                        experience: item,
-                                        matchData: const {},
-                                      ),
+                                      builder: (context) =>
+                                          ExperienceDetailModal(
+                                            experience: item,
+                                            matchData: const {},
+                                          ),
                                     ),
                                   );
                                 }
@@ -770,37 +815,159 @@ class _FeedScreenState extends State<FeedScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildSectionHeader('Open Hangouts', onSeeAll: () {
-                            if (widget.onSeeAllHangouts != null) {
-                              widget.onSeeAllHangouts!();
-                            }
-                          }),
+                          _buildSectionHeader(
+                            'Open Hangouts',
+                            onSeeAll: () {
+                              if (widget.onSeeAllHangouts != null) {
+                                widget.onSeeAllHangouts!();
+                              }
+                            },
+                          ),
                           Padding(
                             padding: const EdgeInsets.only(bottom: 20),
-                            child: TrendingCarousel(
-                              items: _trendingTables,
-                              onItemTap: (table) {
-                                if (widget.onJoinTable != null) {
-                                  widget.onJoinTable!(table['id']);
-                                } else {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => TableCompactModal(
-                                        table: table,
-                                        matchData: const {},
-                                      ),
-                                    ),
+                            child: SizedBox(
+                              height: 220,
+                              child: ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                physics: const BouncingScrollPhysics(),
+                                itemCount: _trendingTables.length,
+                                itemBuilder: (context, index) {
+                                  final table = _trendingTables[index];
+                                  return OpenHangoutCard(
+                                    table: table,
+                                    onTap: () {
+                                      if (widget.onJoinTable != null) {
+                                        widget.onJoinTable!(table['id']);
+                                      } else {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                TableCompactModal(
+                                                  table: table,
+                                                  matchData: const {},
+                                                ),
+                                          ),
+                                        );
+                                      }
+                                    },
                                   );
-                                }
-                              },
+                                },
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
 
-                  // 5. Thread Creation Bar
+                  // ═══════════════════════════════════════════
+                  // 5. CATEGORY FILTER CHIPS (Before threads)
+                  // ═══════════════════════════════════════════
+                  if (_tabController.index == 0)
+                    SliverToBoxAdapter(
+                      child: Container(
+                        height: 44,
+                        margin: const EdgeInsets.only(bottom: 4, top: 8),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _categories.length,
+                          separatorBuilder: (c, i) => const SizedBox(width: 10),
+                          itemBuilder: (context, index) {
+                            final category = _categories[index];
+                            final isSelected = category == _selectedCategory;
+                            // Per-category icon
+                            IconData icon;
+                            switch (category) {
+                              case 'Hangouts':
+                                icon = Icons.groups_rounded;
+                                break;
+                              case 'Discussions':
+                                icon = Icons.forum_rounded;
+                                break;
+                              default:
+                                icon = Icons.auto_awesome;
+                            }
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedCategory = category;
+                                });
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 250),
+                                curve: Curves.easeOutCubic,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? Theme.of(context).primaryColor
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Theme.of(context).primaryColor
+                                        : Colors.grey[200]!,
+                                    width: 1.5,
+                                  ),
+                                  boxShadow: isSelected
+                                      ? [
+                                          BoxShadow(
+                                            color: Theme.of(
+                                              context,
+                                            ).primaryColor.withOpacity(0.3),
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 3),
+                                          ),
+                                        ]
+                                      : [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(
+                                              0.04,
+                                            ),
+                                            blurRadius: 4,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      icon,
+                                      size: 16,
+                                      color: isSelected
+                                          ? Colors.white
+                                          : Colors.grey[600],
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      category,
+                                      style: GoogleFonts.inter(
+                                        color: isSelected
+                                            ? Colors.white
+                                            : Colors.grey[800],
+                                        fontWeight: isSelected
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+
+                  // 6. Thread Creation Bar
                   _buildThreadCreationBar(),
 
                   // 6. Threads Feed
@@ -861,6 +1028,7 @@ class _FeedScreenState extends State<FeedScreen>
                           // Check post type for Hangout Feed Card
                           if (post['post_type'] == 'hangout') {
                             return HangoutFeedCard(
+                              key: ValueKey(post['id']),
                               post: post,
                               onTap: () {
                                 final metadata = post['metadata'];
@@ -906,38 +1074,38 @@ class _FeedScreenState extends State<FeedScreen>
                           }
 
                           return SocialPostCard(
+                            key: ValueKey(post['id']),
                             post: post,
-                              onTap: () {
-                                if (post['is_story'] == true &&
-                                    widget.onStoryTap != null) {
-                                  widget.onStoryTap!(post);
-                                } else {
-                                  // Navigating to normal post detail is handled inside SocialPostCard if needed,
-                                  // or we can push a PostDetailScreen here. For now, just handle stories.
+                            onTap: () {
+                              if (post['is_story'] == true &&
+                                  widget.onStoryTap != null) {
+                                widget.onStoryTap!(post);
+                              } else {
+                                // Navigating to normal post detail is handled inside SocialPostCard if needed,
+                                // or we can push a PostDetailScreen here. For now, just handle stories.
+                              }
+                            },
+                            onPostDeleted: (postId) {
+                              setState(() {
+                                _socialPosts.removeWhere(
+                                  (p) => p['id'] == postId,
+                                );
+                              });
+                            },
+                            onPostEdited: (updatedPost) {
+                              setState(() {
+                                final idx = _socialPosts.indexWhere(
+                                  (p) => p['id'] == updatedPost['id'],
+                                );
+                                if (idx >= 0) {
+                                  _socialPosts[idx] = {
+                                    ..._socialPosts[idx],
+                                    ...updatedPost,
+                                  };
                                 }
-                              },
-                              onPostDeleted: (postId) {
-                                setState(() {
-                                  _socialPosts.removeWhere(
-                                    (p) => p['id'] == postId,
-                                  );
-                                });
-                              },
-                              onPostEdited: (updatedPost) {
-                                setState(() {
-                                  final idx = _socialPosts.indexWhere(
-                                    (p) => p['id'] == updatedPost['id'],
-                                  );
-                                  if (idx >= 0) {
-                                    _socialPosts[idx] = {
-                                      ..._socialPosts[idx],
-                                      ...updatedPost,
-                                    };
-                                  }
-                                });
-                              },
+                              });
+                            },
                           );
-
                         },
                         childCount:
                             postsToShow.length + 1, // +1 for loader/padding
@@ -1048,58 +1216,66 @@ class _FeedScreenState extends State<FeedScreen>
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-          margin: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: (Theme.of(context).cardTheme.color ?? Colors.white).withOpacity(0.85),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.06),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(0, 0, 0, 0),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: (Theme.of(context).cardTheme.color ?? Colors.white)
+                      .withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: Colors.white.withOpacity(0.3)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: Colors.grey[200],
+                      backgroundImage: _currentUserAvatarUrl != null
+                          ? NetworkImage(_currentUserAvatarUrl!)
+                          : (SupabaseConfig
+                                        .client
+                                        .auth
+                                        .currentUser
+                                        ?.userMetadata?['avatar_url'] !=
+                                    null
+                                ? NetworkImage(
+                                    SupabaseConfig
+                                        .client
+                                        .auth
+                                        .currentUser!
+                                        .userMetadata!['avatar_url'],
+                                  )
+                                : null),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Start a thread...',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                    ),
+                    const Spacer(),
+                    Icon(
+                      Icons.image_outlined,
+                      color: Colors.grey[400],
+                      size: 20,
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: Colors.grey[200],
-                backgroundImage: _currentUserAvatarUrl != null
-                    ? NetworkImage(_currentUserAvatarUrl!)
-                    : (SupabaseConfig
-                                  .client
-                                  .auth
-                                  .currentUser
-                                  ?.userMetadata?['avatar_url'] !=
-                              null
-                          ? NetworkImage(
-                              SupabaseConfig
-                                  .client
-                                  .auth
-                                  .currentUser!
-                                  .userMetadata!['avatar_url'],
-                            )
-                          : null),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Start a thread...',
-                style: TextStyle(color: Colors.grey[500], fontSize: 15),
-              ),
-              const Spacer(),
-              Icon(Icons.image_outlined, color: Colors.grey[400], size: 20),
-            ],
-          ),
-        ),
-          ), // BackdropFilter
-        ), // ClipRRect
+            ), // BackdropFilter
+          ), // ClipRRect
         ), // Padding
       ),
     );

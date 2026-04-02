@@ -5,6 +5,7 @@ import 'package:bitemates/core/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/mention_overlay.dart';
+import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 import 'package:video_player/video_player.dart';
 
 import 'dart:io';
@@ -28,6 +29,10 @@ class _CreatePostModalState extends State<CreatePostModal> {
   bool _isPosting = false;
   Position? _currentPosition;
 
+  // Location picker state
+  double? _selectedLat;
+  double? _selectedLng;
+
   // Mention state
   String? _mentionQuery;
   bool _showMentionOverlay = false;
@@ -46,6 +51,43 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final position = await LocationService().getCurrentLocation();
     if (mounted) {
       setState(() => _currentPosition = position);
+    }
+  }
+
+  Future<void> _openLocationPicker() async {
+    // Use existing selected location, or fall back to device GPS
+    Position? startPos;
+    if (_selectedLat != null && _selectedLng != null) {
+      startPos = Position(
+        latitude: _selectedLat!,
+        longitude: _selectedLng!,
+        timestamp: DateTime.now(),
+        accuracy: 0,
+        altitude: 0,
+        heading: 0,
+        speed: 0,
+        speedAccuracy: 0,
+        altitudeAccuracy: 0,
+        headingAccuracy: 0,
+      );
+    } else {
+      startPos = _currentPosition ?? await LocationService().getCurrentLocation();
+    }
+
+    if (!mounted) return;
+
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationPickerModal(initialPosition: startPos),
+      ),
+    );
+
+    if (result != null && mounted) {
+      setState(() {
+        _selectedLat = result['latitude'];
+        _selectedLng = result['longitude'];
+      });
     }
   }
 
@@ -123,24 +165,32 @@ class _CreatePostModalState extends State<CreatePostModal> {
 
   Future<void> _pickImage() async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
+      final remaining = 4 - _selectedImages.length;
+      if (remaining <= 0) {
+        _showSnack('Maximum 4 images allowed');
+        return;
+      }
+
+      final List<XFile> images = await _picker.pickMultiImage(
         maxWidth: 1920,
         maxHeight: 1080,
         imageQuality: 85,
+        limit: remaining,
       );
 
-      if (image != null && _selectedImages.length < 4) {
+      if (images.isNotEmpty && mounted) {
         setState(() {
-          _selectedImages.add(File(image.path));
+          for (final image in images) {
+            if (_selectedImages.length < 4) {
+              _selectedImages.add(File(image.path));
+            }
+          }
           _selectedGifUrl = null;
           _clearVideo();
         });
-      } else if (_selectedImages.length >= 4) {
-        _showSnack('Maximum 4 images allowed');
       }
     } catch (e) {
-      print('Error picking image: $e');
+      print('Error picking images: $e');
     }
   }
 
@@ -238,8 +288,8 @@ class _CreatePostModalState extends State<CreatePostModal> {
         imageFiles: _selectedImages.isNotEmpty ? _selectedImages : null,
         videoFile: _selectedVideo,
         gifUrl: _selectedGifUrl,
-        latitude: _currentPosition?.latitude,
-        longitude: _currentPosition?.longitude,
+        latitude: _selectedLat ?? _currentPosition?.latitude,
+        longitude: _selectedLng ?? _currentPosition?.longitude,
         mentionedUserIds: mentionedUserIds,
       );
 
@@ -542,7 +592,9 @@ class _CreatePostModalState extends State<CreatePostModal> {
                   top: BorderSide(color: Colors.grey[200]!, width: 1),
                 ),
               ),
-              child: Row(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
                 children: [
                   _ActionButton(
                     icon: Icons.image_outlined,
@@ -564,7 +616,15 @@ class _CreatePostModalState extends State<CreatePostModal> {
                     color: Colors.orange[600]!,
                     onPressed: _selectedGifUrl == null && !hasVideo ? _pickGif : null,
                   ),
+                  const SizedBox(width: 8),
+                  _ActionButton(
+                    icon: Icons.location_on_outlined,
+                    label: _selectedLat != null ? 'Located' : 'Location',
+                    color: Colors.green[600]!,
+                    onPressed: _openLocationPicker,
+                  ),
                 ],
+              ),
               ),
             ),
           ],

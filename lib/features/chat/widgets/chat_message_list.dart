@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:bitemates/features/chat/widgets/chat_message_bubble.dart';
 
@@ -96,7 +97,20 @@ class ChatMessageList extends StatelessWidget {
             index == messages.length - 1 ||
             messages[index + 1]['senderId'] != msg['senderId'];
 
-        return ChatMessageBubble(
+        // Date separator logic (reversed list: index+1 is older)
+        bool showDateSeparator = false;
+        if (index == messages.length - 1) {
+          // Always show for the oldest (topmost) message
+          showDateSeparator = true;
+        } else {
+          final currentDate = DateTime.parse(msg['timestamp']).toLocal();
+          final olderDate = DateTime.parse(messages[index + 1]['timestamp']).toLocal();
+          showDateSeparator = currentDate.year != olderDate.year ||
+              currentDate.month != olderDate.month ||
+              currentDate.day != olderDate.day;
+        }
+
+        final bubble = ChatMessageBubble(
           msg: msg,
           isMe: isMe,
           showHeader: showHeader,
@@ -122,7 +136,63 @@ class ChatMessageList extends StatelessWidget {
               currentMatchIndex < matchedIndices.length &&
               matchedIndices[currentMatchIndex] == index,
         );
+
+        if (showDateSeparator) {
+          return Column(
+            children: [
+              _buildDateChip(context, DateTime.parse(msg['timestamp']).toLocal()),
+              bubble,
+            ],
+          );
+        }
+
+        return bubble;
       },
+    );
+  }
+
+  Widget _buildDateChip(BuildContext context, DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final messageDay = DateTime(date.year, date.month, date.day);
+    final difference = today.difference(messageDay).inDays;
+
+    String label;
+    if (difference == 0) {
+      label = 'Today';
+    } else if (difference == 1) {
+      label = 'Yesterday';
+    } else if (difference < 7) {
+      label = DateFormat('EEEE').format(date); // e.g. "Monday"
+    } else if (date.year == now.year) {
+      label = DateFormat('EEE, MMM d').format(date); // e.g. "Mon, Mar 30"
+    } else {
+      label = DateFormat('MMM d, y').format(date); // e.g. "Mar 30, 2025"
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.grey[800]!.withValues(alpha: 0.8)
+                : Colors.grey[200]!.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: isDark ? Colors.grey[300] : Colors.grey[600],
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

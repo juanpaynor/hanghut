@@ -20,7 +20,7 @@ class NotificationService {
   Future<void> initialize() async {
     // Android Config
     const AndroidInitializationSettings androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+        AndroidInitializationSettings('@mipmap/launcher_icon');
 
     // iOS Config — MUST be true to show alerts
     const DarwinInitializationSettings iosSettings =

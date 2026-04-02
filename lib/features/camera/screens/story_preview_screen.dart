@@ -154,8 +154,13 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       });
 
       if (mounted) {
-        Navigator.pop(context); // Pop Preview
-        Navigator.pop(context); // Pop Camera
+        // Pause video immediately so audio stops, but let the State's dispose() handle actual destruction after the route animation to avoid black screen crashes
+        _videoPlayerController?.pause();
+
+        // Go all the way back to the main home screen to prevent any black screen artifacts 
+        // from the camera/editor navigation stack.
+        Navigator.of(context).popUntil((route) => route.isFirst);
+
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Story posted! 🚀')));
@@ -378,7 +383,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               _videoPlayerController!.value.isInitialized)
             SizedBox.expand(
               child: FittedBox(
-                fit: BoxFit.cover,
+                fit: BoxFit.contain,
                 child: SizedBox(
                   width: _videoPlayerController!.value.size.width,
                   height: _videoPlayerController!.value.size.height,
@@ -387,7 +392,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               ),
             )
           else if (widget.imageFile != null)
-            Image.file(widget.imageFile!, fit: BoxFit.cover),
+            Image.file(widget.imageFile!, fit: BoxFit.contain, width: double.infinity, height: double.infinity),
 
           // 2. Top Controls
           Positioned(

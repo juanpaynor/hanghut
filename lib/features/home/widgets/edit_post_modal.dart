@@ -82,11 +82,11 @@ class _EditPostModalState extends State<EditPostModal> {
 
     if (!mounted) return;
 
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => LocationPickerModal(initialPosition: startPos),
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationPickerModal(initialPosition: startPos),
+      ),
     );
 
     if (result != null) {

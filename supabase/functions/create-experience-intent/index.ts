@@ -62,17 +62,57 @@ serve(async (req) => {
         // 3. Fetch Created Intent and Details
         const { data: intent, error: fetchError } = await supabaseAdmin
             .from('experience_purchase_intents')
-            .select('*, table:tables(title, price_per_person)')
+            .select('*, table:tables(title, price_per_person, partner_id)')
             .eq('id', intentId)
             .single()
 
         if (fetchError || !intent) throw new Error('Failed to fetch purchase intent')
+
+        // 3b. Look up partner's XenPlatform details for payment splitting
+        let partnerXenditAccountId: string | null = null
+        let partnerSplitRuleId: string | null = null
+
+        if (intent.table?.partner_id) {
+            const { data: partner } = await supabaseAdmin
+                .from('partners')
+                .select('xendit_account_id, split_rule_id')
+                .eq('id', intent.table.partner_id)
+                .single()
+
+            if (partner) {
+                partnerXenditAccountId = partner.xendit_account_id
+                partnerSplitRuleId = partner.split_rule_id
+                console.log(`🏦 XenPlatform: routing to sub-account ${partnerXenditAccountId}, split rule ${partnerSplitRuleId}`)
+            }
+        }
 
         // 4. Create Xendit Invoice
         const xenditKey = Deno.env.get('XENDIT_SECRET_KEY')
         if (!xenditKey) throw new Error('XENDIT_SECRET_KEY not configured')
 
         console.log(`🎟️ Creating Xendit Invoice for Experience Intent: ${intentId}`)
+
+        // Resolve guest details with safe fallbacks
+        const guestEmail = guest_details?.email || user?.email || 'customer@hanghut.com';
+        const guestName = guest_details?.name || userProfile?.full_name || 'Guest';
+        const nameParts = guestName.trim().split(' ');
+        const givenNames = nameParts[0] || 'Guest';
+        const surname = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '-';
+
+        // Normalize phone to E.164 format
+        let rawPhone = guest_details?.phone || userProfile?.phone || '';
+        // Strip spaces, dashes, parens
+        rawPhone = rawPhone.replace(/[\s\-\(\)]/g, '');
+        // If starts with 09 (PH local), convert to +639
+        if (rawPhone.startsWith('09')) {
+          rawPhone = '+63' + rawPhone.substring(1);
+        }
+        // If doesn't start with +, add +
+        if (rawPhone && !rawPhone.startsWith('+')) {
+          rawPhone = '+' + rawPhone;
+        }
+        // Fallback
+        const mobileNumber = rawPhone || '+639000000000';
 
         const sessionBody = {
             reference_id: intent.xendit_external_id,
@@ -81,14 +121,20 @@ serve(async (req) => {
             amount: Math.round(intent.total_amount),
             currency: 'PHP',
             country: 'PH',
+            // Only include payment channels activated in Xendit Dashboard
+            // Excludes: QR_PH, OTC, BILLEASE
+            allowed_payment_channels: [
+                'CARDS',
+                'GCASH',
+            ],
             customer: {
-                reference_id: user?.id ? `${user.id}_${Date.now()}` : `guest_${intent.id}_${Date.now()}`,
+                reference_id: `${user.id}_${Date.now()}`,
                 type: 'INDIVIDUAL',
-                email: user?.email || guest_details?.email || 'customer@example.com',
-                mobile_number: userProfile?.phone || guest_details?.phone || '+639000000000',
+                email: guestEmail,
+                mobile_number: mobileNumber,
                 individual_detail: {
-                    given_names: userProfile?.full_name?.split(' ')[0] || guest_details?.name?.split(' ')[0] || 'Guest',
-                    surname: userProfile?.full_name?.split(' ').slice(1).join(' ') || guest_details?.name?.split(' ').slice(1).join(' ') || '-',
+                    given_names: givenNames,
+                    surname: surname,
                 }
             },
             description: `${quantity}x ${intent.table.title}`,
@@ -98,13 +144,21 @@ serve(async (req) => {
                 table_id: table_id,
                 schedule_id: schedule_id,
                 intent_id: intentId,
-                user_id: user?.id || 'guest'
+                user_id: user.id
             }
         }
 
         const headers = new Headers()
         headers.set('Authorization', `Basic ${btoa(xenditKey + ':')}`)
         headers.set('Content-Type', 'application/json')
+
+        // XenPlatform: Route payment to host's sub-account with split rule
+        if (partnerXenditAccountId) {
+            headers.set('for-user-id', partnerXenditAccountId)
+            if (partnerSplitRuleId) {
+                headers.set('with-split-rule', partnerSplitRuleId)
+            }
+        }
 
         const xenditResponse = await fetch('https://api.xendit.co/sessions', {
             method: 'POST',

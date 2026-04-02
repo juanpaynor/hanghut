@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
@@ -19,6 +18,7 @@ import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/features/host/screens/host_apply_screen.dart';
 import 'package:bitemates/features/host/screens/host_pending_screen.dart';
 import 'package:bitemates/features/host/screens/host_dashboard_screen.dart';
+import 'package:bitemates/features/settings/widgets/report_modal.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -478,8 +478,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               child: Transform.translate(
                 offset: const Offset(
                   0,
-                  -20,
-                ), // Restore slight overlap for depth
+                  -8,
+                ), // Lowered — slight overlap for depth
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child:
@@ -599,6 +599,30 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                   ),
                                 ),
                               ),
+                              const SizedBox(width: 12),
+                              SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: IconButton(
+                                  onPressed: () {
+                                    ReportModal.show(
+                                      context,
+                                      targetType: 'user',
+                                      targetId: widget.userId,
+                                      targetName: _userData?['display_name'],
+                                    );
+                                  },
+                                  icon: const Icon(Icons.flag_outlined, size: 20),
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: Colors.grey[100],
+                                    side: BorderSide(color: Colors.grey[300]!),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(24),
+                                    ),
+                                  ),
+                                  tooltip: 'Report User',
+                                ),
+                              ),
                             ],
                           )
                           .animate()
@@ -673,7 +697,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       ),
                       const SizedBox(height: 16),
                       SizedBox(
-                        height: 120, // Slightly taller strip
+                        height: 140,
                         child: ListView.separated(
                           scrollDirection: Axis.horizontal,
                           itemCount: _userPhotos.length,
@@ -694,16 +718,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                 }
                               },
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(20),
                                 child: Hero(
                                   tag: url,
                                   child: CachedNetworkImage(
                                     imageUrl: url,
-                                    height: 120,
-                                    width: 100,
+                                    height: 140,
+                                    width: 110,
                                     fit: BoxFit.cover,
                                     placeholder: (context, url) =>
-                                        Container(color: Colors.grey[200]),
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            color: isDark ? Colors.grey[800] : Colors.grey[200],
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                        ),
                                   ),
                                 ),
                               ),
@@ -738,14 +767,19 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ),
                   ..._hostedTables.map((table) {
                     final isHost = table['role'] == 'host';
-                    return Card(
-                      elevation: 0,
-                      color: isDark
-                          ? Colors.white.withOpacity(0.05)
-                          : Colors.grey.shade50,
+                    return Container(
                       margin: const EdgeInsets.only(bottom: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withOpacity(0.04)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.06)
+                              : Colors.grey.shade200,
+                          width: 1,
+                        ),
                       ),
                       child: ListTile(
                         contentPadding: const EdgeInsets.symmetric(
@@ -974,7 +1008,7 @@ class _HostModeButtonState extends State<_HostModeButton> {
                         : isPending
                         ? 'Application Under Review'
                         : 'Become a Host',
-                    style: GoogleFonts.inter(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
                       color: isApproved
@@ -990,7 +1024,7 @@ class _HostModeButtonState extends State<_HostModeButton> {
                         : isPending
                         ? 'We\'ll notify you when approved'
                         : 'Create & sell your experiences',
-                    style: GoogleFonts.inter(
+                    style: TextStyle(
                       fontSize: 12,
                       color: isApproved
                           ? Colors.white70

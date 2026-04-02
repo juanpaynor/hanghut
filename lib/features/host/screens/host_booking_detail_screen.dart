@@ -52,6 +52,47 @@ class _HostBookingDetailScreenState extends State<HostBookingDetailScreen> {
     if (confirm != true) return;
 
     setState(() => _isLoading = true);
+
+    // Pre-check: Does the host have enough balance to cover the refund?
+    try {
+      final partner = await _hostService.getMyPartnerProfile();
+      if (partner != null) {
+        final earnings = await _hostService.getEarningsSummary(partner['id']);
+        final availableBalance =
+            (earnings['available_balance'] as num?)?.toDouble() ?? 0;
+        final refundAmount =
+            (widget.booking['total_amount'] as num?)?.toDouble() ?? 0;
+
+        if (availableBalance < refundAmount) {
+          if (mounted) {
+            setState(() => _isLoading = false);
+            await showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Insufficient Balance'),
+                content: Text(
+                  'Your available balance (₱${availableBalance.toStringAsFixed(2)}) '
+                  'is not enough to cover the refund of ₱${refundAmount.toStringAsFixed(2)}.\n\n'
+                  'Please ensure you have sufficient earnings before issuing a refund.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      // If balance check fails, still allow the refund attempt
+      // (server-side will catch real issues)
+      debugPrint('Balance pre-check failed: $e');
+    }
+
     try {
       final response = await SupabaseConfig.client.functions.invoke(
         'request-refund',
@@ -91,6 +132,7 @@ class _HostBookingDetailScreenState extends State<HostBookingDetailScreen> {
       }
     }
   }
+
 
   Future<void> _updateStatus(String newStatus) async {
     setState(() => _isLoading = true);

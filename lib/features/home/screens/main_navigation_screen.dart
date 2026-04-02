@@ -6,7 +6,7 @@ import 'package:bitemates/features/map/widgets/create_table_modal.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
-import 'package:bitemates/features/activity/widgets/active_chats_list.dart';
+import 'package:bitemates/features/activity/widgets/tabbed_inbox.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/location/logic/geofence_engine.dart';
 import 'package:bitemates/features/location/widgets/geofence_modal.dart';
@@ -271,7 +271,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                                     Padding(
                                       padding: const EdgeInsets.all(16.0),
                                       child: Text(
-                                        'Active Chats',
+                                        'Inbox',
                                         style: Theme.of(context)
                                             .textTheme
                                             .titleLarge
@@ -280,7 +280,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                                             ),
                                       ),
                                     ),
-                                    const Expanded(child: ActiveChatsList()),
+                                    const Expanded(child: TabbedInbox()),
                                   ],
                                 ),
                               ),

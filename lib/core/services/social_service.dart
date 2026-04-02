@@ -529,24 +529,56 @@ class SocialService {
     }
   }
 
-  /// Add a comment (or reply)
+  /// Add a comment (or reply) with optional media attachments
   Future<Map<String, dynamic>?> addComment({
     required String postId,
     required String content,
     String? parentId,
+    File? imageFile,
+    String? gifUrl,
+    List<String>? mentionedUserIds,
   }) async {
     try {
       final userId = _client.auth.currentUser?.id;
       if (userId == null) return null;
 
+      // Upload image if provided
+      String? imageUrl;
+      if (imageFile != null) {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final fileExt = imageFile.path.split('.').last;
+        final fileName = '${timestamp}_$userId.$fileExt';
+        final filePath = 'comments/$fileName';
+
+        await _client.storage
+            .from('social_images')
+            .upload(
+              filePath,
+              imageFile,
+              fileOptions: const FileOptions(
+                cacheControl: '3600',
+                upsert: false,
+              ),
+            );
+
+        imageUrl = _client.storage.from('social_images').getPublicUrl(filePath);
+      }
+
+      final insertData = <String, dynamic>{
+        'post_id': postId,
+        'user_id': userId,
+        'content': content,
+        'parent_id': parentId,
+      };
+      if (imageUrl != null) insertData['image_url'] = imageUrl;
+      if (gifUrl != null) insertData['gif_url'] = gifUrl;
+      if (mentionedUserIds != null && mentionedUserIds.isNotEmpty) {
+        insertData['mentioned_user_ids'] = mentionedUserIds;
+      }
+
       final response = await _client
           .from('comments')
-          .insert({
-            'post_id': postId,
-            'user_id': userId,
-            'content': content,
-            'parent_id': parentId,
-          })
+          .insert(insertData)
           .select('''
             *,
             user:user_id!inner (

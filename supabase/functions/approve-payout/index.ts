@@ -115,6 +115,19 @@ serve(async (req) => {
                 admin_notes: `Xendit Error: ${xenditData.message}`
             }).eq('id', payout_id)
 
+            // 🔧 FIX: Unlink transactions so funds become available again
+            await supabase
+                .from('transactions')
+                .update({ payout_id: null })
+                .eq('payout_id', payout_id)
+
+            await supabase
+                .from('experience_transactions')
+                .update({ payout_id: null })
+                .eq('payout_id', payout_id)
+
+            console.log(`🔓 Transactions unlinked from failed payout ${payout_id}`)
+
             throw new Error(`Xendit Error: ${xenditData.message || JSON.stringify(xenditData)}`)
         }
 

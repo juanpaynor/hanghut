@@ -180,7 +180,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   List<Map<String, dynamic>> _availableInterests = [];
 
   // Step 5: Preferences
-  RangeValues _budgetRange = const RangeValues(20, 100);
+
   String _primaryGoal = 'friends'; // friends, romance, casual
 
   @override
@@ -396,8 +396,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         personality: personalityScores,
         interestTagIds: _selectedInterestIds.toList(),
         preferences: {
-          'budget_min': _budgetRange.start.round(),
-          'budget_max': _budgetRange.end.round(),
           'primary_goal': _primaryGoal,
         },
         photoUrl: _uploadedPhotoUrl,
@@ -1214,44 +1212,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
           const SizedBox(height: 32),
 
-          // Budget
-          const Text(
-            'Budget per person (\$)',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-          ),
-          const SizedBox(height: 8),
-          RangeSlider(
-            values: _budgetRange,
-            min: 0,
-            max: 200,
-            divisions: 20,
-            activeColor: Colors.black,
-            inactiveColor: Colors.grey[200],
-            labels: RangeLabels(
-              '\$${_budgetRange.start.round()}',
-              '\$${_budgetRange.end.round()}',
-            ),
-            onChanged: (values) {
-              setState(() {
-                _budgetRange = values;
-              });
-            },
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '\$${_budgetRange.start.round()}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                '\$${_budgetRange.end.round()}+',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 32),
 
           // Primary Goal
           const Text(

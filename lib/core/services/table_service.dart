@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/services/friends_going_service.dart';
 import 'package:bitemates/core/constants/model_registry.dart';
 
 class TableService {
@@ -18,7 +19,15 @@ class TableService {
     int? limit, // New: Server-side limit
   }) async {
     try {
-      var query = SupabaseConfig.client.from('map_ready_tables').select();
+      var query = SupabaseConfig.client.from('map_ready_tables').select('''
+        id, title, location_lat, location_lng, venue_name, venue_address,
+        scheduled_time, max_capacity, status, current_capacity,
+        marker_image_url, marker_emoji, image_url, images,
+        activity_type, price_per_person, visibility,
+        experience_type, video_url, currency, is_experience,
+        verified_by_hanghut, host_id, host_name, host_photo_url,
+        host_trust_score, member_count, seats_left, availability_state
+      ''');
 
       // Apply server-side bounding box filter if active
       if (minLat != null &&
@@ -113,6 +122,100 @@ class TableService {
   }
 
   double _toRadians(double degrees) => degrees * pi / 180;
+
+  /// Enrich tables with member avatar URLs and friends-here data
+  /// for the Open Hangouts carousel cards.
+  Future<List<Map<String, dynamic>>> enrichTablesWithMembers(
+    List<Map<String, dynamic>> tables,
+  ) async {
+    if (tables.isEmpty) return tables;
+
+    try {
+      final tableIds = tables.map((t) => t['id'] as String).toList();
+
+      // 1. Batch-fetch first 5 members (with avatars) for all tables
+      final membersResp = await SupabaseConfig.client
+          .from('table_members')
+          .select('''
+            table_id,
+            user_id,
+            users:user_id (
+              id,
+              display_name,
+              user_photos (
+                photo_url,
+                is_primary
+              )
+            )
+          ''')
+          .inFilter('table_id', tableIds)
+          .inFilter('status', ['approved', 'joined', 'attended', 'confirmed'])
+          .order('joined_at', ascending: true);
+
+      // Group members by table_id
+      final membersByTable = <String, List<Map<String, dynamic>>>{};
+      for (final m in (membersResp as List)) {
+        final tId = m['table_id'] as String;
+        membersByTable.putIfAbsent(tId, () => []);
+        if ((membersByTable[tId]?.length ?? 0) < 5) {
+          membersByTable[tId]!.add(Map<String, dynamic>.from(m));
+        }
+      }
+
+      // 2. Fetch friends-at-table for the current user
+      final friendsService = FriendsGoingService();
+      final friendsByTable = <String, List<Map<String, dynamic>>>{};
+      // Only fetch for tables that actually have members (avoid empty RPC calls)
+      for (final tId in tableIds) {
+        try {
+          final friends = await friendsService.getFriendsAtTable(tId);
+          if (friends.isNotEmpty) {
+            friendsByTable[tId] = friends;
+          }
+        } catch (_) {
+          // Non-critical — skip if RPC fails for one table
+        }
+      }
+
+      // 3. Attach data to each table map
+      for (final table in tables) {
+        final tId = table['id'] as String;
+
+        // Extract avatar URLs from members
+        final members = membersByTable[tId] ?? [];
+        final avatarUrls = <String>[];
+        for (final member in members) {
+          final user = member['users'];
+          if (user != null && user is Map) {
+            final photos = user['user_photos'];
+            if (photos != null && photos is List && photos.isNotEmpty) {
+              // Primary photo first, fallback to first
+              final primary = photos.firstWhere(
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              );
+              if (primary['photo_url'] != null) {
+                avatarUrls.add(primary['photo_url'] as String);
+              }
+            }
+          }
+        }
+
+        table['member_avatars'] = avatarUrls;
+        table['member_avatar_count'] = members.length;
+
+        // Friends data
+        final friends = friendsByTable[tId] ?? [];
+        table['friends_here'] = friends;
+      }
+
+      return tables;
+    } catch (e) {
+      print('TableService: Error enriching tables with members: $e');
+      // Return tables as-is if enrichment fails
+      return tables;
+    }
+  }
 
   // Upload marker image to Supabase Storage
   Future<String?> _uploadMarkerImage(String tableId, File imageFile) async {

@@ -530,16 +530,16 @@ class MapClusterSheet extends StatelessWidget {
     return GestureDetector(
       onTap: () {
         Navigator.pop(context);
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => LocationStoryViewerScreen(
-            initialStory: story,
-            clusterId:
-                story['external_place_id'] ??
-                story['event_id'] ??
-                story['table_id'],
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => LocationStoryViewerScreen(
+              initialStory: story,
+              clusterId:
+                  story['external_place_id'] ??
+                  story['event_id'] ??
+                  story['table_id'],
+            ),
           ),
         );
       },

@@ -7,6 +7,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
@@ -46,6 +47,17 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         widget.post['is_liked'] ?? widget.post['user_has_liked'] ?? false;
     _likeCount = widget.post['like_count'] ?? widget.post['likes_count'] ?? 0;
     _fetchTableDetailsIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant HangoutFeedCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Sync like state when parent rebuilds with fresh data (e.g. pull-to-refresh)
+    if (oldWidget.post['id'] != widget.post['id']) {
+      _isLiked =
+          widget.post['is_liked'] ?? widget.post['user_has_liked'] ?? false;
+      _likeCount = widget.post['like_count'] ?? widget.post['likes_count'] ?? 0;
+    }
   }
 
   /// Fetch the real title/description from the `tables` row
@@ -502,112 +514,198 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                 ),
               ),
             ),
-          ] else
-            // No image: fixed height with gradient (text overlay is fine here)
-            Container(
-              height: 220,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.grey[200],
-              ),
-              child: Stack(
-                children: [
-                  // Gradient background
-                  Positioned.fill(
-                    child: GestureDetector(
-                      onTap: widget.onTap,
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Color(0xFF2A0845),
-                              Color(0xFF6441A5),
-                            ],
+          ] else ...[
+            // No image: show Mapbox static map preview with indigo pin (or gradient fallback)
+            Builder(builder: (context) {
+              final lat = widget.post['latitude'];
+              final lng = widget.post['longitude'];
+              final mapboxToken = dotenv.env['MAPBOX_PUBLIC_TOKEN'];
+              final hasCoords = lat != null && lng != null && mapboxToken != null;
+
+              if (hasCoords) {
+                // Mapbox Static Images API with indigo pin
+                final staticMapUrl =
+                    'https://api.mapbox.com/styles/v1/mapbox/light-v11/static/'
+                    'pin-l+3F51B5($lng,$lat)/$lng,$lat,15,0/600x400@2x'
+                    '?access_token=$mapboxToken';
+
+                return GestureDetector(
+                  onTap: widget.onTap,
+                  child: Stack(
+                    children: [
+                      CachedNetworkImage(
+                        imageUrl: staticMapUrl,
+                        width: double.infinity,
+                        height: 220,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Container(
+                          height: 220,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFFE8EAF6), Color(0xFFC5CAE9)],
+                            ),
+                          ),
+                          child: const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.indigo,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          height: 220,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF2A0845), Color(0xFF6441A5)],
+                            ),
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.location_on, size: 48, color: Colors.white70),
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                  // Gradient Overlay
-                  IgnorePointer(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.black.withOpacity(0.7),
-                          ],
+                      // Subtle bottom gradient for readability
+                      Positioned(
+                        bottom: 0, left: 0, right: 0,
+                        child: Container(
+                          height: 60,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.4),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
+                      // Activity Type Badge
+                      Positioned(
+                        top: 12, left: 12,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.indigo,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            activityType.toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold,
+                              fontSize: 10, letterSpacing: 1.2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              // Fallback: no coordinates — show gradient
+              return GestureDetector(
+                onTap: widget.onTap,
+                child: Container(
+                  height: 220,
+                  width: double.infinity,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF2A0845), Color(0xFF6441A5)],
                     ),
                   ),
-                  // Center Emoji
-                  Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.1),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.2),
-                              width: 1.5,
+                  child: Center(
+                    child: Icon(Icons.location_on, size: 48, color: Colors.white70),
+                  ),
+                ),
+              );
+            }),
+            // Details section below the map preview
+            InkWell(
+              onTap: widget.onTap,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            customTitle,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 17,
+                              height: 1.2,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
-                                blurRadius: 20,
-                                spreadRadius: 5,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (currentDesc != null &&
+                              currentDesc.toString().isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                currentDesc.toString(),
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontSize: 13,
+                                  height: 1.3,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Icon(Icons.location_on, size: 14, color: Colors.grey[500]),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  venueName,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ],
                           ),
-                          child: Text(
-                            metadata['marker_emoji'] ??
-                                _getEmojiForActivity(activityType),
-                            style: const TextStyle(fontSize: 48),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Top Left Badge (Activity Type)
-                  Positioned(
-                    top: 12, left: 12,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
-                      ),
-                      child: Text(
-                        activityType.toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold,
-                          fontSize: 10, letterSpacing: 1.2,
-                        ),
+                          if (scheduledTime != null) ...[
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
+                                const SizedBox(width: 4),
+                                Text(
+                                  DateFormat('EEE, MMM d • h:mm a').format(scheduledTime),
+                                  style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                  ),
-                  // Bottom Left Details
-                  Positioned(
-                    bottom: 12, left: 12, right: 100,
-                    child: _buildOverlayDetails(customTitle, currentDesc, venueName, scheduledTime),
-                  ),
-                  // Join Button
-                  Positioned(
-                    bottom: 12, right: 12,
-                    child: _buildJoinButton(metadata),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    _buildJoinButton(metadata),
+                  ],
+                ),
               ),
             ),
+          ],
 
      // 3. Filter Chips Row (between content and social actions)
          if (filters.isNotEmpty || metaVisibility == 'followers_only')

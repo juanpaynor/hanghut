@@ -179,7 +179,7 @@ serve(async (req) => {
         const guestName = data.name || 'Guest'
         const firstName = guestName.split(' ')[0]
 
-        // 3. Premium HTML Email
+        // 3. Premium HTML Email — Clean white design
         const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -188,113 +188,138 @@ serve(async (req) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Booking Confirmed</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #0f0f0f; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-    <div style="max-width: 600px; margin: 0 auto; background-color: #0f0f0f;">
-        
-        <!-- Hero Section -->
-        <div style="position: relative; text-align: center;">
+<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <div style="max-width: 560px; margin: 0 auto; padding: 20px 16px;">
+
+        <!-- Logo Header -->
+        <div style="text-align: center; padding: 24px 0 16px;">
+            <span style="font-size: 24px; font-weight: 800; color: #18181b; letter-spacing: -1px;">Hang<span style="color: #4f46e5;">Hut</span></span>
+        </div>
+
+        <!-- Main Card -->
+        <div style="background: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);">
+
+            <!-- Hero Banner -->
             ${data.cover_image_url
-                ? `<div style="background-image: url('${data.cover_image_url}'); background-size: cover; background-position: center; height: 280px; border-radius: 0 0 24px 24px;">
-                     <div style="background: linear-gradient(to top, #0f0f0f 0%, rgba(15,15,15,0.6) 50%, rgba(15,15,15,0.2) 100%); height: 280px; border-radius: 0 0 24px 24px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 30px;">
-                       <div>
-                         <div style="background: #22c55e; color: #fff; display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">✓ Confirmed</div>
-                       </div>
+                ? `<div style="position: relative;">
+                     <img src="${data.cover_image_url}" alt="${data.experience_title}" style="width: 100%; height: 200px; object-fit: cover; display: block;" />
+                     <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: linear-gradient(to top, rgba(0,0,0,0.5), transparent);"></div>
+                     <div style="position: absolute; bottom: 16px; left: 20px;">
+                       <span style="background: #22c55e; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">✓ Booking Confirmed</span>
                      </div>
                    </div>`
-                : `<div style="background: linear-gradient(135deg, #166534 0%, #15803d 50%, #22c55e 100%); height: 200px; border-radius: 0 0 24px 24px; display: flex; align-items: center; justify-content: center;">
-                     <div style="text-align: center;">
-                       <div style="background: rgba(255,255,255,0.2); color: #fff; display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">✓ Confirmed</div>
+                : `<div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #a855f7 100%); height: 140px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px;">
+                     <div>
+                       <div style="font-size: 32px; margin-bottom: 8px;">🎉</div>
+                       <span style="background: rgba(255,255,255,0.25); color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">✓ Booking Confirmed</span>
                      </div>
                    </div>`
             }
-        </div>
 
-        <!-- Content -->
-        <div style="padding: 30px 24px;">
-            
-            <!-- Greeting -->
-            <p style="color: #a1a1aa; font-size: 15px; margin: 0 0 4px;">Hey ${firstName},</p>
-            <h1 style="color: #ffffff; font-size: 26px; font-weight: 800; margin: 0 0 6px; letter-spacing: -0.5px; line-height: 1.2;">${data.experience_title}</h1>
-            <p style="color: #71717a; font-size: 14px; margin: 0 0 28px;">You're all set. See you there! 🎉</p>
+            <!-- Content -->
+            <div style="padding: 28px 24px 8px;">
 
-            <!-- Details Card -->
-            <div style="background: #1a1a1a; border-radius: 16px; padding: 24px; border: 1px solid #2a2a2a;">
-                
-                <!-- Date & Time Row -->
-                <div style="display: flex; margin-bottom: 20px;">
-                    <div style="background: #22c55e; width: 44px; height: 44px; border-radius: 12px; text-align: center; line-height: 44px; font-size: 18px; flex-shrink: 0;">📅</div>
-                    <div style="margin-left: 14px;">
-                        <p style="margin: 0; color: #71717a; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">When</p>
-                        <p style="margin: 3px 0 0; color: #ffffff; font-size: 15px; font-weight: 600;">${formattedDate}</p>
-                        <p style="margin: 2px 0 0; color: #a1a1aa; font-size: 13px;">${formattedTime}</p>
+                <!-- Greeting -->
+                <p style="color: #71717a; font-size: 14px; margin: 0 0 4px;">Hey ${firstName} 👋</p>
+                <h1 style="color: #18181b; font-size: 22px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.3px; line-height: 1.3;">${data.experience_title}</h1>
+                <p style="color: #a1a1aa; font-size: 13px; margin: 0 0 24px;">You're all set — see you there!</p>
+
+                <!-- Details Card -->
+                <div style="background: #fafafa; border-radius: 14px; border: 1px solid #f0f0f0; overflow: hidden;">
+
+                    <!-- Date & Time -->
+                    <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                                <td width="36" valign="top">
+                                    <div style="width: 36px; height: 36px; background: #eef2ff; border-radius: 10px; text-align: center; line-height: 36px; font-size: 16px;">📅</div>
+                                </td>
+                                <td style="padding-left: 14px;" valign="top">
+                                    <p style="margin: 0; color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">When</p>
+                                    <p style="margin: 2px 0 0; color: #18181b; font-size: 14px; font-weight: 600;">${formattedDate} · ${formattedTime}</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Venue -->
+                    <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                                <td width="36" valign="top">
+                                    <div style="width: 36px; height: 36px; background: #fef2f2; border-radius: 10px; text-align: center; line-height: 36px; font-size: 16px;">📍</div>
+                                </td>
+                                <td style="padding-left: 14px;" valign="top">
+                                    <p style="margin: 0; color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">Where</p>
+                                    <p style="margin: 2px 0 0; color: #18181b; font-size: 14px; font-weight: 600;">${data.experience_venue}</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Host -->
+                    <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                                <td width="36" valign="top">
+                                    <div style="width: 36px; height: 36px; background: #f5f3ff; border-radius: 10px; text-align: center; line-height: 36px; font-size: 16px;">👤</div>
+                                </td>
+                                <td style="padding-left: 14px;" valign="top">
+                                    <p style="margin: 0; color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">Your Host</p>
+                                    <p style="margin: 2px 0 0; color: #18181b; font-size: 14px; font-weight: 600;">${data.host_name}</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Guests -->
+                    <div style="padding: 16px 20px;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                                <td width="36" valign="top">
+                                    <div style="width: 36px; height: 36px; background: #fefce8; border-radius: 10px; text-align: center; line-height: 36px; font-size: 16px;">🎫</div>
+                                </td>
+                                <td style="padding-left: 14px;" valign="top">
+                                    <p style="margin: 0; color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">Guests</p>
+                                    <p style="margin: 2px 0 0; color: #18181b; font-size: 14px; font-weight: 600;">${data.quantity} guest${data.quantity > 1 ? 's' : ''} · ${guestName}</p>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
-                <!-- Divider -->
-                <div style="border-top: 1px solid #2a2a2a; margin: 0 -24px; padding: 0;"></div>
+                <!-- Payment Summary -->
+                <div style="margin-top: 16px; background: #18181b; border-radius: 14px; padding: 20px 22px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                        <tr>
+                            <td>
+                                <p style="margin: 0; color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;">Total Paid</p>
+                                <p style="margin: 4px 0 0; color: #ffffff; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">${formattedAmount}</p>
+                                ${data.payment_method ? `<p style="margin: 4px 0 0; color: #71717a; font-size: 12px;">via ${data.payment_method}</p>` : ''}
+                            </td>
+                            <td style="text-align: right; vertical-align: middle;">
+                                <span style="background: #22c55e; color: #fff; padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 700; display: inline-block;">✓ Paid</span>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
 
-                <!-- Venue Row -->
-                <div style="display: flex; margin-top: 20px; margin-bottom: 20px;">
-                    <div style="background: #3b82f6; width: 44px; height: 44px; border-radius: 12px; text-align: center; line-height: 44px; font-size: 18px; flex-shrink: 0;">📍</div>
-                    <div style="margin-left: 14px;">
-                        <p style="margin: 0; color: #71717a; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Where</p>
-                        <p style="margin: 3px 0 0; color: #ffffff; font-size: 15px; font-weight: 600;">${data.experience_venue}</p>
+                <!-- QR Pass Notice -->
+                <div style="text-align: center; margin-top: 28px; padding-bottom: 20px;">
+                    <div style="display: inline-block; text-align: center;">
+                        <div style="width: 48px; height: 48px; background: #eef2ff; border-radius: 14px; margin: 0 auto 12px; text-align: center; line-height: 48px; font-size: 22px;">📎</div>
+                        <p style="margin: 0; color: #18181b; font-size: 14px; font-weight: 700;">Experience Pass Attached</p>
+                        <p style="margin: 4px 0 0; color: #a1a1aa; font-size: 12px; line-height: 1.5;">Open the PDF attachment and show<br>the QR code to the host for check-in</p>
                     </div>
                 </div>
 
-                <!-- Divider -->
-                <div style="border-top: 1px solid #2a2a2a; margin: 0 -24px; padding: 0;"></div>
-
-                <!-- Host Row -->
-                <div style="display: flex; margin-top: 20px; margin-bottom: 20px;">
-                    <div style="background: #a855f7; width: 44px; height: 44px; border-radius: 12px; text-align: center; line-height: 44px; font-size: 18px; flex-shrink: 0;">👤</div>
-                    <div style="margin-left: 14px;">
-                        <p style="margin: 0; color: #71717a; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Your Host</p>
-                        <p style="margin: 3px 0 0; color: #ffffff; font-size: 15px; font-weight: 600;">${data.host_name}</p>
-                    </div>
-                </div>
-
-                <!-- Divider -->
-                <div style="border-top: 1px solid #2a2a2a; margin: 0 -24px; padding: 0;"></div>
-
-                <!-- Guests Row -->
-                <div style="display: flex; margin-top: 20px;">
-                    <div style="background: #f59e0b; width: 44px; height: 44px; border-radius: 12px; text-align: center; line-height: 44px; font-size: 18px; flex-shrink: 0;">🎫</div>
-                    <div style="margin-left: 14px;">
-                        <p style="margin: 0; color: #71717a; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Guests</p>
-                        <p style="margin: 3px 0 0; color: #ffffff; font-size: 15px; font-weight: 600;">${data.quantity} guest${data.quantity > 1 ? 's' : ''}</p>
-                    </div>
-                </div>
             </div>
-
-            <!-- Payment Summary -->
-            <div style="background: linear-gradient(135deg, #052e16 0%, #14532d 100%); border-radius: 16px; padding: 20px 24px; margin-top: 16px; border: 1px solid #166534;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <p style="margin: 0; color: #86efac; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Paid</p>
-                        <p style="margin: 4px 0 0; color: #ffffff; font-size: 24px; font-weight: 800;">${formattedAmount}</p>
-                        ${data.payment_method ? `<p style="margin: 4px 0 0; color: #4ade80; font-size: 12px;">via ${data.payment_method}</p>` : ''}
-                    </div>
-                    <div style="text-align: right;">
-                        <div style="background: #22c55e; color: #fff; padding: 8px 16px; border-radius: 10px; font-size: 13px; font-weight: 700;">✓ Paid</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- QR Pass Notice -->
-            <div style="text-align: center; margin-top: 32px; padding: 24px 0; border-top: 1px dashed #2a2a2a;">
-                <div style="background: #1a1a1a; display: inline-block; padding: 12px 24px; border-radius: 12px; border: 1px solid #2a2a2a;">
-                    <p style="margin: 0; color: #ffffff; font-size: 14px; font-weight: 600;">📎 Your Experience Pass is attached</p>
-                    <p style="margin: 6px 0 0; color: #71717a; font-size: 12px;">Show the QR code to the host for check-in</p>
-                </div>
-            </div>
-
         </div>
 
         <!-- Footer -->
-        <div style="padding: 20px 24px 40px; text-align: center; border-top: 1px solid #1a1a1a;">
-            <p style="color: #3f3f46; font-size: 11px; margin: 0;">Ref: ${data.transaction_ref}</p>
-            <p style="color: #3f3f46; font-size: 11px; margin: 6px 0 0;">© ${new Date().getFullYear()} HangHut · All rights reserved</p>
+        <div style="text-align: center; padding: 24px 0;">
+            <p style="color: #a1a1aa; font-size: 11px; margin: 0;">Ref: ${data.transaction_ref}</p>
+            <p style="color: #d4d4d8; font-size: 11px; margin: 8px 0 0;">© ${new Date().getFullYear()} HangHut · All rights reserved</p>
         </div>
 
     </div>

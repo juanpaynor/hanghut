@@ -180,7 +180,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
             ],
           ),
           child: SafeArea(
-            bottom: false,
+            top: false,
             child: Column(
               children: [
                 // Reply preview

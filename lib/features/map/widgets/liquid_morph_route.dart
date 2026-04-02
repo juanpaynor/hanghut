@@ -8,7 +8,7 @@ class LiquidMorphRoute extends PageRouteBuilder {
     : super(
         pageBuilder: (context, animation, secondaryAnimation) => page,
         opaque: false, // Vital for seeing the map behind!
-        barrierColor: Colors.black54, // Dim background
+        barrierColor: Colors.transparent, // No dimming — map stays visible
         barrierDismissible: true,
         transitionDuration: const Duration(milliseconds: 500), // Match closing
         reverseTransitionDuration: const Duration(milliseconds: 500),
