@@ -23,7 +23,7 @@
 - Web: `/Users/rich/Documents/hanghut-web/docs/xenplatform-contract.md`
 
 >
-> **Last updated:** 2026-03-27 by Web Team (split rules + wallet top-up wired)
+> **Last updated:** 2026-04-03 by Mobile Team (account deletion RPC + web team action needed for /delete-account page)
 
 ---
 
@@ -479,3 +479,12 @@ STEPS:
 | | | |
 
 | 2026-04-02 | Web Team | 🐛 **CRITICAL SPLIT RULE BUG FIXED.** The `create-split-rule` function was routing the partner% to the `partner.xendit_account_id`. However, since we use `for-user-id` in the payment intent, the payment ALREADY lands in the partner sub-account. The old split rule was taking 96% from the sub-account and putting it right back into the *same* sub-account, leaving the remaining 4% stranded there too. **FIX:** Changed `create-split-rule` to route `platform_percentage` (e.g. 4%) to the `XENDIT_MASTER_ACCOUNT_ID`. Xendit automatically leaves the remaining 96% in the source (partner sub-account). **ACTION NEEDED: Mobile Team** — please redeploy `create-split-rule` from `bitemates/supabase/functions/create-split-rule`. |
+| 2026-04-02 | Mobile Team | ✅ DEPLOYED. Redeployed `create-split-rule` from the `bitemates` repo to route the platform percentage to the `XENDIT_MASTER_ACCOUNT_ID` appropriately. Good catch on that! |
+| | | |
+| 2026-04-03 | Mobile Team | 🆕 **ACCOUNT DELETION EDGE FUNCTION DEPLOYED** (v17). Google Play requires a public URL where users can request account + data deletion. We've rewritten `delete-user-account` to support **two modes**: (1) **Self-deletion** — authenticated user calls with just their JWT, no body needed. (2) **Admin deletion** — pass `{ user_id, admin_id, reason }`. The function cascades deletion across: Storage files (profile-photos, post_images, social_images, social_videos, chat-images), all DB rows (messages, posts, stories, friends, memberships, notifications, reactions, groups, DM/trip chat participations), the user profile, and the `auth.users` record. |
+| | | **How to call it from JS (self-deletion):** `const { data, error } = await supabase.functions.invoke('delete-user-account')` — user must be authenticated (JWT in header). No body needed; the function resolves `auth.uid()` from the JWT. |
+| | | **How to call it from JS (admin):** `const { data, error } = await supabase.functions.invoke('delete-user-account', { body: { user_id: '...', admin_id: '...', reason: '...' } })` |
+| | | **In-app button:** Already updated in Flutter (`settings_screen.dart`) — calls the edge function instead of the old mock. |
+| 2026-04-03 | Mobile Team | ACTION NEEDED: Web Team — please create a `/delete-account` page on hanghut-web. **Requirements:** (1) Login form (email + password or OTP) to authenticate the user via Supabase. (2) List of data that will be deleted (profile, messages, posts, stories, friends, groups, payment history). (3) Confirmation button that calls `supabase.functions.invoke('delete-user-account')`. (4) Success message after deletion. **Why:** Google Play Store Data Safety form requires a public URL for account deletion requests. We need the final URL (e.g. `https://hanghut.com/delete-account`) to complete the Play Store submission. |
+
+

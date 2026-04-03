@@ -448,32 +448,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onPressed: () async {
                             Navigator.pop(ctx); // Close dialog
 
-                            // Mock Deletion Logic
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Account scheduled for deletion. Signing out...',
-                                ),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
+                            try {
+                              // Delete account via edge function (handles DB, Storage, Auth cleanup)
+                              await SupabaseConfig.client.functions.invoke(
+                                'delete-user-account',
+                              );
 
-                            // Wait for snackbar
-                            await Future.delayed(const Duration(seconds: 2));
-
-                            if (context.mounted) {
-                              // Perform Sign Out
-                              Navigator.of(
-                                context,
-                              ).popUntil((route) => route.isFirst);
-                              await SupabaseConfig.client.auth.signOut();
                               if (context.mounted) {
-                                context.read<AuthProvider>().signOut();
-                                Navigator.of(context).pushAndRemoveUntil(
-                                  MaterialPageRoute(
-                                    builder: (context) => const LoginScreen(),
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Account deleted. Signing out...',
+                                    ),
+                                    backgroundColor: Colors.red,
                                   ),
-                                  (route) => false,
+                                );
+
+                                await Future.delayed(const Duration(seconds: 2));
+
+                                if (context.mounted) {
+                                  Navigator.of(
+                                    context,
+                                  ).popUntil((route) => route.isFirst);
+                                  await SupabaseConfig.client.auth.signOut();
+                                  if (context.mounted) {
+                                    context.read<AuthProvider>().signOut();
+                                    Navigator.of(context).pushAndRemoveUntil(
+                                      MaterialPageRoute(
+                                        builder: (context) => const LoginScreen(),
+                                      ),
+                                      (route) => false,
+                                    );
+                                  }
+                                }
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to delete account: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
                                 );
                               }
                             }
