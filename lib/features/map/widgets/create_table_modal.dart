@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/services/tenor_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
@@ -20,12 +21,16 @@ class CreateTableModal extends StatefulWidget {
   final double? currentLat;
   final double? currentLng;
   final VoidCallback onTableCreated;
+  final String? groupId;
+  final String? groupName;
 
   const CreateTableModal({
     super.key,
     this.currentLat,
     this.currentLng,
     required this.onTableCreated,
+    this.groupId,
+    this.groupName,
   });
 
   @override
@@ -57,7 +62,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
   bool _isLoading = false;
 
   // Visibility
-  String _visibility = 'public'; // 'public' or 'followers_only'
+  late String _visibility;
 
   // Advanced Filters
   bool _showAdvancedFilters = false;
@@ -115,6 +120,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
   @override
   void initState() {
     super.initState();
+    _visibility = widget.groupId != null ? 'group_only' : 'public';
     _loadUserProfile();
     _venueController.addListener(_onSearchChanged);
 
@@ -603,7 +609,9 @@ class _CreateTableModalState extends State<CreateTableModal> {
 
     try {
       final activity = _activityController.text.trim();
-      final title = '${_userName ?? "Someone"} wants to $activity';
+      // Use group name when creating for a group, else user name
+      final hostLabel = widget.groupName ?? _userName ?? 'Someone';
+      final title = '$hostLabel wants to $activity';
       final description = _descriptionController.text.trim(); // NEW
 
       // Only use GIF if user explicitly selected one (no auto-GIF fallback)
@@ -637,6 +645,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
         invitedUserIds: _invitedUsers.isNotEmpty
             ? _invitedUsers.map((u) => u['id'] as String).toList()
             : null,
+        groupId: widget.groupId,
       );
 
       if (mounted) {
@@ -648,9 +657,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to create table. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -728,6 +735,40 @@ class _CreateTableModalState extends State<CreateTableModal> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Group context banner
+                    if (widget.groupId != null && widget.groupName != null) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: theme.colorScheme.primary.withOpacity(0.2),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.groups_outlined,
+                                size: 20,
+                                color: theme.colorScheme.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Creating for ${widget.groupName}',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+
                     // I WANT TO... Input
                     Text(
                       'I want to...',
@@ -1600,6 +1641,52 @@ class _CreateTableModalState extends State<CreateTableModal> {
                             ),
                           ),
                         ),
+                        // Group-Only Option (only when creating for a group)
+                        if (widget.groupId != null) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _visibility = 'group_only'),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                decoration: BoxDecoration(
+                                  color: _visibility == 'group_only'
+                                      ? const Color(0xFF059669)
+                                      : (isDark ? Colors.grey[800] : Colors.grey[100]),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: _visibility == 'group_only'
+                                        ? const Color(0xFF059669)
+                                        : (isDark ? Colors.grey[700]! : Colors.grey[300]!),
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Icon(
+                                      Icons.lock_outline,
+                                      size: 18,
+                                      color: _visibility == 'group_only'
+                                          ? Colors.white
+                                          : Colors.grey[600],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Members',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12,
+                                        color: _visibility == 'group_only'
+                                            ? Colors.white
+                                            : theme.colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     // Mystery hint text
@@ -1616,6 +1703,26 @@ class _CreateTableModalState extends State<CreateTableModal> {
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: const Color(0xFF7C3AED),
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_visibility == 'group_only')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 14, color: const Color(0xFF059669)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Only group members can see this activity',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: const Color(0xFF059669),
                                   fontStyle: FontStyle.italic,
                                 ),
                               ),

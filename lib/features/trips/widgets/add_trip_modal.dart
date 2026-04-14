@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/trip_service.dart';
@@ -172,11 +173,9 @@ class _AddTripModalState extends State<AddTripModal> {
         widget.onTripCreated();
       }
     } catch (e) {
-      print('❌ Error creating trip: $e');
+      debugPrint('Error creating trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error creating trip: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to create trip. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

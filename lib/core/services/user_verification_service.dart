@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 
 class UserVerificationService {
@@ -20,7 +21,7 @@ class UserVerificationService {
 
       return response;
     } catch (e) {
-      print('❌ VERIFY SERVICE: Error checking status - $e');
+      debugPrint('⚠️ VERIFY SERVICE: Error checking status - $e');
       return null;
     }
   }
@@ -60,10 +61,10 @@ class UserVerificationService {
         'message': 'Verification submitted successfully!',
       };
     } catch (e) {
-      print('❌ VERIFY SERVICE: Error submitting - $e');
+      debugPrint('⚠️ VERIFY SERVICE: Error submitting - $e');
       return {
         'success': false,
-        'message': 'Submission failed: ${e.toString()}',
+        'message': 'Submission failed. Please try again.',
       };
     }
   }
@@ -84,7 +85,7 @@ class UserVerificationService {
       // We'll return the Path so Admin can create SignedURL.
       return fileName;
     } catch (e) {
-      print('❌ VERIFY SERVICE: Upload failed for $type - $e');
+      debugPrint('⚠️ VERIFY SERVICE: Upload failed for $type - $e');
       return null;
     }
   }

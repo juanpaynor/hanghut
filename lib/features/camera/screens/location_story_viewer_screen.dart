@@ -5,10 +5,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/camera/widgets/story_viewers_sheet.dart';
 
 class LocationStoryViewerScreen extends StatefulWidget {
@@ -325,9 +328,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     } catch (e) {
       debugPrint('Error deleting story: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to delete story: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to delete story');
       }
     }
   }
@@ -993,34 +994,89 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
             // Location pill
             if (story['external_place_name'] != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.location_on,
-                        color: Colors.white,
-                        size: 13,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        story['external_place_name'],
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                padding: const EdgeInsets.only(bottom: 10),
+                child: GestureDetector(
+                  onTap: () {
+                    final lat = story['latitude'] as num?;
+                    final lng = story['longitude'] as num?;
+                    if (lat == null || lng == null) return;
+
+                    // Stop playback
+                    _progressController.removeStatusListener(_onProgressComplete);
+                    _progressController.stop();
+                    _videoController?.pause();
+
+                    // Navigate to map with fly-to
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                        builder: (_) => MainNavigationScreen(
+                          initialIndex: 1,
+                          flyToLat: lat.toDouble(),
+                          flyToLng: lng.toDouble(),
                         ),
                       ),
-                    ],
+                      (route) => false,
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.primaryColor,
+                          AppTheme.primaryColor.withOpacity(0.8),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.primaryColor.withOpacity(0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.location_on_rounded,
+                          color: Colors.white,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            story['external_place_name'],
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.1,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.map_rounded,
+                            color: Colors.white,
+                            size: 10,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

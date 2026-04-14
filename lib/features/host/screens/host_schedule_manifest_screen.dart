@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/services/host_service.dart';
@@ -40,9 +41,7 @@ class _HostScheduleManifestScreenState
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load guest list: $e')),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to load guest list');
       }
     }
   }
@@ -98,12 +97,7 @@ class _HostScheduleManifestScreenState
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Check-in failed: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Check-in failed');
       }
     }
   }

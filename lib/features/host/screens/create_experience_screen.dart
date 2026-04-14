@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
@@ -297,9 +298,7 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to save experience. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

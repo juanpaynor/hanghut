@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -68,7 +69,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
         });
       }
     } catch (e) {
-      print('Error fetching schedules: $e');
+      debugPrint('⚠️ Error fetching schedules: $e');
       if (mounted) {
         setState(() => _isLoadingSchedules = false);
       }
@@ -104,7 +105,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
         });
       }
     } catch (e) {
-      print('Error fetching reviews: $e');
+      debugPrint('⚠️ Error fetching reviews: $e');
       if (mounted) setState(() => _isLoadingReviews = false);
     }
   }
@@ -193,9 +194,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not start chat: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not start chat');
       }
     } finally {
       if (mounted) {

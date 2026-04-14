@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:intl/intl.dart';
 
@@ -49,9 +50,7 @@ class _EventSalesScreenState extends State<EventSalesScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error fetching sales: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to load sales data');
       }
     }
   }
@@ -92,12 +91,7 @@ class _EventSalesScreenState extends State<EventSalesScreen> {
       }
     } catch (e) {
       if (mounted) {
-        // Dismiss loading if still open (tricky with async, better handling needed in prod)
-        // But here we popped already.
-
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Refund failed: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Refund could not be processed');
       }
     }
   }

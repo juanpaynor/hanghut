@@ -14,6 +14,8 @@ import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/services/user_cache.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:bitemates/features/chat/widgets/create_poll_sheet.dart';
+import 'package:bitemates/features/chat/widgets/rsvp_banner.dart';
+import 'package:bitemates/features/chat/widgets/checkin_banner.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -24,12 +26,14 @@ import 'package:bitemates/features/chat/screens/chat_info_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
   final String tableTitle;
   final String channelId;
   final String chatType; // 'table', 'trip', 'dm', or 'group'
+  final bool embedded; // When true, hides header & bottom-sheet chrome
 
   const ChatScreen({
     super.key,
@@ -37,6 +41,7 @@ class ChatScreen extends StatefulWidget {
     required this.tableTitle,
     required this.channelId,
     this.chatType = 'table',
+    this.embedded = false,
   });
 
   @override
@@ -84,6 +89,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   int _currentMatchIndex = -1;
   final TextEditingController _searchController = TextEditingController();
 
+  // Pinned message
+  Map<String, dynamic>? _pinnedMessage;
+
+  // RSVP state (table chats only)
+  String? _currentRsvpStatus;
+  int _rsvpGoingCount = 0;
+  int _rsvpMaybeCount = 0;
+  int _rsvpNotGoingCount = 0;
+
   @override
   void initState() {
     super.initState();
@@ -104,6 +118,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _subscribeToAbly();
     _subscribeToReactions();
     _subscribeToParticipants();
+    _loadPinnedMessage(); // Load pinned message for banner
+    if (widget.chatType == 'table') {
+      _loadRsvpData(); // Load RSVP counts for table chats
+    }
   }
 
   Future<void> _markChatAsRead() async {
@@ -349,6 +367,211 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  // ═══ PINNED MESSAGES ═══
+  Future<void> _loadPinnedMessage() async {
+    // Only support pinning in group and table chats
+    if (widget.chatType == 'dm' || widget.chatType == 'direct' || widget.chatType == 'trip') return;
+
+    try {
+      String filterColumn = widget.chatType == 'group' ? 'group_id' : 'table_id';
+
+      final resp = await SupabaseConfig.client
+          .from('messages')
+          .select('id, content, sender_id, sender_name, timestamp, content_type, is_pinned, pinned_at')
+          .eq(filterColumn, widget.tableId)
+          .eq('is_pinned', true)
+          .order('pinned_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (mounted) {
+        setState(() {
+          _pinnedMessage = resp;
+        });
+      }
+    } catch (e) {
+      print('⚠️ Failed to load pinned message: $e');
+    }
+  }
+
+  /// Load RSVP counts and current user's status for table chats
+  Future<void> _loadRsvpData() async {
+    if (_currentUserId == null) return;
+    try {
+      // Get all RSVP statuses for this table
+      final result = await SupabaseConfig.client
+          .from('table_members')
+          .select('user_id, rsvp_status')
+          .eq('table_id', widget.tableId)
+          .inFilter('status', ['approved', 'joined', 'attended']);
+
+      int going = 0, maybe = 0, notGoing = 0;
+      String? myStatus;
+
+      for (var row in result) {
+        final rsvp = row['rsvp_status'] as String?;
+        if (rsvp == 'going') going++;
+        if (rsvp == 'maybe') maybe++;
+        if (rsvp == 'not_going') notGoing++;
+        if (row['user_id'] == _currentUserId) {
+          myStatus = rsvp;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _currentRsvpStatus = myStatus;
+          _rsvpGoingCount = going;
+          _rsvpMaybeCount = maybe;
+          _rsvpNotGoingCount = notGoing;
+        });
+      }
+    } catch (e) {
+      print('⚠️ ChatScreen: Error loading RSVP data - $e');
+    }
+  }
+
+  /// Update the current user's RSVP status
+  Future<void> _updateRsvp(String newStatus) async {
+    if (_currentUserId == null) return;
+
+    // Optimistic update
+    final oldStatus = _currentRsvpStatus;
+    setState(() => _currentRsvpStatus = newStatus == 'none' ? null : newStatus);
+
+    try {
+      await SupabaseConfig.client
+          .from('table_members')
+          .update({'rsvp_status': newStatus == 'none' ? null : newStatus})
+          .eq('table_id', widget.tableId)
+          .eq('user_id', _currentUserId!);
+
+      // Reload counts after update
+      await _loadRsvpData();
+
+      // Send a system message about the RSVP change
+      if (newStatus != 'none') {
+        final rsvpLabel = newStatus == 'going'
+            ? 'is going ✅'
+            : newStatus == 'maybe'
+                ? 'might go 🤔'
+                : "can't make it ❌";
+        await _sendSystemMessage(
+          '${_currentUserName ?? 'Someone'} $rsvpLabel',
+        );
+      }
+    } catch (e) {
+      // Revert on error
+      if (mounted) setState(() => _currentRsvpStatus = oldStatus);
+      print('❌ ChatScreen: Error updating RSVP - $e');
+    }
+  }
+
+  /// Send a system-level message to this chat (e.g., RSVP updates)
+  Future<void> _sendSystemMessage(String text) async {
+    try {
+      if (widget.chatType == 'group') {
+        await SupabaseConfig.client.from('messages').insert({
+          'group_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': text,
+          'content_type': 'system',
+        });
+      } else {
+        await SupabaseConfig.client.from('messages').insert({
+          'table_id': widget.tableId,
+          'sender_id': _currentUserId,
+          'content': text,
+          'content_type': 'system',
+        });
+      }
+      // Also publish on Ably so others see it in real-time
+      await _ablyService.publishMessage(
+        channelName: widget.channelId,
+        content: text,
+        contentType: 'system',
+        senderId: _currentUserId!,
+        senderName: 'System',
+        senderPhotoUrl: null,
+      );
+    } catch (e) {
+      print('⚠️ ChatScreen: Failed to send system message - $e');
+    }
+  }
+
+  Future<void> _togglePinMessage(Map<String, dynamic> message) async {
+    final isCurrentlyPinned = message['is_pinned'] == true;
+    final messageId = message['id'];
+
+    try {
+      if (isCurrentlyPinned) {
+        // Unpin
+        await SupabaseConfig.client
+            .from('messages')
+            .update({
+              'is_pinned': false,
+              'pinned_by': null,
+              'pinned_at': null,
+            })
+            .eq('id', messageId);
+
+        if (mounted) {
+          setState(() {
+            _pinnedMessage = null;
+            // Update in-memory message too
+            final idx = _messages.indexWhere((m) => m['id'] == messageId);
+            if (idx != -1) _messages[idx]['is_pinned'] = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Message unpinned')),
+          );
+        }
+      } else {
+        // Unpin any existing pinned message first, then pin this one
+        String filterColumn = widget.chatType == 'group' ? 'group_id' : 'table_id';
+        await SupabaseConfig.client
+            .from('messages')
+            .update({'is_pinned': false, 'pinned_by': null, 'pinned_at': null})
+            .eq(filterColumn, widget.tableId)
+            .eq('is_pinned', true);
+
+        await SupabaseConfig.client
+            .from('messages')
+            .update({
+              'is_pinned': true,
+              'pinned_by': _currentUserId,
+              'pinned_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('id', messageId);
+
+        if (mounted) {
+          setState(() {
+            _pinnedMessage = {
+              'id': messageId,
+              'content': message['content'],
+              'sender_name': message['senderName'] ?? message['sender_name'],
+              'content_type': message['contentType'] ?? message['content_type'] ?? 'text',
+            };
+            // Update in-memory message
+            for (final m in _messages) {
+              m['is_pinned'] = (m['id'] == messageId);
+            }
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Message pinned 📌')),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ Error toggling pin: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to ${isCurrentlyPinned ? 'unpin' : 'pin'} message')),
+        );
+      }
+    }
+  }
+
   Future<void> _loadParticipants() async {
     try {
       final dynamic query;
@@ -371,15 +594,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       } else {
         query = SupabaseConfig.client
             .from('table_members')
-            .select('user_id, arrival_status')
+            .select('user_id, arrival_status, rsvp_status')
             .eq('table_id', widget.tableId)
             .inFilter('status', ['approved', 'joined', 'attended']);
       }
 
       final response = await query;
 
-      // Create a map of userId -> status
+      // Create maps of userId -> status
       final statusMap = <String, String>{};
+      final rsvpMap = <String, String?>{};
       final userIds = <String>[];
 
       for (var p in response) {
@@ -387,6 +611,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         userIds.add(uid);
         if (widget.chatType == 'table') {
           statusMap[uid] = p['arrival_status'] ?? 'joined';
+          rsvpMap[uid] = p['rsvp_status'] as String?;
         }
       }
 
@@ -418,6 +643,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'displayName': u['display_name'],
               'photoUrl': photoMap[u['id']],
               'arrival_status': statusMap[u['id']] ?? 'joined',
+              'rsvp_status': rsvpMap[u['id']],
             };
           }).toList();
         });
@@ -1563,6 +1789,33 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Opens the verification sheet (host scanning mode or attendee QR code)
+  void _openVerificationSheet() {
+    if (_currentUserId == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => VerificationSheet(
+        currentUserId: _currentUserId!,
+        tableId: widget.tableId,
+        isMe: !_isHost,
+        isHost: _isHost,
+        participants: _participants,
+      ),
+    ).then((verified) {
+      if (verified == true && _isHost) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All members verified! 🎉'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    });
+  }
+
   Future<void> _leaveTable() async {
     final subtitleText = widget.chatType == 'trip'
         ? 'You will leave this trip group chat.'
@@ -1726,7 +1979,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Set a fixed height for the sheet (75% of screen for better UX)
+    // ── Embedded mode: just the chat body, no chrome ──
+    if (widget.embedded) {
+      return Column(
+        children: [
+          ..._buildChatBody(context),
+        ],
+      );
+    }
+
+    // ── Bottom-sheet mode (default) ──
     final screenHeight = MediaQuery.of(context).size.height;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
@@ -1735,7 +1997,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       child: Material(
         color: Colors.transparent,
         child: Container(
-          // Ensure the height does not exceed the remaining screen height
           height: (screenHeight * 0.75).clamp(0.0, screenHeight - bottomInset),
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,
@@ -1758,12 +2019,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   }
                 });
               },
+              extraActions: [
+                // Verify button — show for all table members
+                if (widget.chatType == 'table')
+                  IconButton(
+                    icon: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _isHost ? Icons.qr_code_scanner : Icons.qr_code,
+                        size: 18,
+                        color: const Color(0xFF10B981),
+                      ),
+                    ),
+                    tooltip: _isHost ? 'Verify Members' : 'My Check-in QR',
+                    onPressed: _openVerificationSheet,
+                  ),
+              ],
               onInfoTap: () {
                 if (widget.chatType == 'dm') {
-                  // Find the other user
                   final otherUser = _participants.firstWhere(
                     (p) => p['userId'] != _currentUserId,
-                    orElse: () => <String, dynamic>{}, // Provide type arguments
+                    orElse: () => <String, dynamic>{},
                   );
                   if (otherUser.isNotEmpty && otherUser['userId'] != null) {
                     Navigator.push(
@@ -1775,7 +2055,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     );
                   }
                 } else {
-                  // For tables and trips, show the participant list
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -1789,208 +2068,314 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 }
               },
             ),
-
-            // Connection Status Banner
-            if (_showConnectionBanner)
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                color: Colors.orange.shade100,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.orange.shade700,
-                      ),
-                    ),
-                    SizedBox(width: 12),
-                    Text(
-                      'Reconnecting to chat...',
-                      style: TextStyle(
-                        color: Colors.orange.shade900,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Search Bar
-            if (_isSearching)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                color: Theme.of(context).scaffoldBackgroundColor,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? Colors.grey[800]
-                              : Colors.grey[100],
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          autofocus: true,
-                          style: TextStyle(
-                            color: Theme.of(context).textTheme.bodyLarge?.color,
-                            fontSize: 14,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'Search messages...',
-                            hintStyle: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 14,
-                            ),
-                            prefixIcon: Icon(
-                              Icons.search,
-                              size: 20,
-                              color: Colors.grey[500],
-                            ),
-                            border: InputBorder.none,
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: 10,
-                            ),
-                          ),
-                          onChanged: (query) {
-                            setState(() {
-                              _searchQuery = query.toLowerCase();
-                              _matchedIndices = [];
-                              _currentMatchIndex = -1;
-                              if (_searchQuery.isNotEmpty) {
-                                for (int i = 0; i < _messages.length; i++) {
-                                  final content = (_messages[i]['content'] as String?)?.toLowerCase() ?? '';
-                                  if (content.contains(_searchQuery)) {
-                                    _matchedIndices.add(i);
-                                  }
-                                }
-                                if (_matchedIndices.isNotEmpty) {
-                                  _currentMatchIndex = 0;
-                                  _scrollToSearchResult(0);
-                                }
-                              }
-                            });
-                          },
-                        ),
-                      ),
-                    ),
-                    if (_matchedIndices.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        '${_currentMatchIndex + 1}/${_matchedIndices.length}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.keyboard_arrow_up, size: 20),
-                        onPressed: _matchedIndices.length > 1
-                            ? () {
-                                setState(() {
-                                  _currentMatchIndex = (_currentMatchIndex - 1) % _matchedIndices.length;
-                                });
-                                _scrollToSearchResult(_currentMatchIndex);
-                              }
-                            : null,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-                        onPressed: _matchedIndices.length > 1
-                            ? () {
-                                setState(() {
-                                  _currentMatchIndex = (_currentMatchIndex + 1) % _matchedIndices.length;
-                                });
-                                _scrollToSearchResult(_currentMatchIndex);
-                              }
-                            : null,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-
-            // Messages Area
-            Expanded(
-              child: ChatMessageList(
-                isLoading: _isLoading,
-                messages: _messages,
-                scrollController: _scrollController,
-                messageReactions: _messageReactions,
-                getReplySenderName: _getReplySenderName,
-                getReplyContent: _getReplyContent,
-                buildStatusIndicator: (status) => _buildStatusIndicator(status),
-                buildReactionChips: (msgId) =>
-                    msgId != null ? _buildReactionChips(msgId) : [],
-                onReply: _handleReply,
-                onShowActions: _showMessageActions,
-                onReact: _handleReaction,
-                onOpenLink: _onOpenLink,
-                onMentionTap: (userId) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => UserProfileScreen(userId: userId),
-                    ),
-                  );
-                },
-                participants: _participants,
-                searchQuery: _searchQuery,
-                matchedIndices: _matchedIndices,
-                currentMatchIndex: _currentMatchIndex,
-              ),
-            ),
-
-            // Typing Indicator
-            if (_otherUserTyping)
-              Padding(
-                padding: const EdgeInsets.only(left: 16, bottom: 8),
-                child: Row(
-                  children: [
-                    _buildTypingIndicator(),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${_getOtherUserName()} is typing...',
-                      style: TextStyle(
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.grey[400]
-                            : Colors.grey[600],
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Input Area
-            ChatInputBar(
-              controller: _messageController,
-              replyingTo: _replyingTo,
-              onCancelReply: _cancelReply,
-              onShowGifPicker: _showGifPicker,
-              onSendMessage: _sendMessage,
-              onSendImage: _sendImageMessage,
-              onCreatePoll: (widget.chatType == 'dm' || widget.chatType == 'direct')
-                  ? null
-                  : _showCreatePoll,
-              participants: _participants,
-            ),
+            ..._buildChatBody(context),
           ],
         ),
       ),
     ),
     );
+  }
+
+  /// Shared chat body: connection banner, search, messages, typing, input
+  List<Widget> _buildChatBody(BuildContext context) {
+    return [
+      // Connection Status Banner
+      if (_showConnectionBanner)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+          color: Colors.orange.shade100,
+          child: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.orange.shade700,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Reconnecting to chat...',
+                style: TextStyle(
+                  color: Colors.orange.shade900,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+      // Pinned Message Banner
+      if (_pinnedMessage != null)
+        GestureDetector(
+          onTap: () {
+            // Scroll to pinned message
+            final idx = _messages.indexWhere((m) => m['id'] == _pinnedMessage!['id']);
+            if (idx != -1 && _scrollController.hasClients) {
+              // Approximate scroll — messages are in reverse
+              _scrollController.animateTo(
+                idx * 60.0,
+                duration: const Duration(milliseconds: 400),
+                curve: Curves.easeOut,
+              );
+            }
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? const Color(0xFF1A1A2E)
+                  : const Color(0xFFF0F4FF),
+              border: Border(
+                bottom: BorderSide(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey[800]!
+                      : Colors.grey[200]!,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.push_pin, size: 16, color: Colors.indigo),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _pinnedMessage!['sender_name'] ?? 'Pinned Message',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.indigo,
+                        ),
+                      ),
+                      Text(
+                        _pinnedMessage!['content_type'] == 'image'
+                            ? '📷 Photo'
+                            : _pinnedMessage!['content_type'] == 'gif'
+                                ? '🎬 GIF'
+                                : (_pinnedMessage!['content'] ?? ''),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.grey[300]
+                              : Colors.grey[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => _togglePinMessage({
+                    'id': _pinnedMessage!['id'],
+                    'is_pinned': true,
+                  }),
+                  child: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+      // RSVP Banner (table chats only)
+      if (widget.chatType == 'table')
+        RsvpBanner(
+          tableId: widget.tableId,
+          currentRsvpStatus: _currentRsvpStatus,
+          goingCount: _rsvpGoingCount,
+          maybeCount: _rsvpMaybeCount,
+          notGoingCount: _rsvpNotGoingCount,
+          onRsvpChanged: _updateRsvp,
+        ),
+
+      // Check-in Banner (table chats only)
+      if (widget.chatType == 'table')
+        CheckinBanner(
+          tableId: widget.tableId,
+          totalMembers: _participants.length,
+          participants: _participants,
+        ),
+
+      // Search Bar
+      if (_isSearching)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.grey[800]
+                        : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyLarge?.color,
+                      fontSize: 14,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search messages...',
+                      hintStyle: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 14,
+                      ),
+                      prefixIcon: Icon(
+                        Icons.search,
+                        size: 20,
+                        color: Colors.grey[500],
+                      ),
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                      ),
+                    ),
+                    onChanged: (query) {
+                      setState(() {
+                        _searchQuery = query.toLowerCase();
+                        _matchedIndices = [];
+                        _currentMatchIndex = -1;
+                        if (_searchQuery.isNotEmpty) {
+                          for (int i = 0; i < _messages.length; i++) {
+                            final content = (_messages[i]['content'] as String?)?.toLowerCase() ?? '';
+                            if (content.contains(_searchQuery)) {
+                              _matchedIndices.add(i);
+                            }
+                          }
+                          if (_matchedIndices.isNotEmpty) {
+                            _currentMatchIndex = 0;
+                            _scrollToSearchResult(0);
+                          }
+                        }
+                      });
+                    },
+                  ),
+                ),
+              ),
+              if (_matchedIndices.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '${_currentMatchIndex + 1}/${_matchedIndices.length}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+                  onPressed: _matchedIndices.length > 1
+                      ? () {
+                          setState(() {
+                            _currentMatchIndex = (_currentMatchIndex - 1) % _matchedIndices.length;
+                          });
+                          _scrollToSearchResult(_currentMatchIndex);
+                        }
+                      : null,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                  onPressed: _matchedIndices.length > 1
+                      ? () {
+                          setState(() {
+                            _currentMatchIndex = (_currentMatchIndex + 1) % _matchedIndices.length;
+                          });
+                          _scrollToSearchResult(_currentMatchIndex);
+                        }
+                      : null,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ],
+            ],
+          ),
+        ),
+
+      // Messages Area
+      Expanded(
+        child: ChatMessageList(
+          isLoading: _isLoading,
+          messages: _messages,
+          scrollController: _scrollController,
+          messageReactions: _messageReactions,
+          getReplySenderName: _getReplySenderName,
+          getReplyContent: _getReplyContent,
+          buildStatusIndicator: (status) => _buildStatusIndicator(status),
+          buildReactionChips: (msgId) =>
+              msgId != null ? _buildReactionChips(msgId) : [],
+          onReply: _handleReply,
+          onShowActions: _showMessageActions,
+          onReact: _handleReaction,
+          onOpenLink: _onOpenLink,
+          onMentionTap: (userId) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => UserProfileScreen(userId: userId),
+              ),
+            );
+          },
+          participants: _participants,
+          searchQuery: _searchQuery,
+          matchedIndices: _matchedIndices,
+          currentMatchIndex: _currentMatchIndex,
+        ),
+      ),
+
+      // Typing Indicator
+      if (_otherUserTyping)
+        Padding(
+          padding: const EdgeInsets.only(left: 16, bottom: 8),
+          child: Row(
+            children: [
+              _buildTypingIndicator(),
+              const SizedBox(width: 8),
+              Text(
+                '${_getOtherUserName()} is typing...',
+                style: TextStyle(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey[400]
+                      : Colors.grey[600],
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+      // Input Area
+      ChatInputBar(
+        controller: _messageController,
+        replyingTo: _replyingTo,
+        onCancelReply: _cancelReply,
+        onShowGifPicker: _showGifPicker,
+        onSendMessage: _sendMessage,
+        onSendImage: _sendImageMessage,
+        onCreatePoll: (widget.chatType == 'dm' || widget.chatType == 'direct')
+            ? null
+            : _showCreatePoll,
+        participants: _participants,
+      ),
+    ];
   }
 
   // --- Helper Methods (Updated for Light Theme) ---
@@ -2225,6 +2610,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 onTap: () {
                   Navigator.pop(context);
                   _handleDelete(message, true);
+                },
+              ),
+            ],
+            // Pin/Unpin (available in group and table chats)
+            if (widget.chatType == 'group' || widget.chatType == 'table') ...[
+              const Divider(),
+              ListTile(
+                leading: Icon(
+                  message['is_pinned'] == true ? Icons.push_pin : Icons.push_pin_outlined,
+                  color: Colors.indigo,
+                ),
+                title: Text(
+                  message['is_pinned'] == true ? 'Unpin Message' : 'Pin Message',
+                  style: const TextStyle(color: Colors.indigo),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _togglePinMessage(message);
                 },
               ),
             ],

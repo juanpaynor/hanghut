@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -48,9 +49,7 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to load trips: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to load trips');
       }
     }
   }
@@ -82,9 +81,7 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not start chat: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not start chat');
       }
     } finally {
       if (mounted) {

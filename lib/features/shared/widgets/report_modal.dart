@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/services/report_service.dart';
 
 class ReportModal extends StatefulWidget {
@@ -80,12 +81,7 @@ class _ReportModalState extends State<ReportModal> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceAll('Exception: ', '')),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to submit report');
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

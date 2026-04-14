@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -80,9 +81,7 @@ class _HostApplyScreenState extends State<HostApplyScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to submit application. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

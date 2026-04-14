@@ -35,11 +35,16 @@ class BadgeService {
   }
 
   /// Increment user stats and check for new badge awards
-  Future<void> incrementStats(
+  /// Returns list of newly awarded badges (for celebration UI)
+  Future<List<Badge>> incrementStats(
     String userId, {
     int hosted = 0,
     int attended = 0,
     int connections = 0,
+    int checkins = 0,
+    int qrVerified = 0,
+    int? uniquePeople,
+    int? uniqueLocations,
   }) async {
     // 1. Get current stats or initialize
     final res = await _supabase
@@ -55,6 +60,10 @@ class BadgeService {
         'total_events_hosted': 0,
         'total_events_attended': 0,
         'total_connections_made': 0,
+        'total_checkins': 0,
+        'total_qr_verified': 0,
+        'unique_people_met': 0,
+        'unique_locations': 0,
       };
     } else {
       data = Map<String, dynamic>.from(res);
@@ -66,17 +75,24 @@ class BadgeService {
         (data['total_events_attended'] as int) + attended;
     data['total_connections_made'] =
         (data['total_connections_made'] as int) + connections;
+    data['total_checkins'] = (data['total_checkins'] as int? ?? 0) + checkins;
+    data['total_qr_verified'] = (data['total_qr_verified'] as int? ?? 0) + qrVerified;
+    // Unique counts are absolute (not increments)
+    if (uniquePeople != null) data['unique_people_met'] = uniquePeople;
+    if (uniqueLocations != null) data['unique_locations'] = uniqueLocations;
     data['updated_at'] = DateTime.now().toIso8601String();
 
     // 3. Upsert
     await _supabase.from('user_gamification_stats').upsert(data);
 
     // 4. Check for awards
-    await _checkAwards(userId, GamificationStats.fromJson(data));
+    return await _checkAwards(userId, GamificationStats.fromJson(data));
   }
 
   /// Internal method to check and award badges
-  Future<void> _checkAwards(String userId, GamificationStats stats) async {
+  /// Returns list of newly awarded badges
+  Future<List<Badge>> _checkAwards(String userId, GamificationStats stats) async {
+    final List<Badge> newlyAwarded = [];
     try {
       // Get all badges
       final allBadges = await getAllBadges();
@@ -90,11 +106,13 @@ class BadgeService {
 
         if (_meetsRequirements(badge.requirements, stats)) {
           await _awardBadge(userId, badge.id);
+          newlyAwarded.add(badge);
         }
       }
     } catch (e) {
       print('Error checking awards: $e');
     }
+    return newlyAwarded;
   }
 
   bool _meetsRequirements(Map<String, dynamic> reqs, GamificationStats stats) {
@@ -108,7 +126,20 @@ class BadgeService {
       if (stats.totalEventsAttended < minAttended) return false;
     }
 
-    // Add more requirement logic here as needed
+    if (reqs.containsKey('min_checkins')) {
+      final minCheckins = reqs['min_checkins'] as int;
+      if (stats.totalCheckins < minCheckins) return false;
+    }
+
+    if (reqs.containsKey('min_unique_people')) {
+      final minPeople = reqs['min_unique_people'] as int;
+      if (stats.uniquePeopleMet < minPeople) return false;
+    }
+
+    if (reqs.containsKey('min_unique_locations')) {
+      final minLocations = reqs['min_unique_locations'] as int;
+      if (stats.uniqueLocations < minLocations) return false;
+    }
 
     return true;
   }

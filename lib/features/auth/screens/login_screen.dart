@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'dart:math';
 
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -146,12 +147,7 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     } catch (e) {
       if (mounted) {
         HapticFeedback.heavyImpact();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to launch Google Sign-In: $e'),
-            backgroundColor: const Color(0xFF3F51B5),
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to sign in with Google. Please try again.');
       }
     }
   }

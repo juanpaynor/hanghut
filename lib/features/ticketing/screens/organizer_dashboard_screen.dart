@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:intl/intl.dart';
@@ -44,9 +45,7 @@ class _OrganizerDashboardScreenState extends State<OrganizerDashboardScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error fetching events: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to load events');
       }
     }
   }

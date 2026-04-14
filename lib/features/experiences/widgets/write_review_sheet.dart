@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/experience_service.dart';
@@ -91,12 +92,7 @@ class _WriteReviewSheetState extends State<WriteReviewSheet> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to submit review: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to submit review. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

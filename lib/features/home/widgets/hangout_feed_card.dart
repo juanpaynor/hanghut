@@ -39,6 +39,8 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
   late int _likeCount;
   String? _asyncTitle;
   String? _asyncDescription;
+  String? _liveTableStatus; // Live status fetched from DB
+  bool _tableExists = true; // False if the table was deleted
 
   @override
   void initState() {
@@ -71,18 +73,44 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
       try {
         final result = await SupabaseConfig.client
             .from('tables')
-            .select('title, description')
+            .select('title, description, status')
             .eq('id', tableId)
             .maybeSingle();
 
-        if (result != null && mounted) {
-          setState(() {
-            _asyncTitle = result['title'];
-            _asyncDescription = result['description'];
-          });
+        if (mounted) {
+          if (result == null) {
+            // Table was deleted — treat as ended
+            setState(() => _tableExists = false);
+          } else {
+            setState(() {
+              _asyncTitle = result['title'];
+              _asyncDescription = result['description'];
+              _liveTableStatus = result['status'];
+            });
+          }
         }
       } catch (e) {
-        print('Error fetching table details for feed card: $e');
+        debugPrint('⚠️ Error fetching table details for feed card: $e');
+      }
+    } else if (tableId != null) {
+      // We have a table_id and title, still fetch live status
+      try {
+        final result = await SupabaseConfig.client
+            .from('tables')
+            .select('status')
+            .eq('id', tableId)
+            .maybeSingle();
+
+        if (mounted) {
+          if (result == null) {
+            // Table was deleted
+            setState(() => _tableExists = false);
+          } else {
+            setState(() => _liveTableStatus = result['status']);
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error fetching table status for feed card: $e');
       }
     }
   }
@@ -436,7 +464,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
             ),
             // Details section below the image
             InkWell(
-              onTap: widget.onTap,
+              onTap: _isTableEnded ? null : widget.onTap,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Row(
@@ -530,7 +558,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                     '?access_token=$mapboxToken';
 
                 return GestureDetector(
-                  onTap: widget.onTap,
+                  onTap: _isTableEnded ? null : widget.onTap,
                   child: Stack(
                     children: [
                       CachedNetworkImage(
@@ -610,7 +638,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
 
               // Fallback: no coordinates — show gradient
               return GestureDetector(
-                onTap: widget.onTap,
+                onTap: _isTableEnded ? null : widget.onTap,
                 child: Container(
                   height: 220,
                   width: double.infinity,
@@ -629,7 +657,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
             }),
             // Details section below the map preview
             InkWell(
-              onTap: widget.onTap,
+              onTap: _isTableEnded ? null : widget.onTap,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Row(
@@ -886,15 +914,34 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     );
   }
 
+  bool get _isTableEnded {
+    // 1. Table was deleted from DB
+    if (!_tableExists) return true;
+
+    // 2. Scheduled time has passed — most reliable check
+    final metadata = widget.post['metadata'] as Map<String, dynamic>? ?? {};
+    final scheduledTimeStr = metadata['scheduled_time'] as String?;
+    if (scheduledTimeStr != null) {
+      final scheduledTime = DateTime.tryParse(scheduledTimeStr);
+      if (scheduledTime != null && DateTime.now().isAfter(scheduledTime)) return true;
+    }
+
+    // 3. DB status column explicitly set to non-open
+    final status = _liveTableStatus ?? metadata['status'];
+    if (status != null && status != 'open') return true;
+
+    return false;
+  }
+
   Widget _buildJoinButton(Map<String, dynamic> metadata) {
-    if (metadata['status'] == 'ended') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.6),
-          borderRadius: BorderRadius.circular(20),
+    if (_isTableEnded) {
+      return Text(
+        'Activity Done',
+        style: TextStyle(
+          color: Colors.grey[500],
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
         ),
-        child: const Text('Ended', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       );
     }
     return ElevatedButton(

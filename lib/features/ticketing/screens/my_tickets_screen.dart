@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/ticketing/models/ticket.dart';
 import 'package:bitemates/features/ticketing/widgets/ticket_card.dart';
 
@@ -60,9 +61,10 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
         });
       }
     } catch (e) {
+      debugPrint('⚠️ Error loading tickets: $e');
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = ErrorHandler.getUserMessage(e, fallback: 'Failed to load tickets');
           _isLoading = false;
         });
       }

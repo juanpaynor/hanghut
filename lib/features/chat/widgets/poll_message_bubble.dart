@@ -4,13 +4,11 @@ import 'package:bitemates/core/config/supabase_config.dart';
 /// Renders an in-chat poll card. Fetches vote data live from Supabase.
 class PollMessageBubble extends StatefulWidget {
   final String pollId;
-  final String currentUserId;
   final bool isMe;
 
   const PollMessageBubble({
     super.key,
     required this.pollId,
-    required this.currentUserId,
     required this.isMe,
   });
 
@@ -50,7 +48,8 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           .eq('poll_id', widget.pollId);
 
       final voteList = List<Map<String, dynamic>>.from(votes);
-      final myVote = voteList.where((v) => v['user_id'] == widget.currentUserId).firstOrNull;
+      final currentUserId = SupabaseConfig.client.auth.currentUser!.id;
+      final myVote = voteList.where((v) => v['user_id'] == currentUserId).firstOrNull;
 
       if (mounted) {
         setState(() {
@@ -71,31 +70,33 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
     final isSameOption = _myVoteOptionId == optionId;
 
     // Optimistic update
+    final currentUserId = SupabaseConfig.client.auth.currentUser!.id;
     setState(() {
       _isVoting = true;
       if (isSameOption) {
         // Remove vote
-        _votes.removeWhere((v) => v['user_id'] == widget.currentUserId);
+        _votes.removeWhere((v) => v['user_id'] == currentUserId);
         _myVoteOptionId = null;
       } else {
         // Upsert vote
-        _votes.removeWhere((v) => v['user_id'] == widget.currentUserId);
-        _votes.add({'option_id': optionId, 'user_id': widget.currentUserId});
+        _votes.removeWhere((v) => v['user_id'] == currentUserId);
+        _votes.add({'option_id': optionId, 'user_id': currentUserId});
         _myVoteOptionId = optionId;
       }
     });
 
     try {
+      final currentUserId = SupabaseConfig.client.auth.currentUser!.id;
       if (isSameOption) {
         await SupabaseConfig.client
             .from('chat_poll_votes')
             .delete()
             .eq('poll_id', widget.pollId)
-            .eq('user_id', widget.currentUserId);
+            .eq('user_id', currentUserId);
       } else {
         await SupabaseConfig.client.from('chat_poll_votes').upsert({
           'poll_id': widget.pollId,
-          'user_id': widget.currentUserId,
+          'user_id': currentUserId,
           'option_id': optionId,
         }, onConflict: 'poll_id,user_id');
       }

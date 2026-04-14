@@ -135,10 +135,40 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
         }
       }
 
+      // For video stories, generate a thumbnail from the first frame
+      String? thumbnailUrl;
+      if (isVideo) {
+        try {
+          debugPrint('🖼️ Generating video thumbnail...');
+          final thumbnailFile = await VideoCompress.getFileThumbnail(
+            widget.videoFile!.path,
+            quality: 70,
+            position: 0, // First frame
+          );
+          final thumbBytes = await thumbnailFile.readAsBytes();
+          final thumbFileName =
+              '${user.id}_thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          await supabase.storage
+              .from('post_images')
+              .uploadBinary(
+                thumbFileName,
+                thumbBytes,
+                fileOptions: const FileOptions(contentType: 'image/jpeg'),
+              );
+          thumbnailUrl = supabase.storage
+              .from('post_images')
+              .getPublicUrl(thumbFileName);
+          debugPrint('✅ Thumbnail uploaded: $thumbFileName');
+        } catch (thumbError) {
+          debugPrint('⚠️ Thumbnail generation failed (non-fatal): $thumbError');
+        }
+      }
+
       await supabase.from('posts').insert({
         'user_id': user.id,
         'image_url': isVideo ? null : publicUrl,
         'video_url': isVideo ? publicUrl : null,
+        'thumbnail_url': thumbnailUrl,
         'content': _captionController.text.trim(),
         'post_type': isVideo ? 'video' : 'image',
         'is_story': true,

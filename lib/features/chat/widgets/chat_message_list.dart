@@ -92,15 +92,9 @@ class ChatMessageList extends StatelessWidget {
         final msg = messages[index];
         final isMe = msg['isMe'] as bool;
 
-        // Header Logic: Show if this message is the First (Oldest) of a block.
-        final bool showHeader =
-            index == messages.length - 1 ||
-            messages[index + 1]['senderId'] != msg['senderId'];
-
         // Date separator logic (reversed list: index+1 is older)
         bool showDateSeparator = false;
         if (index == messages.length - 1) {
-          // Always show for the oldest (topmost) message
           showDateSeparator = true;
         } else {
           final currentDate = DateTime.parse(msg['timestamp']).toLocal();
@@ -109,6 +103,29 @@ class ChatMessageList extends StatelessWidget {
               currentDate.month != olderDate.month ||
               currentDate.day != olderDate.day;
         }
+
+        // ── System messages (RSVP changes, check-ins) ──
+        if (msg['contentType'] == 'system') {
+          final systemChip = _buildSystemMessageChip(
+            context,
+            msg['content'] ?? '',
+          );
+          if (showDateSeparator) {
+            return Column(
+              children: [
+                _buildDateChip(context, DateTime.parse(msg['timestamp']).toLocal()),
+                systemChip,
+              ],
+            );
+          }
+          return systemChip;
+        }
+
+        // Header Logic: Show if this message is the First (Oldest) of a block.
+        final bool showHeader =
+            index == messages.length - 1 ||
+            messages[index + 1]['senderId'] != msg['senderId'] ||
+            messages[index + 1]['contentType'] == 'system';
 
         final bubble = ChatMessageBubble(
           msg: msg,
@@ -148,6 +165,36 @@ class ChatMessageList extends StatelessWidget {
 
         return bubble;
       },
+    );
+  }
+
+  /// Renders system messages (RSVP updates, check-ins) as centered, styled pills.
+  Widget _buildSystemMessageChip(BuildContext context, String text) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.grey[800]!.withValues(alpha: 0.5)
+                : Colors.grey[100]!.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            '── $text ──',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ),
+      ),
     );
   }
 

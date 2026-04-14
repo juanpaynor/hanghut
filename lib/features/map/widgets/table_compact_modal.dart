@@ -13,6 +13,7 @@ import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
+import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -36,6 +37,12 @@ class _TableCompactModalState extends State<TableCompactModal> {
   String? _autoGifUrl;
   String? _hostName;
   String? _hostPhotoUrl;
+  // Group-hosted
+  String? _groupId;
+  String? _groupCoverUrl;
+  // Live table status (fetched from DB to guard against stale data)
+  String? _liveTableStatus;
+  bool _tableExists = true;
 
   @override
   void initState() {
@@ -45,11 +52,34 @@ class _TableCompactModalState extends State<TableCompactModal> {
     _fetchPendingCount();
     _fetchHostInfo();
     _fetchAutoGifIfNeeded();
+    _fetchLiveTableStatus();
   }
 
   // ═══════════════════════════════════════════════
-  // DATA FETCHING (unchanged)
+  // DATA FETCHING
   // ═══════════════════════════════════════════════
+
+  /// Fetch the live status of the table from the database.
+  /// The table data passed in may be stale (e.g., from a feed post snapshot).
+  Future<void> _fetchLiveTableStatus() async {
+    try {
+      final result = await SupabaseConfig.client
+          .from('tables')
+          .select('status')
+          .eq('id', widget.table['id'])
+          .maybeSingle();
+
+      if (mounted) {
+        if (result == null) {
+          setState(() => _tableExists = false);
+        } else {
+          setState(() => _liveTableStatus = result['status']);
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error fetching live table status: $e');
+    }
+  }
 
   Future<void> _fetchAutoGifIfNeeded() async {
     if (widget.table['image_url'] != null || widget.table['marker_image_url'] != null) return;
@@ -113,6 +143,31 @@ class _TableCompactModalState extends State<TableCompactModal> {
   }
 
   Future<void> _fetchHostInfo() async {
+    // Check if this is a group-hosted activity
+    final groupId = widget.table['group_id'] as String?;
+    if (groupId != null) {
+      try {
+        final groupResult = await SupabaseConfig.client
+            .from('groups')
+            .select('id, name, cover_image_url')
+            .eq('id', groupId)
+            .maybeSingle();
+
+        if (groupResult != null && mounted) {
+          setState(() {
+            _groupId = groupId;
+            _groupCoverUrl = groupResult['cover_image_url'];
+            _hostName = groupResult['name'];
+            _hostPhotoUrl = groupResult['cover_image_url'];
+          });
+        }
+      } catch (e) {
+        debugPrint('❌ Error fetching group host info: $e');
+      }
+      return;
+    }
+
+    // Personal host
     final hostId = widget.table['host_id'];
     if (hostId == null) return;
 
@@ -259,7 +314,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
           )
         : Colors.grey;
 
-    final screenHeight = MediaQuery.of(context).size.height;
+
 
     // Resolve hero image
     final String? heroImageUrl =
@@ -270,7 +325,6 @@ class _TableCompactModalState extends State<TableCompactModal> {
       child: Material(
         color: Colors.transparent,
         child: Container(
-          height: screenHeight * 0.60,
           width: double.infinity,
           decoration: BoxDecoration(
             color: modalBg,
@@ -284,14 +338,12 @@ class _TableCompactModalState extends State<TableCompactModal> {
             ],
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // ── Scrollable Content ──
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+              // ── Content ──
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                       // ═══════════════════════════════════════
                       // 1. EDGE-TO-EDGE HERO IMAGE
                       // ═══════════════════════════════════════
@@ -496,48 +548,78 @@ class _TableCompactModalState extends State<TableCompactModal> {
                             // ── Host Row (borderless) ──
                             GestureDetector(
                               onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => UserProfileScreen(
-                                      userId: widget.table['host_id'],
+                                if (_groupId != null) {
+                                  // Navigate to group detail
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => GroupDetailScreen(
+                                        groupId: _groupId!,
+                                      ),
                                     ),
-                                  ),
-                                );
+                                  );
+                                } else {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => UserProfileScreen(
+                                        userId: widget.table['host_id'],
+                                      ),
+                                    ),
+                                  );
+                                }
                               },
                               child: Row(
                                 children: [
-                                  // Host Avatar
+                                  // Host/Group Avatar
                                   Container(
                                     decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
+                                      shape: _groupId != null ? BoxShape.rectangle : BoxShape.circle,
+                                      borderRadius: _groupId != null ? BorderRadius.circular(10) : null,
                                       border: Border.all(
                                         color: primaryColor.withOpacity(0.4),
                                         width: 2,
                                       ),
                                     ),
-                                    child: CircleAvatar(
-                                      radius: 28,
-                                      backgroundImage:
-                                          (_hostPhotoUrl ?? widget.table['host_photo_url']) != null
-                                              ? NetworkImage(
-                                                  _hostPhotoUrl ?? widget.table['host_photo_url'],
-                                                )
-                                              : null,
-                                      backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
-                                      child: (_hostPhotoUrl ?? widget.table['host_photo_url']) == null
-                                          ? Icon(Icons.person, color: subtextColor, size: 24)
-                                          : null,
-                                    ),
+                                    child: _groupId != null
+                                        ? ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: (_groupCoverUrl != null)
+                                                ? Image.network(
+                                                    _groupCoverUrl!,
+                                                    width: 56,
+                                                    height: 56,
+                                                    fit: BoxFit.cover,
+                                                  )
+                                                : Container(
+                                                    width: 56,
+                                                    height: 56,
+                                                    color: isDark ? Colors.grey[800] : Colors.grey[200],
+                                                    child: Icon(Icons.groups, color: subtextColor, size: 24),
+                                                  ),
+                                          )
+                                        : CircleAvatar(
+                                            radius: 28,
+                                            backgroundImage:
+                                                (_hostPhotoUrl ?? widget.table['host_photo_url']) != null
+                                                    ? NetworkImage(
+                                                        _hostPhotoUrl ?? widget.table['host_photo_url'],
+                                                      )
+                                                    : null,
+                                            backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
+                                            child: (_hostPhotoUrl ?? widget.table['host_photo_url']) == null
+                                                ? Icon(Icons.person, color: subtextColor, size: 24)
+                                                : null,
+                                          ),
                                   ),
                                   const SizedBox(width: 12),
 
-                                  // Host Name & Label
+                                  // Host/Group Name & Label
                                   Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        'Hosted by',
+                                        _groupId != null ? 'Hosted by group' : 'Hosted by',
                                         style: GoogleFonts.inter(
                                           color: subtextColor,
                                           fontSize: 12,
@@ -598,10 +680,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
+              ],
+            ),
 
               // ═══════════════════════════════════════
               // 3. PINNED ACTION BUTTONS
@@ -902,13 +982,41 @@ class _TableCompactModalState extends State<TableCompactModal> {
       }
     }
 
+    // ── Table status guard: table deleted or no longer open ──
+    final effectiveStatus = _liveTableStatus ?? widget.table['status'];
+    final isTableEnded = !_tableExists || (effectiveStatus != null && effectiveStatus != 'open');
+
+    if (isTableEnded && !_isHost && (_membershipStatus == null || !['approved', 'joined'].contains(_membershipStatus!['status']))) {
+      return ElevatedButton(
+        onPressed: null, // disabled
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isDark ? Colors.grey[800] : Colors.grey[300],
+          foregroundColor: isDark ? Colors.grey[500] : Colors.grey[600],
+          disabledBackgroundColor: isDark ? Colors.grey[800] : Colors.grey[300],
+          disabledForegroundColor: isDark ? Colors.grey[500] : Colors.grey[600],
+          padding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          elevation: 0,
+          textStyle: GoogleFonts.inter(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+        ),
+        child: const Text('Activity Ended'),
+      );
+    }
+
     // Join Button (Default) — full-width vibrant CTA
-    return ElevatedButton(
-      onPressed: _joinTable,
-      style: buttonStyle,
-      child: Text(
-        'Join Table',
-        style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _joinTable,
+        style: buttonStyle,
+        child: Text(
+          'Join Table',
+          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }

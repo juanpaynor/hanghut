@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import 'package:image_picker/image_picker.dart';
@@ -278,9 +279,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error picking photo: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not select photo');
       }
     }
   }
@@ -326,9 +325,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       return publicUrl;
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error uploading photo: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not upload photo');
       }
       return null;
     }
@@ -397,6 +394,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         interestTagIds: _selectedInterestIds.toList(),
         preferences: {
           'primary_goal': _primaryGoal,
+          'budget_min': 0,
+          'budget_max': 1000,
         },
         photoUrl: _uploadedPhotoUrl,
       );
@@ -416,12 +415,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving profile: $e'),
-            backgroundColor: AppTheme.errorColor,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not save your profile');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

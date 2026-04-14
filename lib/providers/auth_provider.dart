@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/auth_service.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 
 class AuthProvider with ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -35,7 +36,7 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(e.toString());
+      _setError(ErrorHandler.getUserMessage(e, fallback: 'Sign up failed. Please try again.'));
       _setLoading(false);
       return false;
     }
@@ -59,7 +60,7 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(e.toString());
+      _setError(ErrorHandler.getUserMessage(e, fallback: 'Sign in failed. Please try again.'));
       _setLoading(false);
       return false;
     }
@@ -80,7 +81,7 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(e.toString());
+      _setError(ErrorHandler.getUserMessage(e, fallback: 'Google sign in failed. Please try again.'));
       _setLoading(false);
       return false;
     }
@@ -96,7 +97,7 @@ class AuthProvider with ChangeNotifier {
       _setLoading(false);
       notifyListeners();
     } catch (e) {
-      _setError(e.toString());
+      _setError(ErrorHandler.getUserMessage(e, fallback: 'Sign out failed.'));
       _setLoading(false);
     }
   }
@@ -109,7 +110,7 @@ class AuthProvider with ChangeNotifier {
       await _authService.resetPasswordForEmail(email);
       _setLoading(false);
     } catch (e) {
-      _setError(e.toString());
+      _setError(ErrorHandler.getUserMessage(e, fallback: 'Could not send reset email. Please try again.'));
       _setLoading(false);
       rethrow;
     }

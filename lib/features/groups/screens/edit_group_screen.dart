@@ -3,41 +3,60 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:bitemates/core/services/group_service.dart';
-import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 
-/// Create a new group — category, name, description, privacy, optional cover.
-class CreateGroupScreen extends StatefulWidget {
-  const CreateGroupScreen({super.key});
+/// Edit an existing group — same fields as create, pre-populated.
+class EditGroupScreen extends StatefulWidget {
+  final Map<String, dynamic> group;
+
+  const EditGroupScreen({super.key, required this.group});
 
   @override
-  State<CreateGroupScreen> createState() => _CreateGroupScreenState();
+  State<EditGroupScreen> createState() => _EditGroupScreenState();
 }
 
-class _CreateGroupScreenState extends State<CreateGroupScreen> {
+class _EditGroupScreenState extends State<EditGroupScreen> {
   final GroupService _groupService = GroupService();
   final _formKey = GlobalKey<FormState>();
 
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _rulesController = TextEditingController();
-  final _cityController = TextEditingController();
+  late final TextEditingController _nameController;
+  late final TextEditingController _descriptionController;
+  late final TextEditingController _rulesController;
+  late final TextEditingController _cityController;
 
-  String _selectedCategory = 'other';
-  String _selectedPrivacy = 'public';
-  String? _selectedEmoji;
-  File? _coverImage;
-  bool _isCreating = false;
+  late String _selectedCategory;
+  late String _selectedPrivacy;
+  File? _newCoverImage;
+  bool _isSaving = false;
+
+  String? get _existingCoverUrl =>
+      widget.group['cover_image_url'] as String?;
 
   static const _categories = <String, Map<String, dynamic>>{
     'food': {'label': 'Food', 'icon': Icons.restaurant, 'emoji': '🍕'},
-    'nightlife': {'label': 'Nightlife', 'icon': Icons.nightlife, 'emoji': '🌃'},
+    'nightlife': {
+      'label': 'Nightlife',
+      'icon': Icons.nightlife,
+      'emoji': '🌃'
+    },
     'travel': {'label': 'Travel', 'icon': Icons.flight, 'emoji': '✈️'},
-    'fitness': {'label': 'Fitness', 'icon': Icons.fitness_center, 'emoji': '💪'},
+    'fitness': {
+      'label': 'Fitness',
+      'icon': Icons.fitness_center,
+      'emoji': '💪'
+    },
     'outdoors': {'label': 'Outdoors', 'icon': Icons.terrain, 'emoji': '🏔️'},
-    'gaming': {'label': 'Gaming', 'icon': Icons.sports_esports, 'emoji': '🎮'},
+    'gaming': {
+      'label': 'Gaming',
+      'icon': Icons.sports_esports,
+      'emoji': '🎮'
+    },
     'arts': {'label': 'Arts', 'icon': Icons.palette, 'emoji': '🎨'},
     'music': {'label': 'Music', 'icon': Icons.music_note, 'emoji': '🎵'},
-    'professional': {'label': 'Professional', 'icon': Icons.work_outline, 'emoji': '💼'},
+    'professional': {
+      'label': 'Professional',
+      'icon': Icons.work_outline,
+      'emoji': '💼'
+    },
     'other': {'label': 'Other', 'icon': Icons.groups, 'emoji': '🌟'},
   };
 
@@ -63,6 +82,21 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   };
 
   @override
+  void initState() {
+    super.initState();
+    _nameController =
+        TextEditingController(text: widget.group['name'] ?? '');
+    _descriptionController =
+        TextEditingController(text: widget.group['description'] ?? '');
+    _rulesController =
+        TextEditingController(text: widget.group['rules'] ?? '');
+    _cityController =
+        TextEditingController(text: widget.group['location_city'] ?? '');
+    _selectedCategory = widget.group['category'] ?? 'other';
+    _selectedPrivacy = widget.group['privacy'] ?? 'public';
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
@@ -76,20 +110,23 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       final picked =
           await ImagePicker().pickImage(source: ImageSource.gallery);
       if (picked != null) {
-        setState(() => _coverImage = File(picked.path));
+        setState(() => _newCoverImage = File(picked.path));
       }
     } catch (e) {
       debugPrint('Error picking image: $e');
     }
   }
 
-  Future<void> _createGroup() async {
+  Future<void> _saveGroup() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isCreating = true);
+    setState(() => _isSaving = true);
     HapticFeedback.mediumImpact();
 
-    final result = await _groupService.createGroup(
+    final groupId = widget.group['id'] as String;
+
+    final result = await _groupService.updateGroup(
+      groupId,
       name: _nameController.text.trim(),
       description: _descriptionController.text.trim().isNotEmpty
           ? _descriptionController.text.trim()
@@ -99,86 +136,134 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           : null,
       category: _selectedCategory,
       privacy: _selectedPrivacy,
-      iconEmoji: _selectedEmoji ??
-          _categories[_selectedCategory]?['emoji'] as String?,
+      iconEmoji: _categories[_selectedCategory]?['emoji'] as String?,
       locationCity: _cityController.text.trim().isNotEmpty
           ? _cityController.text.trim()
           : null,
-      coverImage: _coverImage,
+      coverImage: _newCoverImage,
     );
 
     if (!mounted) return;
 
     if (result['success'] == true) {
       HapticFeedback.heavyImpact();
-      Navigator.pop(context); // Return to groups list
-      // Then navigate to the new group
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              GroupDetailScreen(groupId: result['group_id'] as String),
-        ),
-      );
+      Navigator.pop(context, true); // true = refresh parent
     } else {
-      setState(() => _isCreating = false);
+      setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(result['message'] ?? 'Failed to create group')),
+            content: Text(result['message'] ?? 'Failed to update group')),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final primaryColor = Theme.of(context).colorScheme.primary;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Create Group'),
+        title: const Text('Edit Group'),
         centerTitle: true,
+        actions: [
+          TextButton(
+            onPressed: _isSaving ? null : _saveGroup,
+            child: _isSaving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text('Save',
+                    style: TextStyle(
+                      color: primaryColor,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    )),
+          ),
+        ],
       ),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            // ── Cover Image Picker
+            // ── Cover Image
             GestureDetector(
               onTap: _pickCoverImage,
               child: Container(
                 height: 160,
                 decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(16),
+                  color: isDark
+                      ? Colors.grey[900]
+                      : primaryColor.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: primaryColor.withOpacity(0.3),
-                    style: BorderStyle.solid,
+                    color: isDark
+                        ? Colors.grey[800]!
+                        : primaryColor.withOpacity(0.2),
                   ),
-                  image: _coverImage != null
+                  image: _newCoverImage != null
                       ? DecorationImage(
-                          image: FileImage(_coverImage!),
+                          image: FileImage(_newCoverImage!),
                           fit: BoxFit.cover,
                         )
-                      : null,
+                      : _existingCoverUrl != null
+                          ? DecorationImage(
+                              image: NetworkImage(_existingCoverUrl!),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
                 ),
-                child: _coverImage == null
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.add_photo_alternate_outlined,
-                              size: 40, color: primaryColor.withOpacity(0.6)),
-                          const SizedBox(height: 8),
-                          Text('Add Cover Image',
-                              style: TextStyle(
-                                  color: primaryColor.withOpacity(0.8),
-                                  fontWeight: FontWeight.w500)),
-                          Text('(Optional)',
-                              style: TextStyle(
-                                  color: Colors.grey[400], fontSize: 12)),
-                        ],
-                      )
-                    : null,
+                child:
+                    (_newCoverImage == null && _existingCoverUrl == null)
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add_photo_alternate_outlined,
+                                  size: 36,
+                                  color: isDark
+                                      ? Colors.grey[500]
+                                      : primaryColor.withOpacity(0.5)),
+                              const SizedBox(height: 8),
+                              Text('Add Cover Image',
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.grey[500]
+                                        : primaryColor.withOpacity(0.7),
+                                    fontWeight: FontWeight.w500,
+                                  )),
+                            ],
+                          )
+                        : Align(
+                            alignment: Alignment.bottomRight,
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.5),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.edit,
+                                        size: 14, color: Colors.white),
+                                    SizedBox(width: 4),
+                                    Text('Change',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        )),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
               ),
             ),
             const SizedBox(height: 24),
@@ -188,7 +273,6 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               controller: _nameController,
               decoration: InputDecoration(
                 labelText: 'Group Name *',
-                hintText: 'e.g. Manila Foodies',
                 prefixIcon: const Icon(Icons.edit_outlined),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -205,7 +289,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ── Category Selector
+            // ── Category
             const Text('Category',
                 style:
                     TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
@@ -221,7 +305,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     children: [
                       Icon(entry.value['icon'] as IconData,
                           size: 16,
-                          color: isSelected ? Colors.white : primaryColor),
+                          color: isSelected
+                              ? Colors.white
+                              : primaryColor),
                       const SizedBox(width: 4),
                       Text(entry.value['label'] as String),
                     ],
@@ -233,10 +319,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     fontWeight: FontWeight.w500,
                   ),
                   onSelected: (_) {
-                    setState(() {
-                      _selectedCategory = entry.key;
-                      _selectedEmoji = entry.value['emoji'] as String;
-                    });
+                    setState(() => _selectedCategory = entry.key);
                   },
                 );
               }).toList(),
@@ -265,19 +348,23 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     border: Border.all(
                       color: isSelected
                           ? color.withOpacity(0.5)
-                          : Colors.grey[300]!,
+                          : (isDark
+                              ? Colors.grey[800]!
+                              : Colors.grey[300]!),
                       width: isSelected ? 2 : 1,
                     ),
                   ),
                   child: Row(
                     children: [
                       Icon(entry.value['icon'] as IconData,
-                          color: isSelected ? color : Colors.grey[500],
+                          color:
+                              isSelected ? color : Colors.grey[500],
                           size: 22),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
                           children: [
                             Text(
                               entry.value['label'] as String,
@@ -289,13 +376,15 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                             Text(
                               entry.value['desc'] as String,
                               style: TextStyle(
-                                  fontSize: 12, color: Colors.grey[500]),
+                                  fontSize: 12,
+                                  color: Colors.grey[500]),
                             ),
                           ],
                         ),
                       ),
                       if (isSelected)
-                        Icon(Icons.check_circle, color: color, size: 22),
+                        Icon(Icons.check_circle,
+                            color: color, size: 22),
                     ],
                   ),
                 ),
@@ -319,7 +408,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
             ),
             const SizedBox(height: 8),
 
-            // ── Rules (optional)
+            // ── Rules
             TextFormField(
               controller: _rulesController,
               decoration: InputDecoration(
@@ -347,37 +436,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 32),
-
-            // ── Create Button
-            SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                onPressed: _isCreating ? null : _createGroup,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryColor,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  textStyle: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                child: _isCreating
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Create Group'),
-              ),
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 40),
           ],
         ),
       ),

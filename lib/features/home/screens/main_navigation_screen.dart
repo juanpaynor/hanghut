@@ -19,12 +19,16 @@ import 'package:bitemates/core/services/analytics_service.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
-  final String? initialTableId; // Add this
+  final String? initialTableId;
+  final double? flyToLat;
+  final double? flyToLng;
 
   const MainNavigationScreen({
     super.key,
     this.initialIndex = 0,
     this.initialTableId,
+    this.flyToLat,
+    this.flyToLng,
   });
 
   @override
@@ -51,6 +55,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         _mapScreenKey.currentState?.showTableDetails(widget.initialTableId!);
       });
     }
+
+    // Handle Fly-To from story location tap — coordinates are passed
+    // directly to MapScreen via constructor to bypass intro animation.
 
     // Check for Admin Popups on Startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -172,7 +179,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           });
         },
       ),
-      MapScreen(key: _mapScreenKey),
+      MapScreen(
+        key: _mapScreenKey,
+        initialFlyToLat: widget.flyToLat,
+        initialFlyToLng: widget.flyToLng,
+      ),
       const ActivityScreen(),
       currentUserId != null
           ? UserProfileScreen(userId: currentUserId, isOwnProfile: true)

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
@@ -170,9 +171,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         });
       }
     } catch (e) {
+      debugPrint('⚠️ Profile load error: $e');
       if (mounted) {
         setState(() {
-          _errorMessage = e.toString();
+          _errorMessage = 'Unable to load profile. Please try again.';
           _isLoading = false;
         });
       }
@@ -240,9 +242,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to update follow status.');
       }
     }
   }
@@ -267,9 +267,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening chat: ${e.toString()}')),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to open chat.');
       }
     }
   }
@@ -364,9 +362,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 });
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
-                  );
+                  ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to update badge.');
                 }
               }
             },

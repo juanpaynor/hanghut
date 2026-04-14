@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
@@ -108,7 +109,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
         if (mounted) setState(() => _attachedEvent = data);
       } catch (e) {
-        print('❌ [SocialPostCard] Error fetching event $eventId: $e');
+        debugPrint('⚠️ [SocialPostCard] Error fetching event $eventId: $e');
       } finally {
         if (mounted) setState(() => _isLoadingEvent = false);
       }
@@ -176,7 +177,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
       try {
         postTime = DateTime.parse(createdAt);
       } catch (e) {
-        print('Error parsing timestamp: $e');
+        debugPrint('⚠️ Error parsing timestamp: $e');
       }
     }
 
@@ -451,10 +452,8 @@ class _SocialPostCardState extends State<SocialPostCard> {
                             ),
                           );
                         } catch (e) {
-                          print('Error parsing event: $e');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Could not open event: $e')),
-                          );
+                          debugPrint('Error parsing event: $e');
+                          ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not open event');
                         }
                       },
                       onImageTap: () {

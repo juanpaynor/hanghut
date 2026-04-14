@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/services/experience_service.dart';
@@ -37,6 +38,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
 
   bool _isProcessing = false;
   bool _subscribedToNewsletter = true;
+  int _currentImageIndex = 0;
 
   @override
   void initState() {
@@ -112,18 +114,41 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Booking failed: ${e.toString().replaceAll('Exception: ', '')}',
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to process booking. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
+  }
+
+  void _showFullScreenPreview(int initialIndex) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white),
+            elevation: 0,
+          ),
+          body: PageView.builder(
+            controller: PageController(initialPage: initialIndex),
+            itemCount: (widget.experience['images'] as List).length,
+            itemBuilder: (context, index) {
+              return InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.0,
+                child: Image.network(
+                  widget.experience['images'][index],
+                  fit: BoxFit.contain,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -163,9 +188,22 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                   ? Stack(
                       fit: StackFit.expand,
                       children: [
-                        Image.network(
-                          widget.experience['images'][0],
-                          fit: BoxFit.cover,
+                        PageView.builder(
+                          onPageChanged: (index) {
+                            setState(() {
+                              _currentImageIndex = index;
+                            });
+                          },
+                          itemCount: (widget.experience['images'] as List).length,
+                          itemBuilder: (context, index) {
+                            return GestureDetector(
+                              onTap: () => _showFullScreenPreview(index),
+                              child: Image.network(
+                                widget.experience['images'][index],
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          },
                         ),
                         DecoratedBox(
                           decoration: BoxDecoration(
@@ -180,6 +218,30 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                             ),
                           ),
                         ),
+                        if ((widget.experience['images'] as List).length > 1)
+                          Positioned(
+                            bottom: 24,
+                            left: 0,
+                            right: 0,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(
+                                (widget.experience['images'] as List).length,
+                                (index) => AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                                  width: _currentImageIndex == index ? 24 : 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(4),
+                                    color: _currentImageIndex == index
+                                        ? Colors.black87
+                                        : Colors.black38,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     )
                   : Container(

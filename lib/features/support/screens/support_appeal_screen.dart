@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 
 class SupportAppealScreen extends StatefulWidget {
@@ -63,12 +64,7 @@ class _SupportAppealScreenState extends State<SupportAppealScreen> {
     } catch (e) {
       setState(() => _isSubmitting = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to submit appeal: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to submit appeal. Please try again.');
       }
     }
   }

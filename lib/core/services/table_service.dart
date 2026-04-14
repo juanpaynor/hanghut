@@ -41,6 +41,9 @@ class TableService {
             .lte('location_lng', maxLng);
       }
 
+      // Exclude group-only activities from public map
+      query = query.neq('visibility', 'group_only');
+
       // Order by scheduled time to get soonest events first, but limiting is key.
       var builder = query.order('scheduled_time', ascending: true);
 
@@ -149,7 +152,7 @@ class TableService {
             )
           ''')
           .inFilter('table_id', tableIds)
-          .inFilter('status', ['approved', 'joined', 'attended', 'confirmed'])
+          .inFilter('status', ['approved', 'joined', 'attended'])
           .order('joined_at', ascending: true);
 
       // Group members by table_id
@@ -288,6 +291,7 @@ class TableService {
     String visibility = 'public',
     Map<String, dynamic>? filters,
     List<String>? invitedUserIds,
+    String? groupId, // Group-hosted activity
   }) async {
     print('📊 TABLE SERVICE: createTable called');
     print('  - Venue: $venueName');
@@ -327,6 +331,7 @@ class TableService {
         if (filters != null && filters.isNotEmpty) 'filters': filters,
         if (invitedUserIds != null && invitedUserIds.isNotEmpty)
           'invited_user_ids': invitedUserIds,
+        if (groupId != null) 'group_id': groupId,
       };
 
       print('📤 TABLE SERVICE: Sending to Supabase...');
@@ -401,8 +406,8 @@ class TableService {
         }
       }
 
-      // Auto-Post to Feed (skip for mystery tables — they should stay hidden)
-      if (visibility != 'mystery') {
+      // Auto-Post to Feed (skip for mystery and group_only tables — they should stay hidden)
+      if (visibility != 'mystery' && visibility != 'group_only') {
         try {
           print('📣 TABLE SERVICE: Auto-posting to feed...');
 
@@ -543,6 +548,83 @@ class TableService {
           }
         } catch (e) {
           print('⚠️ TABLE SERVICE: Failed to send follower notifications: $e');
+        }
+      }
+      // ═══ GROUP MEMBER NOTIFICATIONS (in-app + push) ═══
+      if (groupId != null) {
+        try {
+          final hostName = user.userMetadata?['display_name'] ?? 'Someone';
+          final tableTitle = title ?? venueName;
+          print('🔔 TABLE SERVICE: Fetching group members for notification...');
+
+          // Get group name
+          String groupName = 'the group';
+          try {
+            final gResp = await SupabaseConfig.client
+                .from('groups')
+                .select('name')
+                .eq('id', groupId)
+                .single();
+            groupName = gResp['name'] ?? 'the group';
+          } catch (_) {}
+
+          // Fetch all approved group members
+          final membersResp = await SupabaseConfig.client
+              .from('group_members')
+              .select('user_id')
+              .eq('group_id', groupId)
+              .eq('status', 'approved');
+
+          final memberIds = (membersResp as List)
+              .map((m) => m['user_id'] as String)
+              .where((mid) =>
+                  mid != user.id && // skip creator
+                  !(invitedUserIds?.contains(mid) ?? false)) // skip already-invited
+              .toList();
+
+          if (memberIds.isNotEmpty) {
+            print('🔔 TABLE SERVICE: Notifying ${memberIds.length} group members...');
+
+            // Batch insert in-app notifications
+            try {
+              final notifRows = memberIds.map((mid) => {
+                'user_id': mid,
+                'actor_id': user.id,
+                'type': 'group_activity',
+                'title': 'New Activity in $groupName 🎯',
+                'body': '$hostName created "$tableTitle"',
+                'entity_id': tableId,
+                'metadata': {
+                  'table_id': tableId,
+                  'group_id': groupId,
+                },
+              }).toList();
+              await SupabaseConfig.client.from('notifications').insert(notifRows);
+            } catch (e) {
+              print('⚠️ Failed to batch insert group notifications: $e');
+            }
+
+            // Send push notifications (fire-and-forget)
+            for (final mid in memberIds) {
+              SupabaseConfig.client.functions.invoke(
+                'send-push',
+                body: {
+                  'user_id': mid,
+                  'title': 'New Activity in $groupName 🎯',
+                  'body': '$hostName created "$tableTitle"',
+                  'data': {
+                    'type': 'table_join',
+                    'table_id': tableId,
+                  },
+                },
+              ).then((_) {}).catchError((e) {
+                print('⚠️ Failed to send group push for $mid: $e');
+              });
+            }
+            print('✅ TABLE SERVICE: Group member notifications sent');
+          }
+        } catch (e) {
+          print('⚠️ TABLE SERVICE: Failed to send group notifications: $e');
         }
       }
 

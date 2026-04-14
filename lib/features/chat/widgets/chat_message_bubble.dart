@@ -272,7 +272,6 @@ class ChatMessageBubble extends StatelessWidget {
                                         if (msg['contentType'] == 'poll')
                                           PollMessageBubble(
                                             pollId: msg['content'],
-                                            currentUserId: msg['senderId'] ?? '',
                                             isMe: isMe,
                                           )
                                         else if (msg['contentType'] == 'image')

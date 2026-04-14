@@ -31,7 +31,9 @@ class GeofenceEngine {
 
   // Config
   static const double kGeofenceRadiusMeters = 200.0;
+  static const double kJoinedActivityRadiusMeters = 100.0; // Tighter radius for auto-checkin
   static const int kDwellTimeSeconds = 20; // Production value (was 5 for testing)
+  static const int kCheckinDwellTimeSeconds = 10; // Faster dwell for joined activities
 
   // PHASE 1: Rate limiting config
   static const Duration kNotificationCooldown = Duration(hours: 6);
@@ -41,6 +43,14 @@ class GeofenceEngine {
   final StreamController<Map<String, dynamic>> _eventStreamController =
       StreamController.broadcast();
   Stream<Map<String, dynamic>> get eventStream => _eventStreamController.stream;
+
+  // Stream for auto-checkin events (joined activities within tight radius)
+  final StreamController<Map<String, dynamic>> _checkinStreamController =
+      StreamController.broadcast();
+  Stream<Map<String, dynamic>> get checkinStream => _checkinStreamController.stream;
+
+  // Track user's joined table IDs for activity-specific check-in
+  Set<String> _userJoinedTableIds = {};
 
   // Muted Zones (Persisted)
   Set<String> _mutedZones = {};
@@ -63,6 +73,7 @@ class GeofenceEngine {
     await _loadGeofencesFromCache();
     await _loadMutedZones(); // Load Ignore List
     await _loadNotificationHistory(); // PHASE 1: Load cooldown data
+    await _loadUserJoinedTables(); // Load user's joined activities
 
     // Start Listening to Foreground Location
     _locationService.startTracking(); // Ensure service is tracking
@@ -387,9 +398,37 @@ class GeofenceEngine {
     }
   }
 
-  /// Core Check Loop - PHASE 2: Priority-based filtering
+  /// Load user's joined table IDs for activity-specific check-in
+  Future<void> _loadUserJoinedTables() async {
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final response = await Supabase.instance.client
+          .from('table_members')
+          .select('table_id')
+          .eq('user_id', userId)
+          .inFilter('status', ['approved', 'joined']);
+
+      _userJoinedTableIds = (response as List)
+          .map((r) => r['table_id'] as String)
+          .toSet();
+
+      print('📍 GEOFENCE: Loaded ${_userJoinedTableIds.length} joined tables');
+    } catch (e) {
+      print('❌ GEOFENCE: Error loading joined tables - $e');
+    }
+  }
+
+  /// Refresh joined tables (call after joining/leaving a table)
+  Future<void> refreshJoinedTables() async {
+    await _loadUserJoinedTables();
+  }
+
+  /// Core Check Loop - PHASE 2: Priority-based filtering + joined activity check-in
   void checkProximity(double userLat, double userLng) {
     final List<Map<String, dynamic>> nearbyEvents = [];
+    final List<Map<String, dynamic>> checkinEvents = []; // Joined activities
     final Map<String, double> distanceMap = {};
 
     // First pass: collect all nearby events with distances
@@ -406,17 +445,27 @@ class GeofenceEngine {
       );
 
       final String fenceId = fence['id'];
-      final bool isInside = distance < kGeofenceRadiusMeters;
+      distanceMap[fenceId] = distance;
 
-      if (isInside) {
+      final bool isJoinedActivity = _userJoinedTableIds.contains(fenceId);
+
+      if (isJoinedActivity && distance < kJoinedActivityRadiusMeters) {
+        // Joined activity within tight radius → auto-checkin prompt
+        checkinEvents.add({...fence, '_distance': distance, '_is_joined': true});
+      } else if (distance < kGeofenceRadiusMeters) {
+        // Generic nearby event → discovery notification
         nearbyEvents.add(fence);
-        distanceMap[fenceId] = distance;
       } else {
         _handleExit(fenceId);
       }
     }
 
-    // PHASE 2: Sort by priority if multiple events
+    // Process joined activity check-ins first (higher priority, faster dwell)
+    for (final event in checkinEvents) {
+      _handleCheckinEnter(event['id'], event['title'] ?? 'Your Activity', event);
+    }
+
+    // PHASE 2: Sort discovery events by priority if multiple
     if (nearbyEvents.length > 1) {
       nearbyEvents.sort((a, b) {
         final aPriority = _calculateEventPriority(
@@ -433,13 +482,45 @@ class GeofenceEngine {
       print('📊 GEOFENCE: ${nearbyEvents.length} nearby, sorted by priority');
     }
 
-    // Process events (rate limits will naturally cap notifications)
+    // Process discovery events (rate limits will naturally cap notifications)
     for (final event in nearbyEvents) {
       _handleEnter(event['id'], event['title'] ?? 'Unknown Event', event);
     }
   }
 
   // --- State Machine ---
+
+  /// Handle entry into a joined activity zone (tighter radius, faster dwell)
+  void _handleCheckinEnter(String id, String title, Map<String, dynamic> event) {
+    final checkinKey = 'checkin_$id';
+    // If already inside or triggered, do nothing
+    if (_insideZones.contains(checkinKey)) return;
+    if (_dwellTimers.containsKey(checkinKey)) return;
+
+    print('📍 CHECKIN: Near joined activity: $title (Starting ${kCheckinDwellTimeSeconds}s dwell)');
+
+    _dwellTimers[checkinKey] = Timer(Duration(seconds: kCheckinDwellTimeSeconds), () {
+      _insideZones.add(checkinKey);
+      _dwellTimers.remove(checkinKey);
+
+      // Emit on auto-checkin stream (GeofenceModal will handle differently)
+      _checkinStreamController.add({
+        'id': id,
+        'title': title,
+        'datetime': event['datetime'] ?? event['start_datetime'],
+        'current_capacity': event['current_capacity'] ?? event['member_count'] ?? 0,
+        'max_guests': event['max_guests'] ?? event['capacity'] ?? 0,
+        'location_name': event['location_name'] ?? event['venue_name'] ?? event['title'],
+        'is_joined': true,
+      });
+
+      // Show a gentler notification for joined activities
+      _showGeofenceNotification(
+        "You've Arrived! 👋",
+        "Tap to check in to $title",
+      );
+    });
+  }
 
   void _handleEnter(String id, String title, Map<String, dynamic> event) {
     // If already inside, do nothing

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/location/logic/geofence_engine.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/providers/theme_provider.dart';
@@ -147,9 +148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to send test notification.');
       }
     }
   }
@@ -484,12 +483,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               }
                             } catch (e) {
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Failed to delete account: $e'),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
+                                ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to delete account. Please contact support.');
                               }
                             }
                           },

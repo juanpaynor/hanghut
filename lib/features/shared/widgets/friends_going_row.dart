@@ -69,9 +69,9 @@ class _FriendsGoingRowState extends State<FriendsGoingRow> {
       case 'event':
         return 'going';
       case 'table':
-        return 'joined';
+        return 'joining';
       case 'experience':
-        return 'booked';
+        return 'booking';
       default:
         return 'going';
     }

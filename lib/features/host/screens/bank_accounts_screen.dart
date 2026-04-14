@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -34,12 +35,7 @@ class _BankAccountsScreenState extends State<BankAccountsScreen> {
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load accounts: $e'),
-            backgroundColor: Colors.red[700],
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to load payout methods.');
       }
     } finally {
       if (mounted) {
@@ -75,12 +71,7 @@ class _BankAccountsScreenState extends State<BankAccountsScreen> {
         _fetchAccounts();
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete account: $e'),
-              backgroundColor: Colors.red[700],
-            ),
-          );
+          ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to remove account.');
         }
       }
     }
@@ -92,12 +83,7 @@ class _BankAccountsScreenState extends State<BankAccountsScreen> {
       _fetchAccounts();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to set primary account: $e'),
-            backgroundColor: Colors.red[700],
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to set primary account.');
       }
     }
   }

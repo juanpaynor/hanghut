@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class GroupService {
   // ═══════════════════════════════════════════════
@@ -277,6 +278,51 @@ class GroupService {
   }
 
   // ═══════════════════════════════════════════════
+  // GROUP ACTIVITIES
+  // ═══════════════════════════════════════════════
+
+  /// Get activities (tables) created by this group
+  Future<List<Map<String, dynamic>>> getGroupActivities(
+    String groupId, {
+    bool upcomingOnly = false,
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    try {
+      var query = SupabaseConfig.client
+          .from('tables')
+          .select('''
+            id, title, description, datetime, location_name, venue_address,
+            latitude, longitude, max_guests, status, visibility,
+            marker_emoji, marker_image_url, image_url,
+            host_id,
+            host:host_id (
+              id,
+              display_name,
+              user_photos (
+                photo_url,
+                is_primary
+              )
+            )
+          ''')
+          .eq('group_id', groupId);
+
+      if (upcomingOnly) {
+        query = query.gte('datetime', DateTime.now().toUtc().toIso8601String());
+      }
+
+      final response = await query
+          .order('datetime', ascending: true)
+          .range(offset, offset + limit - 1);
+
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      print('❌ GROUP SERVICE: Error fetching group activities - $e');
+      return [];
+    }
+  }
+
+  // ═══════════════════════════════════════════════
   // HELPERS
   // ═══════════════════════════════════════════════
 
@@ -284,16 +330,22 @@ class GroupService {
     try {
       final fileExt = imageFile.path.split('.').last;
       final fileName = '$groupId.$fileExt';
+      final bytes = await imageFile.readAsBytes();
 
       await SupabaseConfig.client.storage
           .from('group-covers')
-          .upload(fileName, imageFile);
+          .uploadBinary(
+            fileName,
+            bytes,
+            fileOptions: const FileOptions(upsert: true),
+          );
 
       final publicUrl = SupabaseConfig.client.storage
           .from('group-covers')
           .getPublicUrl(fileName);
 
-      return publicUrl;
+      // Append cache-buster so updated images show immediately
+      return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
     } catch (e) {
       print('❌ GROUP SERVICE: Error uploading cover - $e');
       return null;

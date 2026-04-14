@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
@@ -240,10 +241,10 @@ class TableMemberService {
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
-      print('❌ Error joining table: $e');
+      debugPrint('⚠️ Error joining table: $e');
       return {
         'success': false,
-        'message': 'Failed to join table: ${e.toString()}',
+        'message': 'Failed to join table. Please try again.',
       };
     }
   }
@@ -271,10 +272,10 @@ class TableMemberService {
 
       return {'success': true, 'message': 'You have left the table'};
     } catch (e) {
-      print('❌ Error leaving table: $e');
+      debugPrint('⚠️ Error leaving table: $e');
       return {
         'success': false,
-        'message': 'Failed to leave table: ${e.toString()}',
+        'message': 'Failed to leave table. Please try again.',
       };
     }
   }
@@ -320,7 +321,7 @@ class TableMemberService {
 
       return {'success': true, 'message': 'Request approved'};
     } catch (e) {
-      print('❌ Error approving request: $e');
+      debugPrint('⚠️ Error approving request: $e');
       return {'success': false, 'message': 'Failed to approve request'};
     }
   }
@@ -340,7 +341,7 @@ class TableMemberService {
 
       return {'success': true, 'message': 'Request rejected'};
     } catch (e) {
-      print('❌ Error rejecting request: $e');
+      debugPrint('⚠️ Error rejecting request: $e');
       return {'success': false, 'message': 'Failed to reject request'};
     }
   }
@@ -362,7 +363,7 @@ class TableMemberService {
 
       return {'success': true, 'message': 'Member removed'};
     } catch (e) {
-      print('❌ Error removing member: $e');
+      debugPrint('⚠️ Error removing member: $e');
       return {'success': false, 'message': 'Failed to remove member'};
     }
   }
@@ -390,7 +391,7 @@ class TableMemberService {
 
       return List<Map<String, dynamic>>.from(requests);
     } catch (e) {
-      print('❌ Error getting pending requests: $e');
+      debugPrint('⚠️ Error getting pending requests: $e');
       return [];
     }
   }
@@ -420,7 +421,7 @@ class TableMemberService {
 
       return List<Map<String, dynamic>>.from(members);
     } catch (e) {
-      print('❌ Error getting table members: $e');
+      debugPrint('⚠️ Error getting table members: $e');
       return [];
     }
   }
@@ -440,7 +441,7 @@ class TableMemberService {
 
       return membership;
     } catch (e) {
-      print('❌ Error checking membership: $e');
+      debugPrint('⚠️ Error checking membership: $e');
       return null;
     }
   }
@@ -482,7 +483,7 @@ class TableMemberService {
 
       return {'success': true, 'message': 'You\'re in! 🎉'};
     } catch (e) {
-      print('❌ Error accepting invite: $e');
+      debugPrint('⚠️ Error accepting invite: $e');
       return {'success': false, 'message': 'Failed to accept invite'};
     }
   }
@@ -502,7 +503,7 @@ class TableMemberService {
 
       return {'success': true, 'message': 'Invite declined'};
     } catch (e) {
-      print('❌ Error declining invite: $e');
+      debugPrint('⚠️ Error declining invite: $e');
       return {'success': false, 'message': 'Failed to decline invite'};
     }
   }

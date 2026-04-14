@@ -338,4 +338,183 @@ class GroupMemberService {
       return 'Someone';
     }
   }
+
+  Future<String> _getGroupName(String groupId) async {
+    try {
+      final group = await SupabaseConfig.client
+          .from('groups')
+          .select('name')
+          .eq('id', groupId)
+          .single();
+      return group['name'] ?? 'a group';
+    } catch (_) {
+      return 'a group';
+    }
+  }
+
+  /// Get admin/owner user IDs for a group (for notifications)
+  Future<List<String>> _getAdminUserIds(String groupId) async {
+    try {
+      final admins = await SupabaseConfig.client
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', groupId)
+          .eq('status', 'approved')
+          .inFilter('role', ['admin', 'owner']);
+
+      return List<String>.from(admins.map((a) => a['user_id']));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // INVITE (admin/owner)
+  // ═══════════════════════════════════════════════
+
+  /// Invite a user to the group. Admin/owner only — auto-approves.
+  Future<Map<String, dynamic>> inviteMember(
+      String groupId, String targetUserId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Check if target is already a member
+      final existing = await SupabaseConfig.client
+          .from('group_members')
+          .select('status, role')
+          .eq('group_id', groupId)
+          .eq('user_id', targetUserId)
+          .maybeSingle();
+
+      if (existing != null) {
+        final status = existing['status'] as String;
+        if (status == 'approved') {
+          return {'success': false, 'message': 'Already a member'};
+        }
+        if (status == 'banned') {
+          return {'success': false, 'message': 'This user is banned from the group'};
+        }
+        // If pending, upgrade to approved
+        await SupabaseConfig.client
+            .from('group_members')
+            .update({
+              'status': 'approved',
+              'role': 'member',
+              'joined_at': DateTime.now().toUtc().toIso8601String(),
+              'last_read_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('group_id', groupId)
+            .eq('user_id', targetUserId);
+      } else {
+        // New membership — auto-approved
+        await SupabaseConfig.client.from('group_members').insert({
+          'group_id': groupId,
+          'user_id': targetUserId,
+          'role': 'member',
+          'status': 'approved',
+          'joined_at': DateTime.now().toUtc().toIso8601String(),
+          'last_read_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+
+      // Notify the invitee
+      try {
+        final groupName = await _getGroupName(groupId);
+        final inviterName = await _getUserDisplayName(user.id);
+        await SupabaseConfig.client.from('notifications').insert({
+          'user_id': targetUserId,
+          'actor_id': user.id,
+          'type': 'group_invite',
+          'entity_id': groupId,
+          'title': 'You\'ve been added! 🎉',
+          'body': '$inviterName added you to $groupName',
+          'metadata': {'group_id': groupId},
+        });
+
+        // Push notification
+        await SupabaseConfig.client.functions.invoke(
+          'send-push',
+          body: {
+            'user_id': targetUserId,
+            'title': 'You\'ve been added! 🎉',
+            'body': '$inviterName added you to $groupName',
+            'data': {
+              'type': 'group_detail',
+              'group_id': groupId,
+            },
+          },
+        );
+      } catch (_) {}
+
+      return {'success': true, 'message': 'Member invited successfully! 🎉'};
+    } catch (e) {
+      print('❌ GROUP MEMBER SERVICE: Error inviting member - $e');
+      return {'success': false, 'message': 'Failed to invite member'};
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // SUGGEST INVITE (regular member)
+  // ═══════════════════════════════════════════════
+
+  /// Suggest a user to be invited. Creates a notification for admins.
+  Future<Map<String, dynamic>> suggestInvite(
+      String groupId, String targetUserId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Check if target is already a member
+      final existing = await SupabaseConfig.client
+          .from('group_members')
+          .select('status')
+          .eq('group_id', groupId)
+          .eq('user_id', targetUserId)
+          .maybeSingle();
+
+      if (existing != null) {
+        final status = existing['status'] as String;
+        if (status == 'approved') {
+          return {'success': false, 'message': 'Already a member'};
+        }
+        if (status == 'pending') {
+          return {'success': false, 'message': 'This user already has a pending request'};
+        }
+      }
+
+      // Notify all admins/owners
+      final groupName = await _getGroupName(groupId);
+      final suggestedByName = await _getUserDisplayName(user.id);
+      final targetName = await _getUserDisplayName(targetUserId);
+      final adminIds = await _getAdminUserIds(groupId);
+
+      for (final adminId in adminIds) {
+        if (adminId == user.id) continue; // don't notify yourself
+        try {
+          await SupabaseConfig.client.from('notifications').insert({
+            'user_id': adminId,
+            'actor_id': user.id,
+            'type': 'group_invite_suggestion',
+            'entity_id': groupId,
+            'title': 'Invite Suggestion 💡',
+            'body':
+                '$suggestedByName suggests inviting $targetName to $groupName',
+            'metadata': {
+              'group_id': groupId,
+              'suggested_user_id': targetUserId,
+            },
+          });
+        } catch (_) {}
+      }
+
+      return {
+        'success': true,
+        'message': 'Suggestion sent to admins! 💡',
+      };
+    } catch (e) {
+      print('❌ GROUP MEMBER SERVICE: Error suggesting invite - $e');
+      return {'success': false, 'message': 'Failed to send suggestion'};
+    }
+  }
 }

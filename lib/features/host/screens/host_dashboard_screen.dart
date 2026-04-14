@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -271,12 +272,7 @@ class _ExperienceCardState extends State<_ExperienceCard> {
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to delete experience.');
           setState(() => _isDeleting = false);
         }
       }
@@ -714,12 +710,7 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                                 _fetchSchedules();
                               } catch (e) {
                                 if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Failed to add slot: $e'),
-                                      backgroundColor: Colors.red[700],
-                                    ),
-                                  );
+                                  ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to add time slot.');
                                 }
                               } finally {
                                 if (mounted) {
@@ -2032,12 +2023,7 @@ class _EarningsTabState extends State<_EarningsTab> {
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Failed to request payout: $e'),
-                      backgroundColor: Colors.red[700],
-                    ),
-                  );
+                  ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to request payout.');
                 }
               }
             },
@@ -2390,12 +2376,7 @@ class _EarningsTabState extends State<_EarningsTab> {
                             } catch (e) {
                               setSheetState(() => isProcessing = false);
                               if (ctx.mounted) {
-                                ScaffoldMessenger.of(ctx).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Failed: $e'),
-                                    backgroundColor: Colors.red[700],
-                                  ),
-                                );
+                                ErrorHandler.showError(ctx, error: e, fallbackMessage: 'Unable to process refund.');
                               }
                             }
                           },

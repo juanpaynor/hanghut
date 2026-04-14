@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:bitemates/core/services/checkin_service.dart';
+import 'package:bitemates/features/gamification/widgets/badge_earned_overlay.dart';
 import 'package:bitemates/features/location/logic/geofence_engine.dart';
 
-class GeofenceModal extends StatelessWidget {
+class GeofenceModal extends StatefulWidget {
   final Map<String, dynamic> eventData;
   final VoidCallback? onCheckIn;
 
@@ -28,12 +31,20 @@ class GeofenceModal extends StatelessWidget {
     );
   }
 
-  String get _tableId => eventData['id'] ?? '';
-  String get _title => eventData['title'] ?? 'Nearby Event';
-  String? get _locationName => eventData['location_name'];
-  String? get _datetime => eventData['datetime'];
-  int get _currentCapacity => (eventData['current_capacity'] ?? 0) as int;
-  int get _maxGuests => (eventData['max_guests'] ?? 0) as int;
+  @override
+  State<GeofenceModal> createState() => _GeofenceModalState();
+}
+
+class _GeofenceModalState extends State<GeofenceModal> {
+  bool _isCheckingIn = false;
+
+  String get _tableId => widget.eventData['id'] ?? '';
+  String get _title => widget.eventData['title'] ?? 'Nearby Event';
+  String? get _locationName => widget.eventData['location_name'];
+  String? get _datetime => widget.eventData['datetime'];
+  int get _currentCapacity => (widget.eventData['current_capacity'] ?? 0) as int;
+  int get _maxGuests => (widget.eventData['max_guests'] ?? 0) as int;
+  bool get _isJoined => widget.eventData['is_joined'] == true;
 
   String _formatTimeUntil() {
     if (_datetime == null) return '';
@@ -47,6 +58,77 @@ class GeofenceModal extends StatelessWidget {
       return 'Starts in ${diff.inDays}d';
     } catch (_) {
       return '';
+    }
+  }
+
+  Future<void> _handleCheckIn() async {
+    if (_isCheckingIn) return;
+    setState(() => _isCheckingIn = true);
+
+    try {
+      // Get current location
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5),
+      );
+
+      // Call CheckinService
+      final result = await CheckinService().geoCheckin(
+        _tableId,
+        position.latitude,
+        position.longitude,
+      );
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        Navigator.pop(context);
+        widget.onCheckIn?.call();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['already'] == true
+                  ? 'Already checked in! ✅'
+                  : 'Checked in successfully! 🎉',
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+
+        // Check for newly awarded badges
+        final badges = await CheckinService().checkAndAwardBadges(
+          result['user_id'] ?? '',
+        );
+        if (badges.isNotEmpty && mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: true,
+            builder: (ctx) => BadgeEarnedOverlay(badge: badges.first),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['error'] ?? 'Check-in failed'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Check-in error: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCheckingIn = false);
     }
   }
 
@@ -94,13 +176,15 @@ class GeofenceModal extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.indigo.withOpacity(0.1),
+                  color: _isJoined
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.indigo.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.place_rounded,
+                child: Icon(
+                  _isJoined ? Icons.check_circle_outline : Icons.place_rounded,
                   size: 36,
-                  color: Colors.indigo,
+                  color: _isJoined ? Colors.green : Colors.indigo,
                 ),
               ),
             ),
@@ -109,7 +193,9 @@ class GeofenceModal extends StatelessWidget {
 
           // Title
           Text(
-            "You're near $_title!",
+            _isJoined
+                ? "You've arrived at $_title!"
+                : "You're near $_title!",
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 20,
@@ -121,7 +207,9 @@ class GeofenceModal extends StatelessWidget {
 
           // Subtitle
           Text(
-            _locationName ?? "Would you like to check in?",
+            _isJoined
+                ? "Check in to confirm your attendance"
+                : (_locationName ?? "Would you like to check in?"),
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 14,
@@ -159,12 +247,9 @@ class GeofenceModal extends StatelessWidget {
 
           // Check In button
           ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              onCheckIn?.call();
-            },
+            onPressed: _isCheckingIn ? null : _handleCheckIn,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.indigo,
+              backgroundColor: _isJoined ? Colors.green : Colors.indigo,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
@@ -172,13 +257,22 @@ class GeofenceModal extends StatelessWidget {
               ),
               elevation: 0,
             ),
-            child: Text(
-              'Check In',
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            child: _isCheckingIn
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Text(
+                    'Check In',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
           const SizedBox(height: 12),
 

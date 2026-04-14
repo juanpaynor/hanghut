@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -123,12 +124,7 @@ class _HostBookingDetailScreenState extends State<HostBookingDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to request refund: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to process refund. Please try again.');
       }
     }
   }
@@ -159,9 +155,7 @@ class _HostBookingDetailScreenState extends State<HostBookingDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to update status: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to update check-in status.');
       }
     }
   }
@@ -193,9 +187,7 @@ class _HostBookingDetailScreenState extends State<HostBookingDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not start chat: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to start conversation.');
       }
     } finally {
       if (mounted) {

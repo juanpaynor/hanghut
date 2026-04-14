@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -75,7 +76,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
-      print("Error loading notifications: $e");
+      debugPrint('⚠️ Error loading notifications: $e');
     }
   }
 
@@ -248,11 +249,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         }
       }
     } catch (e) {
-      print('❌ Error navigating from notification: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not open link: $e')));
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not open this notification');
       }
     }
   }
@@ -297,7 +295,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         }
       }
     } catch (e) {
-      print('⚠️ Converting chat title/channel failed, using default: $e');
+      debugPrint('⚠️ Converting chat title/channel failed, using default: $e');
     }
 
     if (mounted) {

@@ -6,6 +6,7 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onInfoTap;
   final VoidCallback? onSearch;
+  final List<Widget>? extraActions;
 
   const ChatHeader({
     super.key,
@@ -14,6 +15,7 @@ class ChatHeader extends StatelessWidget {
     required this.onClose,
     required this.onInfoTap,
     this.onSearch,
+    this.extraActions,
   });
 
   @override
@@ -66,6 +68,8 @@ class ChatHeader extends StatelessWidget {
                   ),
                 ),
               ),
+              // Extra actions (e.g. host verify button)
+              if (extraActions != null) ...extraActions!,
               // Search Button
               if (onSearch != null)
                 IconButton(

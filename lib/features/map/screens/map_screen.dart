@@ -36,7 +36,14 @@ import 'package:ably_flutter/ably_flutter.dart' as ably;
 enum MapFilter { all, hangouts, events, experiences, stories }
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+  final double? initialFlyToLat;
+  final double? initialFlyToLng;
+
+  const MapScreen({
+    super.key,
+    this.initialFlyToLat,
+    this.initialFlyToLng,
+  });
 
   @override
   State<MapScreen> createState() => MapScreenState();
@@ -65,6 +72,10 @@ class MapScreenState extends State<MapScreen>
   bool _isFetching = false;
   bool _showCloudIntro = true;
   int _lastFeatureCount = 0; // Track marker count for pop animation
+
+  /// Whether we have a flyTo target from a deep link / story location tap
+  bool get _hasFlyToTarget =>
+      widget.initialFlyToLat != null && widget.initialFlyToLng != null;
 
   // Filter toggle
   MapFilter _currentFilter = MapFilter.all;
@@ -96,6 +107,10 @@ class MapScreenState extends State<MapScreen>
   @override
   void initState() {
     super.initState();
+    // Skip cloud intro entirely when we have a direct flyTo target
+    if (_hasFlyToTarget) {
+      _showCloudIntro = false;
+    }
     _getUserLocation();
     _loadCurrentUserData();
     _startHeartbeat();
@@ -324,8 +339,8 @@ class MapScreenState extends State<MapScreen>
         _currentPosition = position;
       });
 
-      // Update map camera with the user's current location
-      if (_mapboxMap != null) {
+      // Only set camera to user location if we DON'T have a flyTo target
+      if (_mapboxMap != null && !_hasFlyToTarget) {
         _mapboxMap?.setCamera(
           CameraOptions(
             center: Point(
@@ -405,8 +420,13 @@ class MapScreenState extends State<MapScreen>
     // Wait for user data to be ready before adding markers
     await _waitForDataAndLoadMarkers();
 
-    // Intro Animation
-    _playIntroAnimation();
+    // If we have a flyTo target, skip intro and go directly there
+    if (_hasFlyToTarget) {
+      flyToCoordinates(widget.initialFlyToLat!, widget.initialFlyToLng!);
+    } else {
+      // Intro Animation
+      _playIntroAnimation();
+    }
   }
 
   Future<void> _playIntroAnimation() async {
@@ -470,6 +490,18 @@ class MapScreenState extends State<MapScreen>
   // Public method to get current position for create table modal
   geo.Position? getCurrentPosition() {
     return _currentPosition;
+  }
+
+  /// Public method to fly the camera to specific coordinates (no modal).
+  void flyToCoordinates(double lat, double lng, {double zoom = 16.0}) {
+    _mapboxMap?.flyTo(
+      CameraOptions(
+        center: Point(coordinates: Position(lng, lat)),
+        zoom: zoom,
+        pitch: 50.0,
+      ),
+      MapAnimationOptions(duration: 1200),
+    );
   }
 
   @override
@@ -2438,6 +2470,9 @@ class MapScreenState extends State<MapScreen>
     String? imageUrl =
         story['image_url'] ?? story['thumbnail_url'] ?? story['media_url'];
 
+    // Determine placeholder type: 🎬 for videos, 🙂 for others
+    final placeholderType = story['video_url'] != null ? 'video' : 'social';
+
     try {
       if (imageUrl != null) {
         final response = await http.get(Uri.parse(imageUrl));
@@ -2463,14 +2498,14 @@ class MapScreenState extends State<MapScreen>
           );
           canvas.restore();
         } else {
-          _drawPlaceholder(canvas, baseSize, 'social');
+          _drawPlaceholder(canvas, baseSize, placeholderType);
         }
       } else {
-        _drawPlaceholder(canvas, baseSize, 'social');
+        _drawPlaceholder(canvas, baseSize, placeholderType);
       }
     } catch (e) {
       print('❌ Error loading story image: $e');
-      _drawPlaceholder(canvas, baseSize, 'social');
+      _drawPlaceholder(canvas, baseSize, placeholderType);
     }
 
     // 4. Draw author avatar overlapping bottom right
@@ -3104,6 +3139,7 @@ class MapScreenState extends State<MapScreen>
   String _getEmojiForActivity(String? activityType) {
     if (activityType == null) return '🙂';
     final lower = activityType.toLowerCase();
+    if (lower == 'video') return '🎬';
     if (lower.contains('coffee') || lower.contains('cafe')) return '☕';
     if (lower.contains('work') ||
         lower.contains('coding') ||

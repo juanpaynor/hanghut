@@ -88,7 +88,7 @@ class FriendsGoingService {
             .from('table_members')
             .select('user_id')
             .eq('table_id', entityId)
-            .eq('status', 'active');
+            .eq('status', 'joined');
         memberIds =
             (members as List).map((m) => m['user_id'] as String).toList();
       } else if (entityType == 'event') {

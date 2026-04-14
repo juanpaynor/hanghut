@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -73,12 +74,7 @@ class _AddBankAccountScreenState extends State<AddBankAccountScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add bank account: $e'),
-            backgroundColor: Colors.red[700],
-          ),
-        );
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to add bank account');
       }
     } finally {
       if (mounted) {
