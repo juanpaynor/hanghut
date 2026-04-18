@@ -28,7 +28,7 @@ import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
-import 'package:bitemates/features/search/screens/user_search_screen.dart';
+import 'package:bitemates/features/search/screens/discover_search_screen.dart';
 import 'package:bitemates/features/home/screens/discover_list_screen.dart';
 
 class FeedScreen extends StatefulWidget {
@@ -44,10 +44,10 @@ class FeedScreen extends StatefulWidget {
   });
 
   @override
-  State<FeedScreen> createState() => _FeedScreenState();
+  State<FeedScreen> createState() => FeedScreenState();
 }
 
-class _FeedScreenState extends State<FeedScreen>
+class FeedScreenState extends State<FeedScreen>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   late TabController _tabController;
   final ScrollController _scrollController = ScrollController();
@@ -91,6 +91,17 @@ class _FeedScreenState extends State<FeedScreen>
 
   @override
   bool get wantKeepAlive => true; // Keep state alive across navigation
+
+  /// Called by MainNavigationScreen when the Home tab is tapped while already active.
+  void scrollToTop() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -569,7 +580,8 @@ class _FeedScreenState extends State<FeedScreen>
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => const UserSearchScreen(),
+                                builder: (context) =>
+                                    const DiscoverSearchScreen(),
                               ),
                             );
                           },
@@ -618,18 +630,34 @@ class _FeedScreenState extends State<FeedScreen>
                               ),
                               if (count > 0)
                                 Positioned(
-                                  right: 8,
-                                  top: 8,
+                                  right: 4,
+                                  top: 4,
                                   child: Container(
-                                    width: 10,
-                                    height: 10,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 1,
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 16,
+                                      minHeight: 16,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: Colors.red,
-                                      shape: BoxShape.circle,
+                                      borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
                                         color: Colors.white,
                                         width: 1.5,
                                       ),
+                                    ),
+                                    child: Text(
+                                      count > 99 ? '99+' : '$count',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        height: 1.1,
+                                      ),
+                                      textAlign: TextAlign.center,
                                     ),
                                   ),
                                 ),
@@ -744,7 +772,7 @@ class _FeedScreenState extends State<FeedScreen>
                     ),
 
                   // ═══════════════════════════════════════════
-                  // 4. DISCOVER SECTION (Merged Experiences + Events)
+                  // 4. EVENTS & EXPERIENCES SECTION (Merged Experiences + Events)
                   // ═══════════════════════════════════════════
                   if (_tabController.index == 0 &&
                       (_trendingExperiences.isNotEmpty ||
@@ -755,7 +783,7 @@ class _FeedScreenState extends State<FeedScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _buildSectionHeader(
-                            'Discover',
+                            'Events & Experiences',
                             onSeeAll: () {
                               Navigator.push(
                                 context,

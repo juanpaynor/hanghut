@@ -6,8 +6,8 @@ class ChatInputBar extends StatefulWidget {
   final VoidCallback onCancelReply;
   final VoidCallback onShowGifPicker;
   final VoidCallback onSendMessage;
-  final VoidCallback? onSendImage;   // null = image not supported
-  final VoidCallback? onCreatePoll;  // null = polls not supported (DMs)
+  final VoidCallback? onSendImage; // null = image not supported
+  final VoidCallback? onCreatePoll; // null = polls not supported (DMs)
   final List<Map<String, dynamic>> participants;
 
   const ChatInputBar({
@@ -148,7 +148,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           ? NetworkImage(p['photoUrl'])
                           : null,
                       child: p['photoUrl'] == null
-                          ? Icon(Icons.person, size: 16, color: Colors.grey[600])
+                          ? Icon(
+                              Icons.person,
+                              size: 16,
+                              color: Colors.grey[600],
+                            )
                           : null,
                     ),
                     title: Text(
@@ -168,7 +172,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
         // Input area
         Container(
-          padding: const EdgeInsets.only(left: 8, right: 16, top: 12, bottom: 16),
+          padding: const EdgeInsets.only(
+            left: 8,
+            right: 16,
+            top: 12,
+            bottom: 16,
+          ),
           decoration: BoxDecoration(
             color: isDark ? Colors.grey[900] : Colors.white,
             boxShadow: [
@@ -213,25 +222,67 @@ class _ChatInputBarState extends State<ChatInputBar> {
                               Text(
                                 'Replying to ${widget.replyingTo!['senderName'] ?? 'Unknown'}',
                                 style: TextStyle(
-                                  color: Theme.of(context).textTheme.bodyLarge?.color,
+                                  color: Theme.of(
+                                    context,
+                                  ).textTheme.bodyLarge?.color,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
                                 ),
                               ),
-                              Text(
-                                (widget.replyingTo!['content'] ?? 'Media').toString(),
-                                style: TextStyle(
-                                  color: Theme.of(context).textTheme.bodyMedium?.color,
-                                  fontSize: 13,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              Builder(
+                                builder: (context) {
+                                  final raw =
+                                      (widget.replyingTo!['content'] ?? '')
+                                          .toString();
+                                  final isImage =
+                                      raw.contains('.jpg') ||
+                                      raw.contains('.jpeg') ||
+                                      raw.contains('.png') ||
+                                      raw.contains('.webp') ||
+                                      raw.contains('.gif') ||
+                                      raw.contains('supabase') ||
+                                      raw.contains('storage/v1/object');
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (isImage) ...[
+                                        Icon(
+                                          Icons.image_rounded,
+                                          size: 14,
+                                          color: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.color
+                                              ?.withOpacity(0.7),
+                                        ),
+                                        const SizedBox(width: 4),
+                                      ],
+                                      Flexible(
+                                        child: Text(
+                                          isImage ? 'Image' : raw,
+                                          style: TextStyle(
+                                            color: Theme.of(
+                                              context,
+                                            ).textTheme.bodyMedium?.color,
+                                            fontSize: 13,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
                               ),
                             ],
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close, size: 20, color: Colors.black54),
+                          icon: const Icon(
+                            Icons.close,
+                            size: 20,
+                            color: Colors.black54,
+                          ),
                           onPressed: widget.onCancelReply,
                         ),
                       ],
@@ -291,7 +342,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           decoration: InputDecoration(
                             hintText: 'Type a message...',
                             hintStyle: TextStyle(
-                              color: Theme.of(context).textTheme.bodyMedium?.color,
+                              color: Theme.of(
+                                context,
+                              ).textTheme.bodyMedium?.color,
                             ),
                             border: InputBorder.none,
                             contentPadding: const EdgeInsets.symmetric(
@@ -300,7 +353,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
                             ),
                           ),
                           textCapitalization: TextCapitalization.sentences,
-                          onSubmitted: (_) => widget.onSendMessage(),
+                          minLines: 1,
+                          maxLines: 6,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.newline,
                         ),
                       ),
                     ),
@@ -315,7 +371,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           color: Theme.of(context).primaryColor,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.send, color: Colors.white, size: 20),
+                        child: const Icon(
+                          Icons.send,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ],

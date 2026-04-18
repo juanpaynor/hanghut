@@ -44,13 +44,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   String _currentLocationName = "Locating...";
   InferredLocation? _inferredContext;
   String _visibility = 'public'; // 'public' or 'followers'
-  String? _vibeTag;
+  final Set<String> _selectedVibes = {};
+  bool _includeLocation = true; // Privacy: user can opt out of geotagging
 
   // Available vibe tags
   static const List<String> _vibeTags = [
-    '🔥 Lit', '😌 Chill', '🍕 Foodie', '🎶 Vibes',
-    '☕ Coffee', '🌅 Golden Hour', '🎉 Party', '💼 Hustle',
-    '🏖️ Beach', '🌃 Night Out', '🥂 Celebrate', '📸 OOTD',
+    '🔥 Lit',
+    '😌 Chill',
+    '🍕 Foodie',
+    '🎶 Vibes',
+    '☕ Coffee',
+    '🌅 Golden Hour',
+    '🎉 Party',
+    '💼 Hustle',
+    '🏖️ Beach',
+    '🌃 Night Out',
+    '🥂 Celebrate',
+    '📸 OOTD',
   ];
 
   @override
@@ -295,13 +305,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
               Navigator.pop(context); // Pop editor
 
               final tempDir = await getTemporaryDirectory();
-              
+
               // Get original extension so we don't accidentally save a .mov as purely .mp4
               final originalPath = videoFile.path.toLowerCase();
               String ext = '.mp4';
-              if (originalPath.endsWith('.mov')) ext = '.mov';
-              else if (originalPath.endsWith('.m4v')) ext = '.m4v';
-              
+              if (originalPath.endsWith('.mov'))
+                ext = '.mov';
+              else if (originalPath.endsWith('.m4v'))
+                ext = '.m4v';
+
               final editedVideo = File(
                 '${tempDir.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}$ext',
               );
@@ -323,15 +335,26 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
           builder: (_) => StoryPreviewScreen(
             imageFile: imageFile,
             videoFile: videoFile,
-            locationName: _currentLocationName,
-            externalPlaceId: _inferredContext?.externalPlaceId,
-            tableId: _inferredContext?.tableId,
-            eventId: _inferredContext?.eventId,
+            locationName: _includeLocation
+                ? _currentLocationName
+                : 'Location hidden',
+            externalPlaceId: _includeLocation
+                ? _inferredContext?.externalPlaceId
+                : null,
+            tableId: _includeLocation ? _inferredContext?.tableId : null,
+            eventId: _includeLocation ? _inferredContext?.eventId : null,
             visibility: _visibility,
-            vibeTag: _vibeTag,
-            latitude: _inferredContext?.latitude ?? 14.5547,
-            longitude: _inferredContext?.longitude ?? 121.0244,
-            city: _inferredContext?.city ?? 'Metro Manila',
+            vibeTag: _selectedVibes.isEmpty ? null : _selectedVibes.join(' · '),
+            includeLocation: _includeLocation,
+            latitude: _includeLocation
+                ? (_inferredContext?.latitude ?? 14.5547)
+                : null,
+            longitude: _includeLocation
+                ? (_inferredContext?.longitude ?? 121.0244)
+                : null,
+            city: _includeLocation
+                ? (_inferredContext?.city ?? 'Metro Manila')
+                : null,
           ),
         ),
       );
@@ -389,7 +412,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                 children: [
                   Center(
                     child: Container(
-                      width: 36, height: 4,
+                      width: 36,
+                      height: 4,
                       decoration: BoxDecoration(
                         color: Colors.grey[300],
                         borderRadius: BorderRadius.circular(2),
@@ -417,12 +441,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                     spacing: 8,
                     runSpacing: 8,
                     children: _vibeTags.map((tag) {
-                      final isSelected = _vibeTag == tag;
+                      final isSelected = _selectedVibes.contains(tag);
                       return GestureDetector(
                         onTap: () {
                           HapticFeedback.selectionClick();
                           setState(() {
-                            _vibeTag = isSelected ? null : tag;
+                            if (isSelected) {
+                              _selectedVibes.remove(tag);
+                            } else {
+                              _selectedVibes.add(tag);
+                            }
                           });
                           setSheetState(() {});
                         },
@@ -447,9 +475,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                             style: GoogleFonts.inter(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.black87,
+                              color: isSelected ? Colors.white : Colors.black87,
                             ),
                           ),
                         ),
@@ -567,12 +593,54 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                   ),
                 ),
                 const Spacer(),
+                // Location privacy toggle
+                GestureDetector(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    setState(() => _includeLocation = !_includeLocation);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _includeLocation
+                          ? Colors.black45
+                          : Colors.red.withOpacity(0.75),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _includeLocation
+                              ? Icons.location_on
+                              : Icons.location_off,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _includeLocation ? 'Location On' : 'Location Off',
+                          style: GoogleFonts.inter(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 // Visibility toggle
                 GestureDetector(
                   onTap: _toggleVisibility,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
+                      horizontal: 12,
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
@@ -620,7 +688,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
             child: StoryOverlayWidget(
               locationName: _currentLocationName,
               timeString: currentTime,
-              vibeTag: _vibeTag,
+              vibeTag: _selectedVibes.isEmpty
+                  ? null
+                  : _selectedVibes.join(' · '),
               onTap: _showEditOverlayBottomSheet,
             ),
           ),
@@ -814,7 +884,9 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
     try {
       if (Platform.isIOS) {
         // Skip ProVideoEditor on iOS entirely because without FFmpeg it outputs corrupted bad data (-9405)
-        debugPrint('⚠️ Skipping video rendering on iOS, using raw camera video.');
+        debugPrint(
+          '⚠️ Skipping video rendering on iOS, using raw camera video.',
+        );
         throw Exception('Skip rendering on iOS');
       }
 
@@ -834,18 +906,23 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
 
       await ProVideoEditor.instance.renderVideoToFile(outputPath, renderData);
       final bytes = await File(outputPath).readAsBytes();
-      
+
       // Safety check: if standard Media3/FFmpeg fallback produces empty/invalid file, throw
-      if (bytes.length < 100) throw Exception('Rendered video is too small, corrupted.');
-      
-      debugPrint('✅ Video rendered successfully: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
+      if (bytes.length < 100)
+        throw Exception('Rendered video is too small, corrupted.');
+
+      debugPrint(
+        '✅ Video rendered successfully: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB',
+      );
       widget.onComplete(bytes);
     } catch (e) {
       debugPrint('⚠️ Video rendering skipped or failed: $e');
       debugPrint('🔄 Uploading raw video without edits...');
       try {
         final bytes = await widget.videoFile.readAsBytes();
-        debugPrint('📹 Raw video size: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
+        debugPrint(
+          '📹 Raw video size: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB',
+        );
         widget.onComplete(bytes);
       } catch (fallbackError) {
         debugPrint('❌ Fallback also failed: $fallbackError');

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/features/trips/widgets/add_trip_modal.dart';
+import 'package:bitemates/features/trips/widgets/create_trip/create_trip_flow.dart';
 import 'package:bitemates/features/trips/screens/trip_details_screen.dart';
 import 'package:bitemates/core/services/trip_service.dart';
 import 'package:intl/intl.dart';
@@ -39,20 +39,19 @@ class _MyTripsListState extends State<MyTripsList> {
         });
       }
     } catch (e) {
-      print('❌ MY TRIPS: Error loading trips - $e');
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   void _showAddTripModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => AddTripModal(
-        onTripCreated: () {
-          _loadMyTrips();
-        },
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreateTripFlow(
+          onTripCreated: () {
+            _loadMyTrips();
+          },
+        ),
       ),
     );
   }
@@ -219,20 +218,25 @@ class _MyTripsListState extends State<MyTripsList> {
 
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filter == value;
-    final primaryColor = Theme.of(context).primaryColor;
+    final theme = Theme.of(context);
+    final primaryColor = theme.primaryColor;
 
     return GestureDetector(
       onTap: () => setState(() => _filter = value),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? primaryColor : Colors.black.withOpacity(0.05),
+          color: isSelected
+              ? primaryColor
+              : theme.colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black54,
+            color: isSelected
+                ? Colors.white
+                : theme.colorScheme.onSurface.withOpacity(0.6),
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
           ),
         ),
@@ -248,21 +252,15 @@ class _MyTripsListState extends State<MyTripsList> {
     final isActive = startDate.isBefore(now) && endDate.isAfter(now);
     final daysUntil = startDate.difference(now).inDays;
     final duration = endDate.difference(startDate).inDays + 1;
-    final primaryColor = Theme.of(context).primaryColor;
+    final theme = Theme.of(context);
+    final primaryColor = theme.primaryColor;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color ?? Colors.white,
+        color: theme.colorScheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        border: Border.all(color: theme.dividerColor.withOpacity(0.3)),
       ),
       child: Material(
         color: Colors.transparent,
@@ -302,17 +300,19 @@ class _MyTripsListState extends State<MyTripsList> {
                         children: [
                           Text(
                             trip['destination_city'],
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF333333),
+                              color: theme.colorScheme.onSurface,
                             ),
                           ),
                           Text(
                             trip['destination_country'],
                             style: TextStyle(
                               fontSize: 14,
-                              color: Colors.black.withOpacity(0.6),
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.6,
+                              ),
                             ),
                           ),
                         ],
@@ -378,14 +378,14 @@ class _MyTripsListState extends State<MyTripsList> {
                     Icon(
                       Icons.calendar_today,
                       size: 14,
-                      color: Colors.black.withOpacity(0.4),
+                      color: theme.colorScheme.onSurface.withOpacity(0.4),
                     ),
                     const SizedBox(width: 6),
                     Text(
                       '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, yyyy').format(endDate)} ($duration days)',
                       style: TextStyle(
                         fontSize: 13,
-                        color: Colors.black.withOpacity(0.6),
+                        color: theme.colorScheme.onSurface.withOpacity(0.6),
                       ),
                     ),
                   ],
@@ -405,14 +405,16 @@ class _MyTripsListState extends State<MyTripsList> {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.05),
+                              color: theme.colorScheme.surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               interest.toString().replaceAll('_', ' '),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: Colors.black54,
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.6,
+                                ),
                               ),
                             ),
                           ),

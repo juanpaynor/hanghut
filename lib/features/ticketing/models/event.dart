@@ -9,6 +9,7 @@ class Event {
   final DateTime startDatetime;
   final DateTime? endDatetime;
   final String? coverImageUrl;
+  final List<String> imageUrls;
   final double ticketPrice;
   final int capacity;
   final int ticketsSold;
@@ -30,6 +31,7 @@ class Event {
     required this.startDatetime,
     this.endDatetime,
     this.coverImageUrl,
+    this.imageUrls = const [],
     required this.ticketPrice,
     required this.capacity,
     required this.ticketsSold,
@@ -66,6 +68,11 @@ class Event {
           ? DateTime.parse(json['end_datetime'] as String)
           : null,
       coverImageUrl: json['cover_image_url'] as String?,
+      imageUrls:
+          (json['images'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
       ticketPrice: (json['ticket_price'] as num).toDouble(),
       capacity: json['capacity'] as int,
       ticketsSold: json['tickets_sold'] as int? ?? 0,

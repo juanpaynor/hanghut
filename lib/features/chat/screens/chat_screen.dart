@@ -11,6 +11,7 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/features/chat/widgets/invite_member_sheet.dart';
 import 'package:bitemates/core/services/user_cache.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:bitemates/features/chat/widgets/create_poll_sheet.dart';
@@ -64,6 +65,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String? _currentUserPhoto;
   Map<String, dynamic>? _replyingTo;
   bool _isHost = false;
+  bool _isMuted = false; // Set by host; muted users cannot send messages
   Map<String, List<Map<String, dynamic>>> _messageReactions = {};
   bool _useTelegramMode = false; // Feature flag for chat storage type
   bool _ablyConnected = false; // Track Ably connection state
@@ -92,6 +94,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // Pinned message
   Map<String, dynamic>? _pinnedMessage;
 
+  // Activity lifecycle
+  bool _isActivityPast = false;
+
   // RSVP state (table chats only)
   String? _currentRsvpStatus;
   int _rsvpGoingCount = 0;
@@ -112,6 +117,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _initializeChat() async {
     await _getCurrentUser();
     await _checkIfHost();
+    await _checkIfMuted();
     await _markChatAsRead(); // Added: Update read receipt
     await _loadParticipants();
     await _loadMessageHistory();
@@ -121,6 +127,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _loadPinnedMessage(); // Load pinned message for banner
     if (widget.chatType == 'table') {
       _loadRsvpData(); // Load RSVP counts for table chats
+      _checkIfActivityPast();
     }
   }
 
@@ -131,7 +138,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     try {
       final now = DateTime.now().toUtc().toIso8601String();
-      print('📖 _markChatAsRead: chatType=${widget.chatType}, tableId=${widget.tableId}, userId=$_currentUserId, now=$now');
+      print(
+        '📖 _markChatAsRead: chatType=${widget.chatType}, tableId=${widget.tableId}, userId=$_currentUserId, now=$now',
+      );
       if (widget.chatType == 'trip') {
         await SupabaseConfig.client
             .from('trip_chat_participants')
@@ -157,7 +166,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             .eq('table_id', widget.tableId)
             .eq('user_id', _currentUserId!);
       }
-      print('✅ _markChatAsRead: SUCCESS for ${widget.chatType} ${widget.tableId}');
+      print(
+        '✅ _markChatAsRead: SUCCESS for ${widget.chatType} ${widget.tableId}',
+      );
     } catch (e) {
       print('❌ _markChatAsRead: FAILED - $e');
     }
@@ -353,6 +364,394 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         .subscribe();
   }
 
+  Future<void> _checkIfMuted() async {
+    if (widget.chatType != 'table') return;
+    try {
+      final muted = await _memberService.isCurrentUserMuted(widget.tableId);
+      if (mounted) setState(() => _isMuted = muted);
+    } catch (_) {}
+  }
+
+  void _handleAvatarTap(String userId) {
+    if (_isHost && widget.chatType == 'table' && userId != _currentUserId) {
+      // Host tapping someone else's avatar → show mute/kick actions
+      _showHostActionsForUser(userId);
+    } else {
+      // Go to profile
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => UserProfileScreen(userId: userId)),
+      );
+    }
+  }
+
+  void _showHostActionsForUser(String userId) async {
+    // Find user info from participants
+    final participant = _participants.firstWhere(
+      (p) => p['userId'] == userId,
+      orElse: () => {'userId': userId, 'displayName': 'Unknown'},
+    );
+    final name = participant['displayName'] as String? ?? 'Unknown';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // Check if user is muted
+    bool isMuted = false;
+    try {
+      final member = await SupabaseConfig.client
+          .from('table_members')
+          .select('is_muted')
+          .eq('table_id', widget.tableId)
+          .eq('user_id', userId)
+          .maybeSingle();
+      isMuted = member?['is_muted'] == true;
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final photoUrl = participant['photoUrl'] as String?;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          12,
+          20,
+          MediaQuery.of(context).padding.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.grey[700] : Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Avatar + name header
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                  backgroundImage: (photoUrl != null && photoUrl.isNotEmpty)
+                      ? NetworkImage(photoUrl)
+                      : null,
+                  child: (photoUrl == null || photoUrl.isEmpty)
+                      ? Icon(
+                          Icons.person_rounded,
+                          size: 28,
+                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: isDark
+                              ? Colors.white
+                              : const Color(0xFF1A1A2E),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      if (isMuted)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.volume_off_rounded,
+                                size: 11,
+                                color: Colors.orange[700],
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Muted in chat',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.orange[700],
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        Text(
+                          'Member',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            // Action tiles
+            _buildHostActionTile(
+              context: context,
+              isDark: isDark,
+              icon: Icons.person_outline_rounded,
+              label: 'View Profile',
+              color: isDark ? Colors.white : const Color(0xFF1A1A2E),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => UserProfileScreen(userId: userId),
+                  ),
+                );
+              },
+            ),
+            _buildHostActionTile(
+              context: context,
+              isDark: isDark,
+              icon: isMuted
+                  ? Icons.volume_up_rounded
+                  : Icons.volume_off_rounded,
+              label: isMuted ? 'Unmute in chat' : 'Mute in chat',
+              color: Colors.orange,
+              onTap: () async {
+                Navigator.pop(context);
+                final result = isMuted
+                    ? await _memberService.unmuteParticipant(
+                        widget.tableId,
+                        userId,
+                      )
+                    : await _memberService.muteParticipant(
+                        widget.tableId,
+                        userId,
+                      );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        result['message'] ??
+                            (isMuted ? '$name unmuted' : '$name muted'),
+                      ),
+                      backgroundColor: result['success'] == true
+                          ? Colors.orange
+                          : Colors.red,
+                    ),
+                  );
+                }
+              },
+            ),
+            _buildHostActionTile(
+              context: context,
+              isDark: isDark,
+              icon: Icons.person_remove_rounded,
+              label: 'Remove from hangout',
+              color: Colors.red,
+              onTap: () async {
+                Navigator.pop(context);
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) {
+                    return Dialog(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      backgroundColor: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.person_remove_rounded,
+                                color: Colors.red,
+                                size: 28,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Remove member?',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF1A1A2E),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '$name will be removed from this hangout.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 13,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      side: BorderSide(
+                                        color: Colors.grey[300]!,
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      'Cancel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF1A1A2E),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.red,
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 13,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                    child: const Text(
+                                      'Remove',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+                if (confirm != true) return;
+                final result = await _memberService.removeMember(
+                  widget.tableId,
+                  userId,
+                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        result['success'] == true
+                            ? '$name removed'
+                            : (result['message'] ?? 'Failed'),
+                      ),
+                      backgroundColor: result['success'] == true
+                          ? Colors.orange
+                          : Colors.red,
+                    ),
+                  );
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHostActionTile({
+    required BuildContext context,
+    required bool isDark,
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: color.withOpacity(0.35),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // Quick helper for synchronous-like check if needed, or reuse _checkIfHost
   Future<bool> _checkIfHostBoolean() async {
     try {
@@ -370,14 +769,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // ═══ PINNED MESSAGES ═══
   Future<void> _loadPinnedMessage() async {
     // Only support pinning in group and table chats
-    if (widget.chatType == 'dm' || widget.chatType == 'direct' || widget.chatType == 'trip') return;
+    if (widget.chatType == 'dm' ||
+        widget.chatType == 'direct' ||
+        widget.chatType == 'trip')
+      return;
 
     try {
-      String filterColumn = widget.chatType == 'group' ? 'group_id' : 'table_id';
+      String filterColumn = widget.chatType == 'group'
+          ? 'group_id'
+          : 'table_id';
 
       final resp = await SupabaseConfig.client
           .from('messages')
-          .select('id, content, sender_id, sender_name, timestamp, content_type, is_pinned, pinned_at')
+          .select(
+            'id, content, sender_id, sender_name, timestamp, content_type, is_pinned, pinned_at',
+          )
           .eq(filterColumn, widget.tableId)
           .eq('is_pinned', true)
           .order('pinned_at', ascending: false)
@@ -391,6 +797,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       print('⚠️ Failed to load pinned message: $e');
+    }
+  }
+
+  /// Check if the activity's scheduled time has passed
+  Future<void> _checkIfActivityPast() async {
+    try {
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select('scheduled_at')
+          .eq('id', widget.tableId)
+          .single();
+
+      final scheduledAt = DateTime.tryParse(table['scheduled_at'] ?? '');
+      if (scheduledAt != null && mounted) {
+        setState(() {
+          _isActivityPast = scheduledAt.isBefore(DateTime.now());
+        });
+      }
+    } catch (e) {
+      print('⚠️ CHAT: Error checking activity time - $e');
     }
   }
 
@@ -454,11 +880,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final rsvpLabel = newStatus == 'going'
             ? 'is going ✅'
             : newStatus == 'maybe'
-                ? 'might go 🤔'
-                : "can't make it ❌";
-        await _sendSystemMessage(
-          '${_currentUserName ?? 'Someone'} $rsvpLabel',
-        );
+            ? 'might go 🤔'
+            : "can't make it ❌";
+        await _sendSystemMessage('${_currentUserName ?? 'Someone'} $rsvpLabel');
       }
     } catch (e) {
       // Revert on error
@@ -508,11 +932,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // Unpin
         await SupabaseConfig.client
             .from('messages')
-            .update({
-              'is_pinned': false,
-              'pinned_by': null,
-              'pinned_at': null,
-            })
+            .update({'is_pinned': false, 'pinned_by': null, 'pinned_at': null})
             .eq('id', messageId);
 
         if (mounted) {
@@ -522,13 +942,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             final idx = _messages.indexWhere((m) => m['id'] == messageId);
             if (idx != -1) _messages[idx]['is_pinned'] = false;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Message unpinned')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Message unpinned')));
         }
       } else {
         // Unpin any existing pinned message first, then pin this one
-        String filterColumn = widget.chatType == 'group' ? 'group_id' : 'table_id';
+        String filterColumn = widget.chatType == 'group'
+            ? 'group_id'
+            : 'table_id';
         await SupabaseConfig.client
             .from('messages')
             .update({'is_pinned': false, 'pinned_by': null, 'pinned_at': null})
@@ -550,23 +972,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'id': messageId,
               'content': message['content'],
               'sender_name': message['senderName'] ?? message['sender_name'],
-              'content_type': message['contentType'] ?? message['content_type'] ?? 'text',
+              'content_type':
+                  message['contentType'] ?? message['content_type'] ?? 'text',
             };
             // Update in-memory message
             for (final m in _messages) {
               m['is_pinned'] = (m['id'] == messageId);
             }
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Message pinned 📌')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Message pinned 📌')));
         }
       }
     } catch (e) {
       print('❌ Error toggling pin: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to ${isCurrentlyPinned ? 'unpin' : 'pin'} message')),
+          SnackBar(
+            content: Text(
+              'Failed to ${isCurrentlyPinned ? 'unpin' : 'pin'} message',
+            ),
+          ),
         );
       }
     }
@@ -1150,6 +1577,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _sendMessage({String? gifUrl}) async {
+    if (_isMuted && !_isHost) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'You have been muted by the host and cannot send messages.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     if (_useTelegramMode) {
       await _sendMessage_Telegram(gifUrl: gifUrl);
     } else {
@@ -1339,8 +1777,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('❌ CHAT: Error sending message - $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to send message')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Failed to send message')));
       }
     }
   }
@@ -1359,13 +1798,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       // Find the participant by display name
       final participant = _participants.firstWhere(
-        (p) => (p['displayName'] as String?)?.toLowerCase() == name.toLowerCase(),
+        (p) =>
+            (p['displayName'] as String?)?.toLowerCase() == name.toLowerCase(),
         orElse: () => <String, dynamic>{},
       );
 
       if (participant.isEmpty) continue;
       final userId = participant['userId'] as String?;
-      if (userId == null || userId == _currentUserId) continue; // Don't notify self
+      if (userId == null || userId == _currentUserId)
+        continue; // Don't notify self
 
       try {
         // Insert in-app notification
@@ -1374,7 +1815,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'actor_id': _currentUserId,
           'type': 'chat',
           'title': '${_currentUserName ?? 'Someone'} mentioned you',
-          'body': content.length > 100 ? '${content.substring(0, 100)}...' : content,
+          'body': content.length > 100
+              ? '${content.substring(0, 100)}...'
+              : content,
           'entity_id': widget.tableId,
           'metadata': {
             'table_id': widget.tableId,
@@ -1388,7 +1831,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           body: {
             'user_id': userId,
             'title': '${_currentUserName ?? 'Someone'} mentioned you',
-            'body': content.length > 100 ? '${content.substring(0, 100)}...' : content,
+            'body': content.length > 100
+                ? '${content.substring(0, 100)}...'
+                : content,
             'data': {
               'type': 'chat',
               'chat_type': widget.chatType,
@@ -1732,8 +2177,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       // Upload to Supabase storage
       await SupabaseConfig.client.storage
           .from('chat-images')
-          .uploadBinary(fileName, bytes,
-              fileOptions: const FileOptions(contentType: 'image/jpeg'));
+          .uploadBinary(
+            fileName,
+            bytes,
+            fileOptions: const FileOptions(contentType: 'image/jpeg'),
+          );
 
       final imageUrl = SupabaseConfig.client.storage
           .from('chat-images')
@@ -1745,7 +2193,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       debugPrint('❌ CHAT: Image upload failed - $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to send image. Please try again.')),
+          const SnackBar(
+            content: Text('Failed to send image. Please try again.'),
+          ),
         );
       }
     }
@@ -1783,7 +2233,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       debugPrint('❌ CHAT: Poll creation failed - $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to create poll. Please try again.')),
+          const SnackBar(
+            content: Text('Failed to create poll. Please try again.'),
+          ),
         );
       }
     }
@@ -1891,7 +2343,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         onPressed: () => Navigator.pop(context, false),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(
-                            color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+                            color: isDark
+                                ? Colors.grey[700]!
+                                : Colors.grey[300]!,
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
@@ -1945,6 +2399,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // Leave Trip Chat
         final user = SupabaseConfig.client.auth.currentUser;
         if (user != null) {
+          // Notify others before leaving
+          await _sendSystemMessage(
+            '${_currentUserName ?? 'Someone'} has left the chat',
+          );
           // Note: tableId is passed as the chatId for trips in ActiveChatsList
           await SupabaseConfig.client
               .from('trip_chat_participants')
@@ -1953,13 +2411,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               .eq('user_id', user.id);
         }
       } else if (widget.chatType == 'dm') {
-        // Delete DM conversation via RPC (bypasses RLS)
+        // Delete DM conversation via RPC (bypasses RLS) — no system message for DMs
         await SupabaseConfig.client.rpc(
           'delete_dm_chat',
           params: {'p_chat_id': widget.tableId},
         );
       } else {
-        // Legacy/Table Leave
+        // Table / Group — notify others before leaving
+        await _sendSystemMessage(
+          '${_currentUserName ?? 'Someone'} has left the chat',
+        );
         await _memberService.leaveTable(widget.tableId);
       }
 
@@ -1981,11 +2442,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     // ── Embedded mode: just the chat body, no chrome ──
     if (widget.embedded) {
-      return Column(
-        children: [
-          ..._buildChatBody(context),
-        ],
-      );
+      return Column(children: [..._buildChatBody(context)]);
     }
 
     // ── Bottom-sheet mode (default) ──
@@ -1997,82 +2454,110 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       child: Material(
         color: Colors.transparent,
         child: Container(
-          height: (screenHeight * 0.75).clamp(0.0, screenHeight - bottomInset),
+          height: screenHeight * 0.92,
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: Column(
-          children: [
-            ChatHeader(
-              title: widget.tableTitle,
-              onLeave: _leaveTable,
-              onClose: () => Navigator.pop(context),
-              onSearch: () {
-                setState(() {
-                  _isSearching = !_isSearching;
-                  if (!_isSearching) {
-                    _searchQuery = '';
-                    _matchedIndices = [];
-                    _currentMatchIndex = -1;
-                    _searchController.clear();
-                  }
-                });
-              },
-              extraActions: [
-                // Verify button — show for all table members
-                if (widget.chatType == 'table')
-                  IconButton(
-                    icon: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
+            children: [
+              ChatHeader(
+                title: widget.tableTitle,
+                onLeave: _leaveTable,
+                onClose: () => Navigator.pop(context),
+                onSearch: () {
+                  setState(() {
+                    _isSearching = !_isSearching;
+                    if (!_isSearching) {
+                      _searchQuery = '';
+                      _matchedIndices = [];
+                      _currentMatchIndex = -1;
+                      _searchController.clear();
+                    }
+                  });
+                },
+                extraActions: [
+                  // Invite button — host only
+                  if (widget.chatType == 'table' && _isHost)
+                    IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.person_add_rounded,
+                          size: 18,
+                          color: Colors.blue,
+                        ),
                       ),
-                      child: Icon(
-                        _isHost ? Icons.qr_code_scanner : Icons.qr_code,
-                        size: 18,
-                        color: const Color(0xFF10B981),
+                      tooltip: 'Invite someone',
+                      onPressed: () => showModalBottomSheet(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        isScrollControlled: true,
+                        builder: (_) => InviteMemberSheet(
+                          tableId: widget.tableId,
+                          tableTitle: widget.tableTitle,
+                        ),
                       ),
                     ),
-                    tooltip: _isHost ? 'Verify Members' : 'My Check-in QR',
-                    onPressed: _openVerificationSheet,
-                  ),
-              ],
-              onInfoTap: () {
-                if (widget.chatType == 'dm') {
-                  final otherUser = _participants.firstWhere(
-                    (p) => p['userId'] != _currentUserId,
-                    orElse: () => <String, dynamic>{},
-                  );
-                  if (otherUser.isNotEmpty && otherUser['userId'] != null) {
+                  // Verify button — show for all table members
+                  if (widget.chatType == 'table')
+                    IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFF10B981,
+                          ).withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _isHost ? Icons.qr_code_scanner : Icons.qr_code,
+                          size: 18,
+                          color: const Color(0xFF10B981),
+                        ),
+                      ),
+                      tooltip: _isHost ? 'Verify Members' : 'My Check-in QR',
+                      onPressed: _openVerificationSheet,
+                    ),
+                ],
+                onInfoTap: () {
+                  if (widget.chatType == 'dm') {
+                    final otherUser = _participants.firstWhere(
+                      (p) => p['userId'] != _currentUserId,
+                      orElse: () => <String, dynamic>{},
+                    );
+                    if (otherUser.isNotEmpty && otherUser['userId'] != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              UserProfileScreen(userId: otherUser['userId']),
+                        ),
+                      );
+                    }
+                  } else {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) =>
-                            UserProfileScreen(userId: otherUser['userId']),
+                        builder: (context) => ChatInfoScreen(
+                          title: widget.tableTitle,
+                          chatType: widget.chatType,
+                          participants: _participants,
+                        ),
                       ),
                     );
                   }
-                } else {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ChatInfoScreen(
-                        title: widget.tableTitle,
-                        chatType: widget.chatType,
-                        participants: _participants,
-                      ),
-                    ),
-                  );
-                }
-              },
-            ),
-            ..._buildChatBody(context),
-          ],
+                },
+              ),
+              ..._buildChatBody(context),
+            ],
+          ),
         ),
       ),
-    ),
     );
   }
 
@@ -2113,7 +2598,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         GestureDetector(
           onTap: () {
             // Scroll to pinned message
-            final idx = _messages.indexWhere((m) => m['id'] == _pinnedMessage!['id']);
+            final idx = _messages.indexWhere(
+              (m) => m['id'] == _pinnedMessage!['id'],
+            );
             if (idx != -1 && _scrollController.hasClients) {
               // Approximate scroll — messages are in reverse
               _scrollController.animateTo(
@@ -2159,8 +2646,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         _pinnedMessage!['content_type'] == 'image'
                             ? '📷 Photo'
                             : _pinnedMessage!['content_type'] == 'gif'
-                                ? '🎬 GIF'
-                                : (_pinnedMessage!['content'] ?? ''),
+                            ? '🎬 GIF'
+                            : (_pinnedMessage!['content'] ?? ''),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -2178,19 +2665,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     'id': _pinnedMessage!['id'],
                     'is_pinned': true,
                   }),
-                  child: Icon(
-                    Icons.close,
-                    size: 16,
-                    color: Colors.grey[500],
-                  ),
+                  child: Icon(Icons.close, size: 16, color: Colors.grey[500]),
                 ),
               ],
             ),
           ),
         ),
 
-      // RSVP Banner (table chats only)
-      if (widget.chatType == 'table')
+      // RSVP Banner (table chats only, hide when activity is past)
+      if (widget.chatType == 'table' && !_isActivityPast)
         RsvpBanner(
           tableId: widget.tableId,
           currentRsvpStatus: _currentRsvpStatus,
@@ -2200,8 +2683,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           onRsvpChanged: _updateRsvp,
         ),
 
-      // Check-in Banner (table chats only)
-      if (widget.chatType == 'table')
+      // Check-in Banner (table chats only, hide when activity is past)
+      if (widget.chatType == 'table' && !_isActivityPast)
         CheckinBanner(
           tableId: widget.tableId,
           totalMembers: _participants.length,
@@ -2242,9 +2725,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         color: Colors.grey[500],
                       ),
                       border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                     onChanged: (query) {
                       setState(() {
@@ -2253,7 +2734,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         _currentMatchIndex = -1;
                         if (_searchQuery.isNotEmpty) {
                           for (int i = 0; i < _messages.length; i++) {
-                            final content = (_messages[i]['content'] as String?)?.toLowerCase() ?? '';
+                            final content =
+                                (_messages[i]['content'] as String?)
+                                    ?.toLowerCase() ??
+                                '';
                             if (content.contains(_searchQuery)) {
                               _matchedIndices.add(i);
                             }
@@ -2283,26 +2767,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   onPressed: _matchedIndices.length > 1
                       ? () {
                           setState(() {
-                            _currentMatchIndex = (_currentMatchIndex - 1) % _matchedIndices.length;
+                            _currentMatchIndex =
+                                (_currentMatchIndex - 1) %
+                                _matchedIndices.length;
                           });
                           _scrollToSearchResult(_currentMatchIndex);
                         }
                       : null,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.keyboard_arrow_down, size: 20),
                   onPressed: _matchedIndices.length > 1
                       ? () {
                           setState(() {
-                            _currentMatchIndex = (_currentMatchIndex + 1) % _matchedIndices.length;
+                            _currentMatchIndex =
+                                (_currentMatchIndex + 1) %
+                                _matchedIndices.length;
                           });
                           _scrollToSearchResult(_currentMatchIndex);
                         }
                       : null,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
                 ),
               ],
             ],
@@ -2333,6 +2827,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               ),
             );
           },
+          onAvatarTap: (userId) => _handleAvatarTap(userId),
           participants: _participants,
           searchQuery: _searchQuery,
           matchedIndices: _matchedIndices,
@@ -2356,6 +2851,32 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       : Colors.grey[600],
                   fontSize: 12,
                   fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+      // Muted banner
+      if (_isMuted && !_isHost)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: Colors.orange.shade50,
+          child: Row(
+            children: [
+              Icon(
+                Icons.volume_off_rounded,
+                size: 16,
+                color: Colors.orange[700],
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'You have been muted by the host.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.orange[800],
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -2618,11 +3139,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               const Divider(),
               ListTile(
                 leading: Icon(
-                  message['is_pinned'] == true ? Icons.push_pin : Icons.push_pin_outlined,
+                  message['is_pinned'] == true
+                      ? Icons.push_pin
+                      : Icons.push_pin_outlined,
                   color: Colors.indigo,
                 ),
                 title: Text(
-                  message['is_pinned'] == true ? 'Unpin Message' : 'Pin Message',
+                  message['is_pinned'] == true
+                      ? 'Unpin Message'
+                      : 'Pin Message',
                   style: const TextStyle(color: Colors.indigo),
                 ),
                 onTap: () {

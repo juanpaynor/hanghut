@@ -109,50 +109,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // --- Removed placeholder settings widgets (stepper, circle button) ---
   // These were for non-functional features: notification distance, age range
 
-  Future<void> _testPushNotification() async {
-    try {
-      final user = SupabaseConfig.client.auth.currentUser;
-      if (user == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('No logged in user')));
-        }
-        return;
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Sending test push...')));
-      }
-
-      final response = await SupabaseConfig.client.functions.invoke(
-        'send-push',
-        body: {
-          'user_id': user.id,
-          'title': 'Debug Deep Link 🚀',
-          'body': 'Tap to test Table Join deep link!',
-          'image': 'https://placekitten.com/200/200',
-          'data': {
-            'type': 'table_join',
-            'table_id': '00000000-0000-0000-0000-000000000000',
-          },
-        },
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Response: ${response.data}')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to send test notification.');
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
@@ -250,8 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (val) async {
                   setState(() => _hideActivityFromFriends = val);
                   try {
-                    final userId =
-                        SupabaseConfig.client.auth.currentUser?.id;
+                    final userId = SupabaseConfig.client.auth.currentUser?.id;
                     if (userId != null) {
                       await SupabaseConfig.client
                           .from('users')
@@ -337,7 +292,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 title: const Text('Contact Support'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _launchUrl('mailto:support@bitemates.app?subject=Support%20Request'),
+                onTap: () => _launchUrl(
+                  'mailto:support@bitemates.app?subject=Support%20Request',
+                ),
               ),
               ListTile(
                 leading: Icon(
@@ -351,20 +308,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ReportModal.show(
                     context,
                     targetType: 'app',
-                    targetId: '00000000-0000-0000-0000-000000000000', // nil UUID for app-level reports
+                    targetId:
+                        '00000000-0000-0000-0000-000000000000', // nil UUID for app-level reports
                     targetName: 'App Issue',
                   );
                 },
-              ),
-              ListTile(
-                leading: const Icon(
-                  Icons.notifications_active,
-                  color: Colors.red,
-                ),
-                title: const Text('Send Test Push Notification'),
-                subtitle: const Text('Debug: Sends a push to yourself'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: _testPushNotification,
               ),
             ],
           ),
@@ -463,7 +411,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                 );
 
-                                await Future.delayed(const Duration(seconds: 2));
+                                await Future.delayed(
+                                  const Duration(seconds: 2),
+                                );
 
                                 if (context.mounted) {
                                   Navigator.of(
@@ -474,7 +424,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     context.read<AuthProvider>().signOut();
                                     Navigator.of(context).pushAndRemoveUntil(
                                       MaterialPageRoute(
-                                        builder: (context) => const LoginScreen(),
+                                        builder: (context) =>
+                                            const LoginScreen(),
                                       ),
                                       (route) => false,
                                     );
@@ -483,7 +434,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               }
                             } catch (e) {
                               if (context.mounted) {
-                                ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to delete account. Please contact support.');
+                                ErrorHandler.showError(
+                                  context,
+                                  error: e,
+                                  fallbackMessage:
+                                      'Unable to delete account. Please contact support.',
+                                );
                               }
                             }
                           },

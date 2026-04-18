@@ -17,9 +17,10 @@ class StoryPreviewScreen extends StatefulWidget {
   final String? eventId;
   final String visibility;
   final String? vibeTag;
-  final double latitude;
-  final double longitude;
-  final String city;
+  final bool includeLocation;
+  final double? latitude;
+  final double? longitude;
+  final String? city;
 
   const StoryPreviewScreen({
     Key? key,
@@ -31,9 +32,10 @@ class StoryPreviewScreen extends StatefulWidget {
     this.eventId,
     required this.visibility,
     this.vibeTag,
-    required this.latitude,
-    required this.longitude,
-    required this.city,
+    this.includeLocation = true,
+    this.latitude,
+    this.longitude,
+    this.city,
   }) : super(key: key);
 
   @override
@@ -45,7 +47,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
   String _uploadStatus = '';
   final TextEditingController _captionController = TextEditingController();
   late String _currentLocationName;
-  late String? _currentVibeTag;
+  late Set<String> _selectedVibes;
 
   // Video Player specific state
   VideoPlayerController? _videoPlayerController;
@@ -57,7 +59,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
   void initState() {
     super.initState();
     _currentLocationName = widget.locationName;
-    _currentVibeTag = widget.vibeTag;
+    _selectedVibes = widget.vibeTag != null && widget.vibeTag!.isNotEmpty
+        ? widget.vibeTag!.split(' · ').toSet()
+        : {};
     _capturedTime = DateFormat('h:mm a').format(DateTime.now());
 
     if (widget.videoFile != null) {
@@ -100,7 +104,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       final fileName =
           '${user.id}_story_${DateTime.now().millisecondsSinceEpoch}$ext';
 
-      debugPrint('📹 Uploading story: isVideo=$isVideo, ext=$ext, mime=$mime, size=${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB');
+      debugPrint(
+        '📹 Uploading story: isVideo=$isVideo, ext=$ext, mime=$mime, size=${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB',
+      );
 
       // Try the preferred bucket, fall back to post_images if social_videos fails
       String bucketName = isVideo ? 'social_videos' : 'post_images';
@@ -173,21 +179,25 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
         'post_type': isVideo ? 'video' : 'image',
         'is_story': true,
         'visibility': widget.visibility,
-        'table_id': widget.tableId,
-        'event_id': widget.eventId,
-        'external_place_id': widget.externalPlaceId,
-        'external_place_name': _currentLocationName,
-        'vibe_tag': _currentVibeTag,
-        'latitude': widget.latitude,
-        'longitude': widget.longitude,
-        'city': widget.city,
+        'table_id': widget.includeLocation ? widget.tableId : null,
+        'event_id': widget.includeLocation ? widget.eventId : null,
+        'external_place_id': widget.includeLocation
+            ? widget.externalPlaceId
+            : null,
+        'external_place_name': widget.includeLocation
+            ? _currentLocationName
+            : null,
+        'vibe_tag': _selectedVibes.isEmpty ? null : _selectedVibes.join(' · '),
+        'latitude': widget.includeLocation ? widget.latitude : null,
+        'longitude': widget.includeLocation ? widget.longitude : null,
+        'city': widget.includeLocation ? widget.city : null,
       });
 
       if (mounted) {
         // Pause video immediately so audio stops, but let the State's dispose() handle actual destruction after the route animation to avoid black screen crashes
         _videoPlayerController?.pause();
 
-        // Go all the way back to the main home screen to prevent any black screen artifacts 
+        // Go all the way back to the main home screen to prevent any black screen artifacts
         // from the camera/editor navigation stack.
         Navigator.of(context).popUntil((route) => route.isFirst);
 
@@ -205,8 +215,8 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               errorMsg.contains('Bucket not found')
                   ? 'Storage bucket not configured. Ask admin to create "social_videos" bucket.'
                   : errorMsg.contains('Payload too large')
-                      ? 'Video is too large (${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB). Try a shorter clip.'
-                      : 'Upload failed: ${errorMsg.length > 80 ? '${errorMsg.substring(0, 80)}...' : errorMsg}',
+                  ? 'Video is too large (${(mediaBytes.length / 1024 / 1024).toStringAsFixed(1)}MB). Try a shorter clip.'
+                  : 'Upload failed: ${errorMsg.length > 80 ? '${errorMsg.substring(0, 80)}...' : errorMsg}',
             ),
             duration: const Duration(seconds: 4),
           ),
@@ -237,7 +247,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
 
       final originalSize = await videoFile.length();
       final newSize = await info.file!.length();
-      debugPrint('✅ Transcode complete: ${(originalSize / 1024 / 1024).toStringAsFixed(1)}MB → ${(newSize / 1024 / 1024).toStringAsFixed(1)}MB');
+      debugPrint(
+        '✅ Transcode complete: ${(originalSize / 1024 / 1024).toStringAsFixed(1)}MB → ${(newSize / 1024 / 1024).toStringAsFixed(1)}MB',
+      );
 
       return info.file!;
     } catch (e) {
@@ -266,7 +278,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       }
 
       final bytes = await transcodedFile.readAsBytes();
-      setState(() => _isUploading = false); // Reset so _uploadEditedBytes can set it
+      setState(
+        () => _isUploading = false,
+      ); // Reset so _uploadEditedBytes can set it
       await _uploadEditedBytes(bytes, true);
     } else if (widget.imageFile != null) {
       final bytes = await widget.imageFile!.readAsBytes();
@@ -276,9 +290,18 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
 
   // Available vibe tags (same as camera screen)
   static const List<String> _vibeTags = [
-    '🔥 Lit', '😌 Chill', '🍕 Foodie', '🎶 Vibes',
-    '☕ Coffee', '🌅 Golden Hour', '🎉 Party', '💼 Hustle',
-    '🏖️ Beach', '🌃 Night Out', '🥂 Celebrate', '📸 OOTD',
+    '🔥 Lit',
+    '😌 Chill',
+    '🍕 Foodie',
+    '🎶 Vibes',
+    '☕ Coffee',
+    '🌅 Golden Hour',
+    '🎉 Party',
+    '💼 Hustle',
+    '🏖️ Beach',
+    '🌃 Night Out',
+    '🥂 Celebrate',
+    '📸 OOTD',
   ];
 
   void _showEditSheet() {
@@ -305,7 +328,8 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                 children: [
                   Center(
                     child: Container(
-                      width: 36, height: 4,
+                      width: 36,
+                      height: 4,
                       decoration: BoxDecoration(
                         color: Colors.grey[300],
                         borderRadius: BorderRadius.circular(2),
@@ -324,7 +348,11 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                   // Location row
                   Row(
                     children: [
-                      const Icon(Icons.location_on, color: Colors.indigo, size: 18),
+                      const Icon(
+                        Icons.location_on,
+                        color: Colors.indigo,
+                        size: 18,
+                      ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
@@ -352,11 +380,15 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                     spacing: 8,
                     runSpacing: 8,
                     children: _vibeTags.map((tag) {
-                      final isSelected = _currentVibeTag == tag;
+                      final isSelected = _selectedVibes.contains(tag);
                       return GestureDetector(
                         onTap: () {
                           setState(() {
-                            _currentVibeTag = isSelected ? null : tag;
+                            if (isSelected) {
+                              _selectedVibes.remove(tag);
+                            } else {
+                              _selectedVibes.add(tag);
+                            }
                           });
                           setSheetState(() {});
                         },
@@ -381,9 +413,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                             style: GoogleFonts.inter(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.black87,
+                              color: isSelected ? Colors.white : Colors.black87,
                             ),
                           ),
                         ),
@@ -422,7 +452,12 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               ),
             )
           else if (widget.imageFile != null)
-            Image.file(widget.imageFile!, fit: BoxFit.contain, width: double.infinity, height: double.infinity),
+            Image.file(
+              widget.imageFile!,
+              fit: BoxFit.contain,
+              width: double.infinity,
+              height: double.infinity,
+            ),
 
           // 2. Top Controls
           Positioned(
@@ -439,7 +474,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                   ),
                   child: IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: _isUploading ? null : () => Navigator.pop(context),
+                    onPressed: _isUploading
+                        ? null
+                        : () => Navigator.pop(context),
                   ),
                 ),
               ],
@@ -453,7 +490,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
             child: StoryOverlayWidget(
               locationName: _currentLocationName,
               timeString: _capturedTime,
-              vibeTag: _currentVibeTag,
+              vibeTag: _selectedVibes.isEmpty
+                  ? null
+                  : _selectedVibes.join(' · '),
               onTap: _showEditSheet,
             ),
           ),
@@ -483,28 +522,43 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: Colors.white, width: 2),
+                    child: TextField(
+                      controller: _captionController,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w500,
                       ),
-                      child: TextField(
-                        controller: _captionController,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontWeight: FontWeight.w500,
+                      decoration: InputDecoration(
+                        hintText: 'Add a quick caption...',
+                        hintStyle: const TextStyle(color: Colors.black54),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.9),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
                         ),
-                        decoration: const InputDecoration(
-                          hintText: 'Add a quick caption...',
-                          hintStyle: TextStyle(color: Colors.black54),
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: const BorderSide(
+                            color: Colors.white,
+                            width: 2,
                           ),
-                          border: InputBorder.none,
-                          isDense: true,
                         ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: const BorderSide(
+                            color: Colors.white,
+                            width: 2,
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: const BorderSide(
+                            color: Colors.white,
+                            width: 2,
+                          ),
+                        ),
+                        isDense: true,
                       ),
                     ),
                   ),
@@ -537,7 +591,9 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  _uploadStatus.isNotEmpty ? _uploadStatus : 'Posting...',
+                                  _uploadStatus.isNotEmpty
+                                      ? _uploadStatus
+                                      : 'Posting...',
                                   style: GoogleFonts.inter(
                                     color: Colors.white,
                                     fontWeight: FontWeight.w500,

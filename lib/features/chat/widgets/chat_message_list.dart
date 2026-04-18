@@ -22,6 +22,7 @@ class ChatMessageList extends StatelessWidget {
   final Function(String, String) onReact;
   final Function(LinkableElement) onOpenLink;
   final Function(String userId)? onMentionTap;
+  final Function(String userId)? onAvatarTap;
   final List<Map<String, dynamic>> participants;
   final String searchQuery;
   final List<int> matchedIndices;
@@ -42,6 +43,7 @@ class ChatMessageList extends StatelessWidget {
     required this.onReact,
     required this.onOpenLink,
     this.onMentionTap,
+    this.onAvatarTap,
     this.participants = const [],
     this.searchQuery = '',
     this.matchedIndices = const [],
@@ -98,8 +100,11 @@ class ChatMessageList extends StatelessWidget {
           showDateSeparator = true;
         } else {
           final currentDate = DateTime.parse(msg['timestamp']).toLocal();
-          final olderDate = DateTime.parse(messages[index + 1]['timestamp']).toLocal();
-          showDateSeparator = currentDate.year != olderDate.year ||
+          final olderDate = DateTime.parse(
+            messages[index + 1]['timestamp'],
+          ).toLocal();
+          showDateSeparator =
+              currentDate.year != olderDate.year ||
               currentDate.month != olderDate.month ||
               currentDate.day != olderDate.day;
         }
@@ -113,7 +118,10 @@ class ChatMessageList extends StatelessWidget {
           if (showDateSeparator) {
             return Column(
               children: [
-                _buildDateChip(context, DateTime.parse(msg['timestamp']).toLocal()),
+                _buildDateChip(
+                  context,
+                  DateTime.parse(msg['timestamp']).toLocal(),
+                ),
                 systemChip,
               ],
             );
@@ -146,9 +154,11 @@ class ChatMessageList extends StatelessWidget {
           },
           onOpenLink: onOpenLink,
           onMentionTap: onMentionTap,
+          onAvatarTap: onAvatarTap,
           participants: participants,
           searchQuery: searchQuery,
-          isCurrentMatch: matchedIndices.isNotEmpty &&
+          isCurrentMatch:
+              matchedIndices.isNotEmpty &&
               currentMatchIndex >= 0 &&
               currentMatchIndex < matchedIndices.length &&
               matchedIndices[currentMatchIndex] == index,
@@ -157,7 +167,10 @@ class ChatMessageList extends StatelessWidget {
         if (showDateSeparator) {
           return Column(
             children: [
-              _buildDateChip(context, DateTime.parse(msg['timestamp']).toLocal()),
+              _buildDateChip(
+                context,
+                DateTime.parse(msg['timestamp']).toLocal(),
+              ),
               bubble,
             ],
           );

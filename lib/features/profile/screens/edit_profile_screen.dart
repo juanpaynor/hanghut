@@ -4,6 +4,7 @@ import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/image_crop_service.dart';
+import 'package:country_picker/country_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -29,6 +30,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   bool _isLoading = false;
   String? _usernameError;
+  Country? _selectedCountry;
   List<String> _selectedTags = [];
   List<Map<String, dynamic>> _localPhotos = [];
   final ImagePicker _picker = ImagePicker();
@@ -68,6 +70,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     if (widget.userProfile['tags'] != null) {
       _selectedTags = List<String>.from(widget.userProfile['tags']);
+    }
+
+    // Pre-select country if nationality was previously saved
+    final savedNationality = widget.userProfile['nationality'] as String?;
+    if (savedNationality != null && savedNationality.isNotEmpty) {
+      try {
+        // Nationality is stored as "🇺🇸 United States" — extract country name
+        final namePart = savedNationality.contains(' ')
+            ? savedNationality.substring(savedNationality.indexOf(' ') + 1)
+            : savedNationality;
+        _selectedCountry = CountryParser.parseCountryName(namePart);
+      } catch (_) {
+        _selectedCountry = null;
+      }
     }
 
     _localPhotos = List<Map<String, dynamic>>.from(widget.userPhotos);
@@ -161,7 +177,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       });
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to upload photo. Please try again.');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Unable to upload photo. Please try again.',
+        );
         setState(() => _isLoading = false);
       }
     }
@@ -186,6 +206,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               '',
             ),
             'tags': _selectedTags,
+            if (_selectedCountry != null)
+              'nationality':
+                  '${_selectedCountry!.flagEmoji} ${_selectedCountry!.name}',
           })
           .eq('id', userId);
 
@@ -231,7 +254,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to save profile. Please try again.');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Unable to save profile. Please try again.',
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -249,9 +276,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         backgroundColor: isDark ? colorScheme.surface : AppTheme.primaryColor,
         title: Text(
           'Edit Profile',
-          style: TextStyle(color: isDark ? colorScheme.onSurface : Colors.white),
+          style: TextStyle(
+            color: isDark ? colorScheme.onSurface : Colors.white,
+          ),
         ),
-        iconTheme: IconThemeData(color: isDark ? colorScheme.onSurface : Colors.white),
+        iconTheme: IconThemeData(
+          color: isDark ? colorScheme.onSurface : Colors.white,
+        ),
         actions: [
           TextButton(
             onPressed: _isLoading ? null : _saveProfile,
@@ -267,7 +298,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 : Text(
                     'Save',
                     style: TextStyle(
-                      color: isDark ? AppTheme.primaryColor : AppTheme.accentColor,
+                      color: isDark
+                          ? AppTheme.primaryColor
+                          : AppTheme.accentColor,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
@@ -285,7 +318,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               child: Text(
                 'Photos (Max 5)',
                 style: TextStyle(
-                  color: isDark ? AppTheme.darkTextSecondary : AppTheme.textSecondary,
+                  color: isDark
+                      ? AppTheme.darkTextSecondary
+                      : AppTheme.textSecondary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -316,10 +351,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         width: 100,
                         margin: const EdgeInsets.only(right: 12),
                         decoration: BoxDecoration(
-                          color: isDark ? AppTheme.darkSurface : AppTheme.surfaceColor,
+                          color: isDark
+                              ? AppTheme.darkSurface
+                              : AppTheme.surfaceColor,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                            color: isDark
+                                ? Colors.grey.shade700
+                                : Colors.grey.shade300,
                             width: 1,
                           ),
                         ),
@@ -397,7 +436,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(4),
                               decoration: BoxDecoration(
-                                color: isDark ? Colors.grey.shade800 : Colors.white,
+                                color: isDark
+                                    ? Colors.grey.shade800
+                                    : Colors.white,
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
@@ -416,7 +457,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             ),
 
             const SizedBox(height: 24),
-            Divider(color: isDark ? Colors.grey.shade800 : Colors.grey.shade200),
+            Divider(
+              color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+            ),
 
             // --- Identity Form ---
             Padding(
@@ -445,6 +488,58 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
 
                   const SizedBox(height: 16),
+                  _buildLabel('Nationality', icon: Icons.flag_outlined),
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: () => showCountryPicker(
+                      context: context,
+                      showPhoneCode: false,
+                      onSelect: (Country country) {
+                        setState(() => _selectedCountry = country);
+                      },
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.grey.shade900
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isDark
+                              ? Colors.grey.shade700
+                              : Colors.grey.shade300,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            _selectedCountry != null
+                                ? '${_selectedCountry!.flagEmoji}  ${_selectedCountry!.name}'
+                                : 'Select your nationality',
+                            style: TextStyle(
+                              fontSize: 15,
+                              color: _selectedCountry != null
+                                  ? (isDark ? Colors.white : Colors.black87)
+                                  : Colors.grey,
+                            ),
+                          ),
+                          const Spacer(),
+                          Icon(
+                            Icons.arrow_drop_down,
+                            color: isDark
+                                ? Colors.grey.shade400
+                                : Colors.grey.shade600,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
                   _buildLabel('Instagram', icon: Icons.camera_alt_outlined),
                   _buildTextField(
                     _instagramController,
@@ -453,7 +548,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
 
                   const SizedBox(height: 24),
-                  Divider(color: isDark ? Colors.grey.shade800 : Colors.grey.shade200),
+                  Divider(
+                    color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+                  ),
                   const SizedBox(height: 16),
 
                   // --- Vibe Check ---
@@ -480,20 +577,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         labelStyle: TextStyle(
                           color: isSelected
                               ? Colors.white
-                              : (isDark ? AppTheme.darkTextPrimary : AppTheme.textPrimary),
+                              : (isDark
+                                    ? AppTheme.darkTextPrimary
+                                    : AppTheme.textPrimary),
                           fontWeight: isSelected
                               ? FontWeight.bold
                               : FontWeight.normal,
                         ),
                         selected: isSelected,
                         selectedColor: AppTheme.primaryColor,
-                        backgroundColor: isDark ? AppTheme.darkSurface : AppTheme.surfaceColor,
+                        backgroundColor: isDark
+                            ? AppTheme.darkSurface
+                            : AppTheme.surfaceColor,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                           side: BorderSide(
                             color: isSelected
                                 ? AppTheme.primaryColor
-                                : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
+                                : (isDark
+                                      ? Colors.grey.shade700
+                                      : Colors.grey.shade300),
                           ),
                         ),
                         onSelected: (selected) {
@@ -528,7 +631,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Widget _buildLabel(String text, {IconData? icon}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final labelColor = isDark ? AppTheme.darkTextSecondary : AppTheme.textSecondary;
+    final labelColor = isDark
+        ? AppTheme.darkTextSecondary
+        : AppTheme.textSecondary;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(

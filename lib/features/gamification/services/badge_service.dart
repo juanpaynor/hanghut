@@ -3,6 +3,14 @@ import 'package:bitemates/features/gamification/models/badge.dart';
 import 'package:bitemates/features/gamification/models/gamification_stats.dart';
 import 'package:bitemates/features/gamification/models/user_badge.dart';
 
+/// XP awarded per action
+class XpValues {
+  static const int hostEvent = 100;
+  static const int joinEvent = 50;
+  static const int checkIn = 75;
+  static const int makeConnection = 25;
+}
+
 class BadgeService {
   final _supabase = SupabaseConfig.client;
 
@@ -16,26 +24,42 @@ class BadgeService {
   Future<List<UserBadge>> getUserBadges(String userId) async {
     final response = await _supabase
         .from('user_badges')
-        .select('*, badges(*)') // Join with badges table
+        .select('*, badges(*)')
         .eq('user_id', userId);
-
     return (response as List).map((e) => UserBadge.fromJson(e)).toList();
   }
 
-  /// Fetch user's current stats
+  /// Fetch user's current stats (includes totalXp and level)
   Future<GamificationStats?> getUserStats(String userId) async {
     final response = await _supabase
         .from('user_gamification_stats')
         .select()
         .eq('user_id', userId)
         .maybeSingle();
-
     if (response == null) return null;
     return GamificationStats.fromJson(response);
   }
 
-  /// Increment user stats and check for new badge awards
-  /// Returns list of newly awarded badges (for celebration UI)
+  /// Award raw XP via the DB function. Returns updated xp and level.
+  Future<({int xp, int level, bool leveledUp})> awardXp(
+    String userId,
+    int xp,
+  ) async {
+    final result = await _supabase.rpc(
+      'award_xp',
+      params: {'p_user_id': userId, 'p_xp': xp},
+    );
+    final row = (result as List).first as Map<String, dynamic>;
+    return (
+      xp: row['new_total_xp'] as int,
+      level: row['new_level'] as int,
+      leveledUp: row['leveled_up'] as bool,
+    );
+  }
+
+  /// Increment user stats, award XP, and check for new badge awards.
+  /// [baseXp] is the XP for the action itself (use XpValues constants).
+  /// Returns list of newly awarded badges (for celebration UI).
   Future<List<Badge>> incrementStats(
     String userId, {
     int hosted = 0,
@@ -45,6 +69,8 @@ class BadgeService {
     int qrVerified = 0,
     int? uniquePeople,
     int? uniqueLocations,
+    bool isVerified = false,
+    int baseXp = 0,
   }) async {
     // 1. Get current stats or initialize
     final res = await _supabase
@@ -64,83 +90,90 @@ class BadgeService {
         'total_qr_verified': 0,
         'unique_people_met': 0,
         'unique_locations': 0,
+        'total_xp': 0,
+        'level': 1,
       };
     } else {
       data = Map<String, dynamic>.from(res);
     }
 
-    // 2. Increment values
+    // 2. Increment counters
     data['total_events_hosted'] = (data['total_events_hosted'] as int) + hosted;
     data['total_events_attended'] =
         (data['total_events_attended'] as int) + attended;
     data['total_connections_made'] =
         (data['total_connections_made'] as int) + connections;
     data['total_checkins'] = (data['total_checkins'] as int? ?? 0) + checkins;
-    data['total_qr_verified'] = (data['total_qr_verified'] as int? ?? 0) + qrVerified;
-    // Unique counts are absolute (not increments)
+    data['total_qr_verified'] =
+        (data['total_qr_verified'] as int? ?? 0) + qrVerified;
     if (uniquePeople != null) data['unique_people_met'] = uniquePeople;
     if (uniqueLocations != null) data['unique_locations'] = uniqueLocations;
     data['updated_at'] = DateTime.now().toIso8601String();
 
-    // 3. Upsert
+    // 3. Upsert stats (without XP — that goes through award_xp to keep it atomic)
     await _supabase.from('user_gamification_stats').upsert(data);
 
-    // 4. Check for awards
-    return await _checkAwards(userId, GamificationStats.fromJson(data));
-  }
-
-  /// Internal method to check and award badges
-  /// Returns list of newly awarded badges
-  Future<List<Badge>> _checkAwards(String userId, GamificationStats stats) async {
+    // 4. Award base XP via DB function
     final List<Badge> newlyAwarded = [];
-    try {
-      // Get all badges
-      final allBadges = await getAllBadges();
+    int totalXpToAward = baseXp;
 
-      // Get already earned badges
+    // 5. Check for newly earned badges
+    try {
+      final stats = GamificationStats.fromJson(data);
+      final allBadges = await getAllBadges();
       final earnedBadges = await getUserBadges(userId);
-      final earnedids = earnedBadges.map((e) => e.badgeId).toSet();
+      final earnedIds = earnedBadges.map((e) => e.badgeId).toSet();
 
       for (final badge in allBadges) {
-        if (earnedids.contains(badge.id)) continue;
-
-        if (_meetsRequirements(badge.requirements, stats)) {
+        if (earnedIds.contains(badge.id)) continue;
+        if (_meetsRequirements(
+          badge.requirements,
+          stats,
+          isVerified: isVerified,
+        )) {
           await _awardBadge(userId, badge.id);
           newlyAwarded.add(badge);
+          totalXpToAward += badge.xpReward; // stack badge XP
         }
       }
     } catch (e) {
-      print('Error checking awards: $e');
+      print('Error checking badge awards: $e');
     }
+
+    // 6. Award all XP at once
+    if (totalXpToAward > 0) {
+      await awardXp(userId, totalXpToAward);
+    }
+
     return newlyAwarded;
   }
 
-  bool _meetsRequirements(Map<String, dynamic> reqs, GamificationStats stats) {
+  bool _meetsRequirements(
+    Map<String, dynamic> reqs,
+    GamificationStats stats, {
+    bool isVerified = false,
+  }) {
     if (reqs.containsKey('min_hosted')) {
-      final minHosted = reqs['min_hosted'] as int;
-      if (stats.totalEventsHosted < minHosted) return false;
+      if (stats.totalEventsHosted < (reqs['min_hosted'] as int)) return false;
     }
-
     if (reqs.containsKey('min_attended')) {
-      final minAttended = reqs['min_attended'] as int;
-      if (stats.totalEventsAttended < minAttended) return false;
+      if (stats.totalEventsAttended < (reqs['min_attended'] as int))
+        return false;
     }
-
     if (reqs.containsKey('min_checkins')) {
-      final minCheckins = reqs['min_checkins'] as int;
-      if (stats.totalCheckins < minCheckins) return false;
+      if (stats.totalCheckins < (reqs['min_checkins'] as int)) return false;
     }
-
     if (reqs.containsKey('min_unique_people')) {
-      final minPeople = reqs['min_unique_people'] as int;
-      if (stats.uniquePeopleMet < minPeople) return false;
+      if (stats.uniquePeopleMet < (reqs['min_unique_people'] as int))
+        return false;
     }
-
     if (reqs.containsKey('min_unique_locations')) {
-      final minLocations = reqs['min_unique_locations'] as int;
-      if (stats.uniqueLocations < minLocations) return false;
+      if (stats.uniqueLocations < (reqs['min_unique_locations'] as int))
+        return false;
     }
-
+    if (reqs.containsKey('verified')) {
+      if (!isVerified) return false;
+    }
     return true;
   }
 
@@ -150,10 +183,26 @@ class BadgeService {
         'user_id': userId,
         'badge_id': badgeId,
       });
-      // In a real app, we might trigger a local notification here
       print('🏆 Badge Awarded: $badgeId to $userId');
+
+      // Create in-app notification for the badge
+      try {
+        final badge = (await _supabase
+            .from('badges')
+            .select('name, tier')
+            .eq('id', badgeId)
+            .single());
+        await _supabase.from('notifications').insert({
+          'user_id': userId,
+          'type': 'badge_earned',
+          'title': 'Badge Earned! 🏆',
+          'body': 'You earned the ${badge['name']} (${badge['tier']}) badge!',
+          'metadata': {'badge_id': badgeId, 'badge_name': badge['name']},
+        });
+      } catch (e) {
+        print('⚠️ Failed to create badge notification: $e');
+      }
     } catch (e) {
-      // Handles unique constraint violation if race condition occurs
       print('Badge already awarded or error: $e');
     }
   }

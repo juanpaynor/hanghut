@@ -8,7 +8,6 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'dart:convert';
 
-
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -238,6 +237,20 @@ class NotificationService {
         .order('created_at', ascending: false)
         .limit(limit);
 
+    // Filter out notifications from blocked users
+    try {
+      final blockedIds = await client.rpc('get_blocked_user_ids');
+      if (blockedIds != null && (blockedIds as List).isNotEmpty) {
+        final blocked = blockedIds.map((e) => e.toString()).toSet();
+        return List<Map<String, dynamic>>.from(
+          response,
+        ).where((n) => !blocked.contains(n['actor_id']?.toString())).toList();
+      }
+    } catch (e) {
+      // If blocked IDs fetch fails, still return unfiltered
+      print('⚠️ Block filter failed for notifications: $e');
+    }
+
     return List<Map<String, dynamic>>.from(response);
   }
 
@@ -348,13 +361,28 @@ class NotificationService {
           .from('notifications')
           .select('id')
           .eq('user_id', userId)
-          .eq('is_read', false);
+          .eq('is_read', false)
+          .count(CountOption.exact);
 
-      final List data = response as List;
-      return data.length;
+      return response.count;
     } catch (e) {
       print('❌ getUnreadCount Error: $e');
       return 0;
     }
+  }
+
+  /// Mark all notifications as read for the current user.
+  Future<void> markAllAsRead() async {
+    final client = SupabaseConfig.client;
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    await client
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('user_id', userId)
+        .eq('is_read', false);
+
+    _refreshUnreadCount();
   }
 }

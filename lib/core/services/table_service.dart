@@ -4,6 +4,7 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
 import 'package:bitemates/core/constants/model_registry.dart';
+import 'package:bitemates/features/gamification/services/badge_service.dart';
 
 class TableService {
   // Fetch active tables from map_ready_tables view
@@ -391,14 +392,20 @@ class TableService {
       // Auto-add invited users as pending table members
       if (invitedUserIds != null && invitedUserIds.isNotEmpty) {
         try {
-          print('📨 TABLE SERVICE: Adding ${invitedUserIds.length} invited users...');
-          final inviteRows = invitedUserIds.map((uid) => {
-            'table_id': tableId,
-            'user_id': uid,
-            'role': 'member',
-            'status': 'pending',
-            'requested_at': DateTime.now().toIso8601String(),
-          }).toList();
+          print(
+            '📨 TABLE SERVICE: Adding ${invitedUserIds.length} invited users...',
+          );
+          final inviteRows = invitedUserIds
+              .map(
+                (uid) => {
+                  'table_id': tableId,
+                  'user_id': uid,
+                  'role': 'member',
+                  'status': 'pending',
+                  'requested_at': DateTime.now().toIso8601String(),
+                },
+              )
+              .toList();
           await SupabaseConfig.client.from('table_members').insert(inviteRows);
           print('✅ TABLE SERVICE: Invited users added');
         } catch (e) {
@@ -445,7 +452,9 @@ class TableService {
         try {
           final hostName = user.userMetadata?['display_name'] ?? 'Someone';
           final tableTitle = title ?? venueName;
-          print('🔔 TABLE SERVICE: Sending invite notifications to ${invitedUserIds.length} users...');
+          print(
+            '🔔 TABLE SERVICE: Sending invite notifications to ${invitedUserIds.length} users...',
+          );
 
           for (final inviteeId in invitedUserIds) {
             // 1. In-app notification (bell)
@@ -460,7 +469,9 @@ class TableService {
                 'metadata': {'table_id': tableId},
               });
             } catch (e) {
-              print('⚠️ Failed to insert invite notification for $inviteeId: $e');
+              print(
+                '⚠️ Failed to insert invite notification for $inviteeId: $e',
+              );
             }
 
             // 2. Push notification
@@ -471,10 +482,7 @@ class TableService {
                   'user_id': inviteeId,
                   'title': 'You\'re Invited! 🎉',
                   'body': '$hostName invited you to "$tableTitle"',
-                  'data': {
-                    'type': 'table_join',
-                    'table_id': tableId,
-                  },
+                  'data': {'type': 'table_join', 'table_id': tableId},
                 },
               );
             } catch (e) {
@@ -503,46 +511,57 @@ class TableService {
 
           final followerIds = (followersResp as List)
               .map((f) => f['follower_id'] as String)
-              .where((fid) =>
-                  fid != user.id &&
-                  !(invitedUserIds?.contains(fid) ?? false)) // skip already-invited
+              .where(
+                (fid) =>
+                    fid != user.id && !(invitedUserIds?.contains(fid) ?? false),
+              ) // skip already-invited
               .toList();
 
           if (followerIds.isNotEmpty) {
-            print('🔔 TABLE SERVICE: Notifying ${followerIds.length} followers...');
+            print(
+              '🔔 TABLE SERVICE: Notifying ${followerIds.length} followers...',
+            );
 
             // Batch insert in-app notifications
             try {
-              final notifRows = followerIds.map((fid) => {
-                'user_id': fid,
-                'actor_id': user.id,
-                'type': 'follower_hangout',
-                'title': 'New Hangout from $hostName 🔥',
-                'body': '$hostName just created "$tableTitle" — join now!',
-                'entity_id': tableId,
-                'metadata': {'table_id': tableId},
-              }).toList();
-              await SupabaseConfig.client.from('notifications').insert(notifRows);
+              final notifRows = followerIds
+                  .map(
+                    (fid) => {
+                      'user_id': fid,
+                      'actor_id': user.id,
+                      'type': 'follower_hangout',
+                      'title': 'New Hangout from $hostName 🔥',
+                      'body':
+                          '$hostName just created "$tableTitle" — join now!',
+                      'entity_id': tableId,
+                      'metadata': {'table_id': tableId},
+                    },
+                  )
+                  .toList();
+              await SupabaseConfig.client
+                  .from('notifications')
+                  .insert(notifRows);
             } catch (e) {
               print('⚠️ Failed to batch insert follower notifications: $e');
             }
 
             // Send push notifications (fire-and-forget, don't block creation)
             for (final fid in followerIds) {
-              SupabaseConfig.client.functions.invoke(
-                'send-push',
-                body: {
-                  'user_id': fid,
-                  'title': 'New Hangout from $hostName 🔥',
-                  'body': '$hostName just created "$tableTitle" — join now!',
-                  'data': {
-                    'type': 'table_join',
-                    'table_id': tableId,
-                  },
-                },
-              ).then((_) {}).catchError((e) {
-                print('⚠️ Failed to send follower push for $fid: $e');
-              });
+              SupabaseConfig.client.functions
+                  .invoke(
+                    'send-push',
+                    body: {
+                      'user_id': fid,
+                      'title': 'New Hangout from $hostName 🔥',
+                      'body':
+                          '$hostName just created "$tableTitle" — join now!',
+                      'data': {'type': 'table_join', 'table_id': tableId},
+                    },
+                  )
+                  .then((_) {})
+                  .catchError((e) {
+                    print('⚠️ Failed to send follower push for $fid: $e');
+                  });
             }
             print('✅ TABLE SERVICE: Follower notifications sent');
           }
@@ -577,49 +596,56 @@ class TableService {
 
           final memberIds = (membersResp as List)
               .map((m) => m['user_id'] as String)
-              .where((mid) =>
-                  mid != user.id && // skip creator
-                  !(invitedUserIds?.contains(mid) ?? false)) // skip already-invited
+              .where(
+                (mid) =>
+                    mid != user.id && // skip creator
+                    !(invitedUserIds?.contains(mid) ?? false),
+              ) // skip already-invited
               .toList();
 
           if (memberIds.isNotEmpty) {
-            print('🔔 TABLE SERVICE: Notifying ${memberIds.length} group members...');
+            print(
+              '🔔 TABLE SERVICE: Notifying ${memberIds.length} group members...',
+            );
 
             // Batch insert in-app notifications
             try {
-              final notifRows = memberIds.map((mid) => {
-                'user_id': mid,
-                'actor_id': user.id,
-                'type': 'group_activity',
-                'title': 'New Activity in $groupName 🎯',
-                'body': '$hostName created "$tableTitle"',
-                'entity_id': tableId,
-                'metadata': {
-                  'table_id': tableId,
-                  'group_id': groupId,
-                },
-              }).toList();
-              await SupabaseConfig.client.from('notifications').insert(notifRows);
+              final notifRows = memberIds
+                  .map(
+                    (mid) => {
+                      'user_id': mid,
+                      'actor_id': user.id,
+                      'type': 'group_activity',
+                      'title': 'New Activity in $groupName 🎯',
+                      'body': '$hostName created "$tableTitle"',
+                      'entity_id': tableId,
+                      'metadata': {'table_id': tableId, 'group_id': groupId},
+                    },
+                  )
+                  .toList();
+              await SupabaseConfig.client
+                  .from('notifications')
+                  .insert(notifRows);
             } catch (e) {
               print('⚠️ Failed to batch insert group notifications: $e');
             }
 
             // Send push notifications (fire-and-forget)
             for (final mid in memberIds) {
-              SupabaseConfig.client.functions.invoke(
-                'send-push',
-                body: {
-                  'user_id': mid,
-                  'title': 'New Activity in $groupName 🎯',
-                  'body': '$hostName created "$tableTitle"',
-                  'data': {
-                    'type': 'table_join',
-                    'table_id': tableId,
-                  },
-                },
-              ).then((_) {}).catchError((e) {
-                print('⚠️ Failed to send group push for $mid: $e');
-              });
+              SupabaseConfig.client.functions
+                  .invoke(
+                    'send-push',
+                    body: {
+                      'user_id': mid,
+                      'title': 'New Activity in $groupName 🎯',
+                      'body': '$hostName created "$tableTitle"',
+                      'data': {'type': 'table_join', 'table_id': tableId},
+                    },
+                  )
+                  .then((_) {})
+                  .catchError((e) {
+                    print('⚠️ Failed to send group push for $mid: $e');
+                  });
             }
             print('✅ TABLE SERVICE: Group member notifications sent');
           }
@@ -627,6 +653,11 @@ class TableService {
           print('⚠️ TABLE SERVICE: Failed to send group notifications: $e');
         }
       }
+
+      // Award XP for hosting an event
+      BadgeService()
+          .incrementStats(user.id, hosted: 1, baseXp: XpValues.hostEvent)
+          .ignore();
 
       return tableId;
     } catch (e) {
@@ -676,10 +707,7 @@ class TableService {
         final postId = postResponse['id'];
         print('🗑️ TABLE SERVICE: Deleting associated feed post $postId');
 
-        await SupabaseConfig.client
-            .from('posts')
-            .delete()
-            .eq('id', postId);
+        await SupabaseConfig.client.from('posts').delete().eq('id', postId);
 
         print('✅ TABLE SERVICE: Feed post deleted');
       }

@@ -9,7 +9,6 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 
-
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
 
@@ -132,6 +131,22 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.celebration;
         iconColor = Colors.deepOrange;
         break;
+      case 'friend_joined':
+        iconData = Icons.person_add_alt_1;
+        iconColor = Colors.teal;
+        break;
+      case 'mention':
+        iconData = Icons.alternate_email;
+        iconColor = Colors.amber[700]!;
+        break;
+      case 'badge_earned':
+        iconData = Icons.military_tech;
+        iconColor = Colors.purple;
+        break;
+      case 'trip_match':
+        iconData = Icons.flight_takeoff;
+        iconColor = Colors.teal;
+        break;
       default:
         iconData = Icons.notifications;
         iconColor = AppTheme.accentColor;
@@ -228,6 +243,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     try {
       if (type == 'chat') {
         _navigateToChat(entityId, metadata);
+      } else if (type == 'trip_match') {
+        // Trip match: entity_id is the chat_id, metadata has channel_id
+        _navigateToChat(entityId, {...metadata, 'chat_type': 'trip'});
       } else if ([
         'join_request',
         'approved',
@@ -250,7 +268,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not open this notification');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Could not open this notification',
+        );
       }
     }
   }
@@ -337,10 +359,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         Navigator.pop(context); // Close notification panel
         showDialog(
           context: context,
-          builder: (context) => TableCompactModal(
-            table: table,
-            matchData: const {},
-          ),
+          builder: (context) =>
+              TableCompactModal(table: table, matchData: const {}),
         );
       }
     } catch (e) {
@@ -404,13 +424,44 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   fontSize: 16,
                                 ),
                               ),
-                              InkWell(
-                                onTap: () => Navigator.pop(context),
-                                child: const Icon(
-                                  Icons.close,
-                                  size: 20,
-                                  color: Colors.grey,
-                                ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_notifications.any(
+                                    (n) => n['is_read'] != true,
+                                  ))
+                                    GestureDetector(
+                                      onTap: () async {
+                                        await _service.markAllAsRead();
+                                        setState(() {
+                                          for (final n in _notifications) {
+                                            n['is_read'] = true;
+                                          }
+                                        });
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 12,
+                                        ),
+                                        child: Text(
+                                          'Mark all read',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.accentColor,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  InkWell(
+                                    onTap: () => Navigator.pop(context),
+                                    child: const Icon(
+                                      Icons.close,
+                                      size: 20,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),

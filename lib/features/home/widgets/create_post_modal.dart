@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/mention_overlay.dart';
-import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 import 'package:video_player/video_player.dart';
 
 import 'dart:io';
@@ -29,10 +30,6 @@ class _CreatePostModalState extends State<CreatePostModal> {
   bool _isPosting = false;
   Position? _currentPosition;
 
-  // Location picker state
-  double? _selectedLat;
-  double? _selectedLng;
-
   // Mention state
   String? _mentionQuery;
   bool _showMentionOverlay = false;
@@ -51,43 +48,6 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final position = await LocationService().getCurrentLocation();
     if (mounted) {
       setState(() => _currentPosition = position);
-    }
-  }
-
-  Future<void> _openLocationPicker() async {
-    // Use existing selected location, or fall back to device GPS
-    Position? startPos;
-    if (_selectedLat != null && _selectedLng != null) {
-      startPos = Position(
-        latitude: _selectedLat!,
-        longitude: _selectedLng!,
-        timestamp: DateTime.now(),
-        accuracy: 0,
-        altitude: 0,
-        heading: 0,
-        speed: 0,
-        speedAccuracy: 0,
-        altitudeAccuracy: 0,
-        headingAccuracy: 0,
-      );
-    } else {
-      startPos = _currentPosition ?? await LocationService().getCurrentLocation();
-    }
-
-    if (!mounted) return;
-
-    final result = await Navigator.push<Map<String, dynamic>>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => LocationPickerModal(initialPosition: startPos),
-      ),
-    );
-
-    if (result != null && mounted) {
-      setState(() {
-        _selectedLat = result['latitude'];
-        _selectedLng = result['longitude'];
-      });
     }
   }
 
@@ -171,27 +131,67 @@ class _CreatePostModalState extends State<CreatePostModal> {
         return;
       }
 
-      final List<XFile> images = await _picker.pickMultiImage(
-        maxWidth: 1920,
-        maxHeight: 1080,
-        imageQuality: 85,
+      final List<XFile> picked = await _picker.pickMultiImage(
+        imageQuality: 90,
         limit: remaining,
       );
 
-      if (images.isNotEmpty && mounted) {
-        setState(() {
-          for (final image in images) {
-            if (_selectedImages.length < 4) {
-              _selectedImages.add(File(image.path));
-            }
-          }
-          _selectedGifUrl = null;
-          _clearVideo();
-        });
+      if (picked.isEmpty || !mounted) return;
+
+      // Run each image through ProImageEditor so users can crop before posting
+      for (final xfile in picked) {
+        if (_selectedImages.length >= 4) break;
+        final cropped = await _cropWithEditor(File(xfile.path));
+        if (cropped != null && mounted) {
+          setState(() {
+            _selectedImages.add(cropped);
+            _selectedGifUrl = null;
+            _clearVideo();
+          });
+        }
       }
     } catch (e) {
-      print('Error picking images: $e');
+      debugPrint('Error picking images: $e');
     }
+  }
+
+  /// Opens the native crop screen so the user can crop/rotate
+  /// before the image is added to the post. Returns null if cancelled.
+  Future<File?> _cropWithEditor(File imageFile) async {
+    final cropped = await ImageCropper().cropImage(
+      sourcePath: imageFile.path,
+      compressQuality: 90,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Edit Photo',
+          toolbarColor: Colors.black,
+          toolbarWidgetColor: Colors.white,
+          activeControlsWidgetColor: const Color(0xFFFF6B35),
+          initAspectRatio: CropAspectRatioPreset.original,
+          lockAspectRatio: false,
+          aspectRatioPresets: [
+            CropAspectRatioPreset.original,
+            CropAspectRatioPreset.square,
+            CropAspectRatioPreset.ratio4x3,
+            CropAspectRatioPreset.ratio16x9,
+          ],
+        ),
+        IOSUiSettings(
+          title: 'Edit Photo',
+          doneButtonTitle: 'Done',
+          cancelButtonTitle: 'Cancel',
+          aspectRatioPresets: [
+            CropAspectRatioPreset.original,
+            CropAspectRatioPreset.square,
+            CropAspectRatioPreset.ratio4x3,
+            CropAspectRatioPreset.ratio16x9,
+          ],
+        ),
+      ],
+    );
+
+    if (cropped == null) return null;
+    return File(cropped.path);
   }
 
   Future<void> _pickVideo() async {
@@ -267,7 +267,10 @@ class _CreatePostModalState extends State<CreatePostModal> {
 
   Future<void> _post() async {
     final text = _textController.text.trim();
-    if (text.isEmpty && _selectedImages.isEmpty && _selectedVideo == null && _selectedGifUrl == null) {
+    if (text.isEmpty &&
+        _selectedImages.isEmpty &&
+        _selectedVideo == null &&
+        _selectedGifUrl == null) {
       _showSnack('Please add some text, image, video, or GIF');
       return;
     }
@@ -279,7 +282,9 @@ class _CreatePostModalState extends State<CreatePostModal> {
       List<String>? mentionedUserIds;
       final mentionedUsernames = _extractMentionedUsernames(text);
       if (mentionedUsernames.isNotEmpty) {
-        final usernameToId = await SocialService().resolveUsernames(mentionedUsernames);
+        final usernameToId = await SocialService().resolveUsernames(
+          mentionedUsernames,
+        );
         mentionedUserIds = usernameToId.values.toList();
       }
 
@@ -288,8 +293,8 @@ class _CreatePostModalState extends State<CreatePostModal> {
         imageFiles: _selectedImages.isNotEmpty ? _selectedImages : null,
         videoFile: _selectedVideo,
         gifUrl: _selectedGifUrl,
-        latitude: _selectedLat ?? _currentPosition?.latitude,
-        longitude: _selectedLng ?? _currentPosition?.longitude,
+        latitude: _currentPosition?.latitude,
+        longitude: _currentPosition?.longitude,
         mentionedUserIds: mentionedUserIds,
       );
 
@@ -313,6 +318,7 @@ class _CreatePostModalState extends State<CreatePostModal> {
   Widget build(BuildContext context) {
     final hasImages = _selectedImages.isNotEmpty;
     final hasVideo = _selectedVideo != null;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -324,13 +330,13 @@ class _CreatePostModalState extends State<CreatePostModal> {
           minHeight: 400,
         ),
         decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
+          color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
+              color: Colors.black.withOpacity(isDark ? 0.4 : 0.15),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
@@ -339,13 +345,17 @@ class _CreatePostModalState extends State<CreatePostModal> {
           children: [
             // Header
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(6, 12, 12, 12),
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.close, size: 22),
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 22,
+                      color: isDark ? Colors.grey[400] : Colors.grey[600],
+                    ),
                     onPressed: () => Navigator.pop(context),
-                    padding: EdgeInsets.zero,
+                    padding: const EdgeInsets.all(8),
                     constraints: const BoxConstraints(),
                   ),
                   const Expanded(
@@ -353,33 +363,45 @@ class _CreatePostModalState extends State<CreatePostModal> {
                       'New Post',
                       style: TextStyle(
                         fontSize: 18,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
                       ),
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  TextButton(
-                    onPressed: _isPosting ? null : _post,
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
                     child: _isPosting
                         ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            width: 32,
+                            height: 32,
+                            child: Padding(
+                              padding: EdgeInsets.all(6),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                              ),
+                            ),
                           )
-                        : Text(
-                            'Post',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                              color: Theme.of(context).primaryColor,
+                        : Material(
+                            color: AppTheme.primaryColor,
+                            borderRadius: BorderRadius.circular(20),
+                            child: InkWell(
+                              onTap: _post,
+                              borderRadius: BorderRadius.circular(20),
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 8,
+                                ),
+                                child: Text(
+                                  'Post',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                   ),
@@ -387,7 +409,10 @@ class _CreatePostModalState extends State<CreatePostModal> {
               ),
             ),
 
-            const Divider(height: 1),
+            Divider(
+              height: 1,
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+            ),
 
             // Content
             Flexible(
@@ -404,7 +429,8 @@ class _CreatePostModalState extends State<CreatePostModal> {
                       maxLength: 500,
                       autofocus: true,
                       decoration: InputDecoration(
-                        hintText: "What's on your mind? Use @ to mention someone",
+                        hintText:
+                            "What's on your mind? Use @ to mention someone",
                         border: InputBorder.none,
                         hintStyle: TextStyle(
                           fontSize: 16,
@@ -478,7 +504,8 @@ class _CreatePostModalState extends State<CreatePostModal> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(12),
                             child: AspectRatio(
-                              aspectRatio: _videoPreviewController!.value.aspectRatio,
+                              aspectRatio:
+                                  _videoPreviewController!.value.aspectRatio,
                               child: VideoPlayer(_videoPreviewController!),
                             ),
                           ),
@@ -505,14 +532,23 @@ class _CreatePostModalState extends State<CreatePostModal> {
                             bottom: 8,
                             right: 8,
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.black.withOpacity(0.7),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _formatDuration(_videoPreviewController!.value.duration),
-                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                                _formatDuration(
+                                  _videoPreviewController!.value.duration,
+                                ),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
@@ -586,45 +622,48 @@ class _CreatePostModalState extends State<CreatePostModal> {
 
             // Action Bar
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1A1A1A) : Colors.grey[50],
                 border: Border(
-                  top: BorderSide(color: Colors.grey[200]!, width: 1),
+                  top: BorderSide(
+                    color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+                    width: 1,
+                  ),
                 ),
               ),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
+              child: Row(
                 children: [
-                  _ActionButton(
-                    icon: Icons.image_outlined,
-                    label: 'Photo',
-                    color: Theme.of(context).primaryColor,
-                    onPressed: _selectedVideo == null && _selectedImages.length < 4 ? _pickImage : null,
+                  _MediaButton(
+                    icon: Icons.photo_library_rounded,
+                    label: hasImages
+                        ? '${_selectedImages.length} Photo${_selectedImages.length > 1 ? 's' : ''}'
+                        : 'Photo',
+                    isActive: hasImages,
+                    onPressed:
+                        _selectedVideo == null && _selectedImages.length < 4
+                        ? _pickImage
+                        : null,
                   ),
-                  const SizedBox(width: 8),
-                  _ActionButton(
-                    icon: Icons.videocam_outlined,
+                  const SizedBox(width: 10),
+                  _MediaButton(
+                    icon: Icons.videocam_rounded,
                     label: hasVideo ? '1 Video' : 'Video',
-                    color: Colors.red[500]!,
-                    onPressed: !hasVideo && _selectedImages.isEmpty ? _pickVideo : null,
+                    isActive: hasVideo,
+                    onPressed: !hasVideo && _selectedImages.isEmpty
+                        ? _pickVideo
+                        : null,
                   ),
-                  const SizedBox(width: 8),
-                  _ActionButton(
-                    icon: Icons.gif_box_outlined,
+                  const SizedBox(width: 10),
+                  _MediaButton(
+                    icon: Icons.gif_rounded,
                     label: _selectedGifUrl != null ? '1 GIF' : 'GIF',
-                    color: Colors.orange[600]!,
-                    onPressed: _selectedGifUrl == null && !hasVideo ? _pickGif : null,
-                  ),
-                  const SizedBox(width: 8),
-                  _ActionButton(
-                    icon: Icons.location_on_outlined,
-                    label: _selectedLat != null ? 'Located' : 'Location',
-                    color: Colors.green[600]!,
-                    onPressed: _openLocationPicker,
+                    isActive: _selectedGifUrl != null,
+                    onPressed: _selectedGifUrl == null && !hasVideo
+                        ? _pickGif
+                        : null,
                   ),
                 ],
-              ),
               ),
             ),
           ],
@@ -640,51 +679,68 @@ class _CreatePostModalState extends State<CreatePostModal> {
   }
 }
 
-class _ActionButton extends StatelessWidget {
+class _MediaButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final Color color;
+  final bool isActive;
   final VoidCallback? onPressed;
 
-  const _ActionButton({
+  const _MediaButton({
     required this.icon,
     required this.label,
-    required this.color,
+    this.isActive = false,
     this.onPressed,
   });
 
   @override
   Widget build(BuildContext context) {
     final isDisabled = onPressed == null;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const brand = AppTheme.primaryColor;
 
-    final finalColor = isDisabled ? Colors.grey[400] : color;
-    final bgColor = isDisabled ? Colors.grey[100] : color.withOpacity(0.1);
-    final borderColor = isDisabled ? Colors.grey[300]! : color.withOpacity(0.3);
+    Color iconColor;
+    Color textColor;
+    Color bgColor;
 
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: borderColor, width: 1),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18, color: finalColor),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: finalColor,
-              ),
+    if (isActive) {
+      iconColor = Colors.white;
+      textColor = Colors.white;
+      bgColor = brand;
+    } else if (isDisabled) {
+      iconColor = isDark ? Colors.grey[700]! : Colors.grey[350]!;
+      textColor = isDark ? Colors.grey[700]! : Colors.grey[350]!;
+      bgColor = isDark ? Colors.grey[850]! : Colors.grey[100]!;
+    } else {
+      iconColor = isDark ? Colors.grey[300]! : Colors.grey[700]!;
+      textColor = isDark ? Colors.grey[300]! : Colors.grey[700]!;
+      bgColor = isDark ? Colors.grey[800]! : Colors.grey[100]!;
+    }
+
+    return Expanded(
+      child: Material(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 19, color: iconColor),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -23,7 +23,7 @@
 - Web: `/Users/rich/Documents/hanghut-web/docs/xenplatform-contract.md`
 
 >
-> **Last updated:** 2026-04-03 by Mobile Team (account deletion RPC + web team action needed for /delete-account page)
+> **Last updated:** 2026-04-15 by Mobile Team (organizer profile section — social links + active events displayed on user profiles; ACTION NEEDED from Web Team on social_links format + profile_photo_url + storefront slug URL)
 
 ---
 
@@ -486,5 +486,12 @@ STEPS:
 | | | **How to call it from JS (admin):** `const { data, error } = await supabase.functions.invoke('delete-user-account', { body: { user_id: '...', admin_id: '...', reason: '...' } })` |
 | | | **In-app button:** Already updated in Flutter (`settings_screen.dart`) — calls the edge function instead of the old mock. |
 | 2026-04-03 | Mobile Team | ACTION NEEDED: Web Team — please create a `/delete-account` page on hanghut-web. **Requirements:** (1) Login form (email + password or OTP) to authenticate the user via Supabase. (2) List of data that will be deleted (profile, messages, posts, stories, friends, groups, payment history). (3) Confirmation button that calls `supabase.functions.invoke('delete-user-account')`. (4) Success message after deletion. **Why:** Google Play Store Data Safety form requires a public URL for account deletion requests. We need the final URL (e.g. `https://hanghut.com/delete-account`) to complete the Play Store submission. |
+| 2026-04-15 | Mobile Team | 🆕 **ORGANIZER PROFILE — DISPLAY ON MOBILE APP.** We've implemented the public-facing organizer profile section that appears when any user views an event organizer's profile. Here's what we built and what we need from the web team. |
+| | | **What we built (Flutter):** When viewing a user's profile, the app now calls a new RPC `get_organizer_public_profile(p_user_id)` (see DB section below). If the user is an approved organizer, an **EVENT ORGANIZER** section appears in their profile showing: (1) organizer logo / profile photo + business name + verified badge, (2) description (2-line preview), (3) social link chips (Instagram, TikTok, Facebook, X/Twitter, Website) — tapping opens in browser, (4) horizontal scroll list of their **active upcoming events** (cover image, title, date, price). Tapping an event card opens the full `EventDetailModal`. The section is fully dark-mode aware and only shows for approved partners (`status = 'approved'`). |
+| | | **New RPC deployed:** `get_organizer_public_profile(p_user_id UUID) → JSON`. Migration name: `get_organizer_public_profile_rpc`. Returns: `partner_id`, `business_name`, `description`, `profile_photo_url`, `verified`, `slug`, `instagram`, `facebook`, `website`, `tiktok`, `twitter`, `events` (array of active upcoming events, max 10, ordered by `start_datetime ASC`). Returns `NULL` if user has no approved partner record. Event fields: `id`, `title`, `cover_image_url`, `start_datetime`, `venue_name`, `ticket_price`, `tickets_sold`, `capacity`, `event_type`. |
+| | | **ACTION NEEDED: Web Team — 3 things:** |
+| | | **(1) Ensure `partners.social_links` is populated correctly.** The RPC reads `social_links` as a JSONB object with keys: `instagram`, `facebook`, `website`, `tiktok`, `twitter`. Please confirm your partner registration/profile form saves social links in this exact structure. Example: `{ "instagram": "soundwaveevents", "facebook": "https://fb.com/soundwave", "website": "https://soundwave.ph" }`. For Instagram and TikTok, store the handle without `@` (we prefix it in the app). For Facebook and website, store the full URL. |
+| | | **(2) Ensure `partners.profile_photo_url` is populated.** This is the logo/brand photo shown in the organizer card. The column already exists. Please make sure your partner onboarding form includes a logo/profile photo upload that writes to this column (separate from `cover_image_url` which we are NOT using in the mobile app). |
+| | | **(3) Consider the organizer storefront link.** The `partners.slug` field is returned by the RPC. If hanghut-web has a public organizer storefront page (e.g. `https://hanghut.com/organizers/{slug}`), let us know the URL pattern — we can add a "View Full Profile" deep link chip in the mobile organizer section. |
 
 

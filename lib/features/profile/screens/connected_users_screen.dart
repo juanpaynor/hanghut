@@ -4,6 +4,7 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ConnectedUsersScreen extends StatefulWidget {
   final String userId;
@@ -113,9 +114,17 @@ class _UserListTabState extends State<_UserListTab> {
       List<Map<String, dynamic>> users;
 
       if (widget.type == 'followers') {
-        users = await socialService.getFollowers(widget.userId, limit: _pageSize, offset: 0);
+        users = await socialService.getFollowers(
+          widget.userId,
+          limit: _pageSize,
+          offset: 0,
+        );
       } else {
-        users = await socialService.getFollowing(widget.userId, limit: _pageSize, offset: 0);
+        users = await socialService.getFollowing(
+          widget.userId,
+          limit: _pageSize,
+          offset: 0,
+        );
       }
 
       if (mounted) {
@@ -126,9 +135,13 @@ class _UserListTabState extends State<_UserListTab> {
         });
       }
     } catch (e) {
+      debugPrint('⚠️ ConnectedUsersScreen._loadUsers: $e');
       if (mounted) {
         setState(() {
-          _errorMessage = 'Failed to load users';
+          // Only show error state if we had previous data; otherwise show empty
+          if (_users.isEmpty) {
+            _errorMessage = 'Failed to load users';
+          }
           _isLoading = false;
         });
       }
@@ -144,9 +157,17 @@ class _UserListTabState extends State<_UserListTab> {
       List<Map<String, dynamic>> users;
 
       if (widget.type == 'followers') {
-        users = await socialService.getFollowers(widget.userId, limit: _pageSize, offset: _users.length);
+        users = await socialService.getFollowers(
+          widget.userId,
+          limit: _pageSize,
+          offset: _users.length,
+        );
       } else {
-        users = await socialService.getFollowing(widget.userId, limit: _pageSize, offset: _users.length);
+        users = await socialService.getFollowing(
+          widget.userId,
+          limit: _pageSize,
+          offset: _users.length,
+        );
       }
 
       if (mounted) {
@@ -165,7 +186,31 @@ class _UserListTabState extends State<_UserListTab> {
   Widget build(BuildContext context) {
     if (_isLoading) return _buildSkeleton();
     if (_errorMessage != null) {
-      return Center(child: Text(_errorMessage!));
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.wifi_off_outlined, size: 48, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'Could not load users',
+              style: TextStyle(color: Colors.grey[600], fontSize: 15),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _errorMessage = null;
+                  _isLoading = true;
+                });
+                _loadUsers();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      );
     }
     if (_users.isEmpty) {
       return Center(
@@ -177,7 +222,7 @@ class _UserListTabState extends State<_UserListTab> {
             Text(
               widget.type == 'followers'
                   ? 'No followers yet'
-                  : 'Not following anyone',
+                  : 'Not following anyone yet',
               style: TextStyle(color: Colors.grey[500]),
             ),
           ],
@@ -213,9 +258,13 @@ class _UserListTabState extends State<_UserListTab> {
         return ListTile(
           leading: CircleAvatar(
             backgroundColor: Colors.grey[200],
-            backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+            backgroundImage: avatarUrl != null
+                ? CachedNetworkImageProvider(avatarUrl)
+                : null,
             child: avatarUrl == null
-                ? Text(displayName.isNotEmpty ? displayName[0].toUpperCase() : '?')
+                ? Text(
+                    displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                  )
                 : null,
           ),
           title: Text(displayName),

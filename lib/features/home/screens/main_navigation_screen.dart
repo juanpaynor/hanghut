@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:bitemates/features/home/screens/feed_screen.dart';
 import 'package:bitemates/features/map/screens/map_screen.dart';
-import 'package:bitemates/features/map/widgets/create_table_modal.dart';
+import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
@@ -16,6 +18,8 @@ import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/core/services/admin_popup_service.dart';
 import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
+import 'package:bitemates/features/trips/widgets/create_trip/create_trip_flow.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -36,11 +40,18 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   late int _selectedIndex;
 
   final GlobalKey<MapScreenState> _mapScreenKey = GlobalKey<MapScreenState>();
+  final GlobalKey<FeedScreenState> _feedScreenKey =
+      GlobalKey<FeedScreenState>();
   StreamSubscription<Map<String, dynamic>>? _geofenceSubscription;
+
+  // Speed dial
+  bool _fabOpen = false;
+  late final AnimationController _dialController;
+  late final Animation<double> _dialAnimation;
 
   @override
   void initState() {
@@ -48,6 +59,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     _selectedIndex = widget.initialIndex;
     _setupGeofenceListener();
     WidgetsBinding.instance.addObserver(this);
+
+    // Speed dial animation
+    _dialController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _dialAnimation = CurvedAnimation(
+      parent: _dialController,
+      curve: Curves.elasticOut,
+      reverseCurve: Curves.easeInCubic,
+    );
 
     // Handle Deep Link for Table
     if (widget.initialTableId != null) {
@@ -83,6 +105,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
   @override
   void dispose() {
+    _dialController.dispose();
     _geofenceSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -157,6 +180,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
     return [
       FeedScreen(
+        key: _feedScreenKey,
         onJoinTable: (tableId) {
           setState(() {
             _selectedIndex = 1;
@@ -192,6 +216,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _onItemTapped(int index) {
+    // If Home tab is tapped while already on Home, scroll feed back to top
+    if (index == 0 && _selectedIndex == 0) {
+      _feedScreenKey.currentState?.scrollToTop();
+      return;
+    }
     setState(() {
       _selectedIndex = index;
     });
@@ -203,23 +232,73 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _showCreateTableModal() {
-    AnalyticsService().logScreenView('create_table_modal');
+    _closeDial();
+    AnalyticsService().logScreenView('create_hangout_flow');
     final position = _mapScreenKey.currentState?.getCurrentPosition();
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => CreateTableModal(
-        currentLat: position?.latitude,
-        currentLng: position?.longitude,
-        onTableCreated: () {
-          setState(() {
-            _selectedIndex = 1;
-          });
-          _mapScreenKey.currentState?.refreshTables();
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            CreateHangoutFlow(
+              currentLat: position?.latitude,
+              currentLng: position?.longitude,
+              onTableCreated: () {
+                setState(() {
+                  _selectedIndex = 1;
+                });
+                _mapScreenKey.currentState?.refreshTables();
+              },
+            ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          );
         },
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
       ),
+    );
+  }
+
+  void _toggleDial() {
+    HapticFeedback.lightImpact();
+    setState(() => _fabOpen = !_fabOpen);
+    if (_fabOpen) {
+      _dialController.forward();
+    } else {
+      _dialController.reverse();
+    }
+  }
+
+  void _closeDial() {
+    if (_fabOpen) {
+      setState(() => _fabOpen = false);
+      _dialController.reverse();
+    }
+  }
+
+  void _openShareMoment() {
+    _closeDial();
+    AnalyticsService().logScreenView('story_camera');
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const StoryCameraScreen()),
+    );
+  }
+
+  void _openCreateTrip() {
+    _closeDial();
+    AnalyticsService().logScreenView('create_trip_flow');
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CreateTripFlow(onTripCreated: () {})),
     );
   }
 
@@ -323,6 +402,22 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           ),
 
           if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
+
+          // ── Speed Dial Scrim ──
+          if (_fabOpen)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _closeDial,
+                child: AnimatedOpacity(
+                  opacity: _fabOpen ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(color: Colors.black.withOpacity(0.45)),
+                ),
+              ),
+            ),
+
+          // ── Speed Dial Arc Buttons ──
+          _buildSpeedDialButtons(context),
         ],
       ),
       floatingActionButton: Container(
@@ -340,11 +435,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         ),
         child: FloatingActionButton(
           heroTag: 'main_fab',
-          onPressed: _showCreateTableModal,
+          onPressed: _toggleDial,
           backgroundColor: Theme.of(context).primaryColor,
           elevation: 0,
           shape: const CircleBorder(),
-          child: const Icon(Icons.add, color: Colors.white, size: 32),
+          child: AnimatedBuilder(
+            animation: _dialController,
+            builder: (_, __) => Transform.rotate(
+              angle: _dialController.value * math.pi / 4,
+              child: const Icon(Icons.add, color: Colors.white, size: 32),
+            ),
+          ),
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
@@ -368,6 +469,124 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               'Activity',
             ),
             _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpeedDialButtons(BuildContext context) {
+    // Three items: Hangout (right), Moment (top), Trip (left)
+    // Arc sweeps from ~40° to ~140° above the FAB centre
+    // FAB centre is at the bottom-centre of the screen
+    final items = [
+      const _DialItem(icon: Icons.table_restaurant, label: 'Hangout', index: 0),
+      const _DialItem(
+        icon: Icons.camera_alt_outlined,
+        label: 'Moment',
+        index: 1,
+      ),
+      const _DialItem(icon: Icons.luggage_outlined, label: 'Trip', index: 2),
+    ];
+
+    // Angles in radians from positive x-axis, going counter-clockwise
+    // 0 = right, pi/2 = up, pi = left
+    final angles = [math.pi * 0.22, math.pi * 0.5, math.pi * 0.78];
+    const radius = 110.0;
+
+    return AnimatedBuilder(
+      animation: _dialAnimation,
+      builder: (context, _) {
+        final screenSize = MediaQuery.of(context).size;
+        final bottomInset = MediaQuery.of(context).padding.bottom;
+        // FAB sits in the centre notch of the 80px BottomAppBar
+        // 80 = appbar height, /2 = center of appbar = FAB center
+        final fabCx = screenSize.width / 2;
+        final fabCy = screenSize.height - bottomInset - 40;
+
+        return Stack(
+          children: [
+            for (int i = 0; i < items.length; i++)
+              _buildDialItem(
+                context: context,
+                item: items[i],
+                angle: angles[i],
+                radius: radius,
+                fabCx: fabCx,
+                fabCy: fabCy,
+                stagger: i * 0.12,
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildDialItem({
+    required BuildContext context,
+    required _DialItem item,
+    required double angle,
+    required double radius,
+    required double fabCx,
+    required double fabCy,
+    required double stagger,
+  }) {
+    // Clamp progress with per-item stagger for the wave effect
+    final raw = (_dialAnimation.value - stagger) / (1.0 - stagger);
+    final progress = raw.clamp(0.0, 1.0);
+
+    final dx = math.cos(angle) * radius * progress;
+    final dy = -math.sin(angle) * radius * progress; // negative = upward
+
+    const btnSize = 64.0;
+    final left = fabCx + dx - btnSize / 2;
+    final top = fabCy + dy - btnSize / 2;
+
+    final color = Theme.of(context).primaryColor;
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: Opacity(
+        opacity: progress,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Material(
+              color: color,
+              shape: const CircleBorder(),
+              elevation: 6,
+              shadowColor: color.withOpacity(0.4),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () {
+                  if (item.index == 0) _showCreateTableModal();
+                  if (item.index == 1) _openShareMoment();
+                  if (item.index == 2) _openCreateTrip();
+                },
+                child: SizedBox(
+                  width: btnSize,
+                  height: btnSize,
+                  child: Icon(item.icon, color: Colors.white, size: 22),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.65),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                item.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -410,4 +629,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       ),
     );
   }
+}
+
+// ── Speed dial data ─────────────────────────────────────────────────────────
+
+class _DialItem {
+  const _DialItem({
+    required this.icon,
+    required this.label,
+    required this.index,
+  });
+  final IconData icon;
+  final String label;
+  final int index;
 }

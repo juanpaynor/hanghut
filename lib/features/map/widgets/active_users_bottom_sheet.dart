@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -254,7 +255,7 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
                       radius: 20,
                       backgroundColor: Colors.grey[200],
                       backgroundImage: avatarUrl != null
-                          ? NetworkImage(avatarUrl)
+                          ? CachedNetworkImageProvider(avatarUrl)
                           : null,
                       child: avatarUrl == null
                           ? const Icon(Icons.person, color: Colors.grey)

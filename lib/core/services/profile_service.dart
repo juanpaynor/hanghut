@@ -29,6 +29,7 @@ class ProfileService {
     required Map<String, dynamic> preferences,
     String? photoUrl,
     String? username,
+    String? nationality,
   }) async {
     // Get user email from Supabase auth
     final user = SupabaseConfig.client.auth.currentUser;
@@ -46,6 +47,9 @@ class ProfileService {
       };
       if (username != null && username.isNotEmpty) {
         userData['username'] = username.toLowerCase();
+      }
+      if (nationality != null && nationality.isNotEmpty) {
+        userData['nationality'] = nationality;
       }
       await SupabaseConfig.client.from('users').upsert(userData);
 

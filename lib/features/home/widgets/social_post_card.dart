@@ -42,7 +42,6 @@ class _SocialPostCardState extends State<SocialPostCard> {
   bool _isLoadingEvent = false;
   late int _commentCount;
 
-
   // Inline video playback
   VideoPlayerController? _videoController;
   bool _videoInitialized = false;
@@ -82,14 +81,16 @@ class _SocialPostCardState extends State<SocialPostCard> {
       _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl))
         ..setLooping(true)
         ..setVolume(0) // Start muted
-        ..initialize().then((_) {
-          if (mounted) {
-            setState(() => _videoInitialized = true);
-            _videoController!.play();
-          }
-        }).catchError((e) {
-          debugPrint('Video init error: $e');
-        });
+        ..initialize()
+            .then((_) {
+              if (mounted) {
+                setState(() => _videoInitialized = true);
+                _videoController!.play();
+              }
+            })
+            .catchError((e) {
+              debugPrint('Video init error: $e');
+            });
     }
   }
 
@@ -145,7 +146,6 @@ class _SocialPostCardState extends State<SocialPostCard> {
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
     // Extract data from Supabase post
@@ -195,215 +195,219 @@ class _SocialPostCardState extends State<SocialPostCard> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: Row(
-                  children: [
-                    GestureDetector(
-                      onTap: () {
-                        // Navigate to user profile
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => UserProfileScreen(
-                              userId: widget.post['user_id'],
-                            ),
-                          ),
-                        );
-                      },
-                      child: CircleAvatar(
-                        radius: 20,
-                        backgroundColor: Colors.grey[100],
-                        backgroundImage:
-                            avatarUrl != null && avatarUrl.isNotEmpty
-                            ? NetworkImage(avatarUrl)
-                            : null,
-                        child: avatarUrl == null || avatarUrl.isEmpty
-                            ? Text(
-                                displayName.isNotEmpty
-                                    ? displayName[0].toUpperCase()
-                                    : 'U',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(
-                                    context,
-                                  ).textTheme.bodyLarge?.color,
-                                ),
-                              )
-                            : null,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            displayName,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                              color: Theme.of(
-                                context,
-                              ).textTheme.bodyLarge?.color,
-                            ),
-                          ),
-                          if (postTime != null)
-                            Text(
-                              timeago.format(postTime),
-                              style: TextStyle(
-                                color: Colors.grey[500],
-                                fontSize: 12,
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          // Navigate to user profile
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => UserProfileScreen(
+                                userId: widget.post['user_id'],
                               ),
                             ),
-                        ],
+                          );
+                        },
+                        child: CircleAvatar(
+                          radius: 20,
+                          backgroundColor: Colors.grey[100],
+                          backgroundImage:
+                              avatarUrl != null && avatarUrl.isNotEmpty
+                              ? CachedNetworkImageProvider(avatarUrl)
+                              : null,
+                          child: avatarUrl == null || avatarUrl.isEmpty
+                              ? Text(
+                                  displayName.isNotEmpty
+                                      ? displayName[0].toUpperCase()
+                                      : 'U',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).textTheme.bodyLarge?.color,
+                                  ),
+                                )
+                              : null,
+                        ),
                       ),
-                    ),
-                    // More options menu (only show for post owner)
-                    if (widget.post['user_id'] ==
-                        SupabaseConfig.client.auth.currentUser?.id)
-                      PopupMenuButton<String>(
-                        icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
-                        onSelected: (value) async {
-                          if (value == 'edit') {
-                            final result = await Navigator.of(context)
-                                .push<Map<String, dynamic>?>(
-                                  PageRouteBuilder(
-                                    opaque: false,
-                                    barrierDismissible: true,
-                                    barrierColor: Colors.black54,
-                                    transitionDuration: const Duration(
-                                      milliseconds: 300,
-                                    ),
-                                    reverseTransitionDuration: const Duration(
-                                      milliseconds: 250,
-                                    ),
-                                    pageBuilder:
-                                        (
-                                          context,
-                                          animation,
-                                          secondaryAnimation,
-                                        ) {
-                                          return EditPostModal(
-                                            post: widget.post,
-                                          );
-                                        },
-                                    transitionsBuilder:
-                                        (
-                                          context,
-                                          animation,
-                                          secondaryAnimation,
-                                          child,
-                                        ) {
-                                          return FadeTransition(
-                                            opacity: CurvedAnimation(
-                                              parent: animation,
-                                              curve: Curves.easeOut,
-                                            ),
-                                            child: child,
-                                          );
-                                        },
-                                  ),
-                                );
-                            if (result != null && mounted) {
-                              widget.onPostEdited?.call(result);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Post updated')),
-                              );
-                            }
-                          } else if (value == 'delete') {
-                            final confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Delete Post'),
-                                content: const Text(
-                                  'Are you sure you want to delete this post?',
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              displayName,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodyLarge?.color,
+                              ),
+                            ),
+                            if (postTime != null)
+                              Text(
+                                timeago.format(postTime),
+                                style: TextStyle(
+                                  color: Colors.grey[500],
+                                  fontSize: 12,
                                 ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, true),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: Colors.red,
+                              ),
+                          ],
+                        ),
+                      ),
+                      // More options menu (only show for post owner)
+                      if (widget.post['user_id'] ==
+                          SupabaseConfig.client.auth.currentUser?.id)
+                        PopupMenuButton<String>(
+                          icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
+                          onSelected: (value) async {
+                            if (value == 'edit') {
+                              final result = await Navigator.of(context)
+                                  .push<Map<String, dynamic>?>(
+                                    PageRouteBuilder(
+                                      opaque: false,
+                                      barrierDismissible: true,
+                                      barrierColor: Colors.black54,
+                                      transitionDuration: const Duration(
+                                        milliseconds: 300,
+                                      ),
+                                      reverseTransitionDuration: const Duration(
+                                        milliseconds: 250,
+                                      ),
+                                      pageBuilder:
+                                          (
+                                            context,
+                                            animation,
+                                            secondaryAnimation,
+                                          ) {
+                                            return EditPostModal(
+                                              post: widget.post,
+                                            );
+                                          },
+                                      transitionsBuilder:
+                                          (
+                                            context,
+                                            animation,
+                                            secondaryAnimation,
+                                            child,
+                                          ) {
+                                            return FadeTransition(
+                                              opacity: CurvedAnimation(
+                                                parent: animation,
+                                                curve: Curves.easeOut,
+                                              ),
+                                              child: child,
+                                            );
+                                          },
                                     ),
-                                    child: const Text('Delete'),
+                                  );
+                              if (result != null && mounted) {
+                                widget.onPostEdited?.call(result);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Post updated')),
+                                );
+                              }
+                            } else if (value == 'delete') {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Delete Post'),
+                                  content: const Text(
+                                    'Are you sure you want to delete this post?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                      ),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              );
+
+                              if (confirm == true && context.mounted) {
+                                final success = await SocialService()
+                                    .deletePost(widget.post['id']);
+                                if (success && context.mounted) {
+                                  widget.onPostDeleted?.call(widget.post['id']);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Post deleted'),
+                                    ),
+                                  );
+                                }
+                              }
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.edit_outlined,
+                                    color: Colors.black87,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('Edit Post'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete_outline, color: Colors.red),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Delete Post',
+                                    style: TextStyle(color: Colors.red),
                                   ),
                                 ],
                               ),
-                            );
-
-                            if (confirm == true && context.mounted) {
-                              final success = await SocialService().deletePost(
-                                widget.post['id'],
+                            ),
+                          ],
+                        )
+                      else
+                        PopupMenuButton<String>(
+                          icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
+                          onSelected: (value) {
+                            if (value == 'report') {
+                              ReportModal.show(
+                                context,
+                                targetType: 'post',
+                                targetId: widget.post['id'],
+                                targetName: 'Post by $displayName',
                               );
-                              if (success && context.mounted) {
-                                widget.onPostDeleted?.call(widget.post['id']);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Post deleted')),
-                                );
-                              }
                             }
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'edit',
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.edit_outlined,
-                                  color: Colors.black87,
-                                ),
-                                SizedBox(width: 8),
-                                Text('Edit Post'),
-                              ],
+                          },
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'report',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.flag_outlined, color: Colors.red),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Report Post',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Row(
-                              children: [
-                                Icon(Icons.delete_outline, color: Colors.red),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Delete Post',
-                                  style: TextStyle(color: Colors.red),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      PopupMenuButton<String>(
-                        icon: Icon(Icons.more_horiz, color: Colors.grey[400]),
-                        onSelected: (value) {
-                          if (value == 'report') {
-                            ReportModal.show(
-                              context,
-                              targetType: 'post',
-                              targetId: widget.post['id'],
-                              targetName: 'Post by $displayName',
-                            );
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'report',
-                            child: Row(
-                              children: [
-                                Icon(Icons.flag_outlined, color: Colors.red),
-                                SizedBox(width: 8),
-                                Text('Report Post', style: TextStyle(color: Colors.red)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
+                          ],
+                        ),
+                    ],
+                  ),
                 ),
 
                 const SizedBox(height: 12),
@@ -453,7 +457,11 @@ class _SocialPostCardState extends State<SocialPostCard> {
                           );
                         } catch (e) {
                           debugPrint('Error parsing event: $e');
-                          ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not open event');
+                          ErrorHandler.showError(
+                            context,
+                            error: e,
+                            fallbackMessage: 'Could not open event',
+                          );
                         }
                       },
                       onImageTap: () {
@@ -495,33 +503,34 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
                 // GIF Display (mutually exclusive with images)
                 if (gifUrl != null && gifUrl.isNotEmpty) ...[
-                  Image.network(
-                    gifUrl,
-                    width: double.infinity,
-                    fit: BoxFit.fitWidth,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Container(
-                        height: 250,
-                        color: Colors.grey[200],
-                        child: const Center(
-                          child: CircularProgressIndicator(),
+                  AspectRatio(
+                    aspectRatio: 4 / 5,
+                    child: Image.network(
+                      gifUrl,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Container(
+                          color: Colors.grey[200],
+                          child: const Center(
+                            child: CircularProgressIndicator(),
                           ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        height: 250,
-                        color: Colors.grey[100],
-                        child: Center(
-                          child: Icon(
-                            Icons.gif_box_outlined,
-                            color: Colors.grey[400],
-                            size: 40,
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          color: Colors.grey[100],
+                          child: Center(
+                            child: Icon(
+                              Icons.gif_box_outlined,
+                              color: Colors.grey[400],
+                              size: 40,
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -628,7 +637,9 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    _isMuted
+                        ? Icons.volume_off_rounded
+                        : Icons.volume_up_rounded,
                     color: Colors.white,
                     size: 18,
                   ),
@@ -650,7 +661,14 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   children: [
                     Icon(Icons.videocam_rounded, size: 14, color: Colors.white),
                     SizedBox(width: 4),
-                    Text('Video', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                    Text(
+                      'Video',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -663,34 +681,28 @@ class _SocialPostCardState extends State<SocialPostCard> {
     // Loading / fallback state — show poster with loading spinner
     return GestureDetector(
       onTap: () => _openVideoPlayer(videoUrl),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (posterUrl != null && posterUrl.isNotEmpty)
-            CachedNetworkImage(
-              imageUrl: posterUrl,
-              width: double.infinity,
-              height: 250,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => Container(
-                height: 250,
+      child: AspectRatio(
+        aspectRatio: 4 / 5,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (posterUrl != null && posterUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: posterUrl,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) =>
+                    Container(color: Colors.grey[900]),
+              )
+            else
+              Container(
                 color: Colors.grey[900],
+                child: Icon(Icons.videocam, color: Colors.grey[600], size: 48),
               ),
-            )
-          else
-            Container(
-              height: 250,
-              width: double.infinity,
-              color: Colors.grey[900],
-              child: Icon(Icons.videocam, color: Colors.grey[600], size: 48),
-            ),
-          Container(
-            height: 250,
-            width: double.infinity,
-            color: Colors.black.withOpacity(0.3),
-          ),
-          const CircularProgressIndicator(color: Colors.white),
-        ],
+            Container(color: Colors.black.withOpacity(0.3)),
+            const Center(child: CircularProgressIndicator(color: Colors.white)),
+          ],
+        ),
       ),
     );
   }
@@ -708,7 +720,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
   Widget _buildImageCollage(List<String> imageUrls, {bool isStory = false}) {
     if (imageUrls.isEmpty) return const SizedBox.shrink();
 
-    // Single image - full width
+    // Single image — Instagram-style: 4:5 portrait (tallest allowed), cover crop
     if (imageUrls.length == 1) {
       return GestureDetector(
         onTap: () {
@@ -720,16 +732,18 @@ class _SocialPostCardState extends State<SocialPostCard> {
         },
         child: Stack(
           children: [
-            CachedNetworkImage(
-              imageUrl: imageUrls[0],
-              width: double.infinity,
-              fit: BoxFit.fitWidth,
-              placeholder: (context, url) => Container(
-                height: 250,
-                color: Colors.grey[200],
-                child: const Center(child: CircularProgressIndicator()),
+            AspectRatio(
+              aspectRatio: 4 / 5,
+              child: CachedNetworkImage(
+                imageUrl: imageUrls[0],
+                width: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[200],
+                  child: const Center(child: CircularProgressIndicator()),
+                ),
+                errorWidget: (context, url, error) => _buildErrorImage(),
               ),
-              errorWidget: (context, url, error) => _buildErrorImage(),
             ),
             // Story indicator badge
             if (isStory)
@@ -737,7 +751,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
                 top: 12,
                 left: 12,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.6),
                     borderRadius: BorderRadius.circular(8),
@@ -747,7 +764,14 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     children: [
                       Icon(Icons.location_on, size: 14, color: Colors.white),
                       SizedBox(width: 4),
-                      Text('Story', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                      Text(
+                        'Story',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -757,131 +781,61 @@ class _SocialPostCardState extends State<SocialPostCard> {
       );
     }
 
-    // Two images - side by side
+    // Two images - side by side, 1:1 square crops (Instagram style)
     if (imageUrls.length == 2) {
-      return ClipRRect(
-        child: SizedBox(
-          height: 300,
-          child: Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => _openImageViewer(imageUrls, 0),
-                  child: CachedNetworkImage(
-                    imageUrl: imageUrls[0],
-                    height: 250,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => Container(
-                      color: Colors.grey[200],
-                      child: const Center(child: CircularProgressIndicator()),
-                    ),
+      return AspectRatio(
+        aspectRatio: 2 / 1,
+        child: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => _openImageViewer(imageUrls, 0),
+                child: CachedNetworkImage(
+                  imageUrl: imageUrls[0],
+                  height: double.infinity,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(
+                    color: Colors.grey[200],
+                    child: const Center(child: CircularProgressIndicator()),
                   ),
                 ),
               ),
-              const SizedBox(width: 2),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => _openImageViewer(imageUrls, 1),
-                  child: CachedNetworkImage(
-                    imageUrl: imageUrls[1],
-                    height: 250,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => Container(
-                      color: Colors.grey[200],
-                      child: const Center(child: CircularProgressIndicator()),
-                    ),
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: GestureDetector(
+                onTap: () => _openImageViewer(imageUrls, 1),
+                child: CachedNetworkImage(
+                  imageUrl: imageUrls[1],
+                  height: double.infinity,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(
+                    color: Colors.grey[200],
+                    child: const Center(child: CircularProgressIndicator()),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       );
     }
 
     // Three images - 1 large on left, 2 stacked on right
     if (imageUrls.length == 3) {
-      return ClipRRect(
-        child: SizedBox(
-          height: 300,
-          child: Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: GestureDetector(
-                  onTap: () => _openImageViewer(imageUrls, 0),
-                  child: CachedNetworkImage(
-                    imageUrl: imageUrls[0],
-                    height: 250,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 2),
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => _openImageViewer(imageUrls, 1),
-                        child: CachedNetworkImage(
-                          imageUrl: imageUrls[1],
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => _openImageViewer(imageUrls, 2),
-                        child: CachedNetworkImage(
-                          imageUrl: imageUrls[2],
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Four+ images - 2x2 grid, with "+X" overlay for more
-    return ClipRRect(
-      child: SizedBox(
-        height: 300,
+      return AspectRatio(
+        aspectRatio: 4 / 3,
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => _openImageViewer(imageUrls, 0),
-                      child: CachedNetworkImage(
-                        imageUrl: imageUrls[0],
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => _openImageViewer(imageUrls, 2),
-                      child: CachedNetworkImage(
-                        imageUrl: imageUrls[2],
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                ],
+              flex: 2,
+              child: GestureDetector(
+                onTap: () => _openImageViewer(imageUrls, 0),
+                child: CachedNetworkImage(
+                  imageUrl: imageUrls[0],
+                  height: 250,
+                  fit: BoxFit.cover,
+                ),
               ),
             ),
             const SizedBox(width: 2),
@@ -901,29 +855,11 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   const SizedBox(height: 2),
                   Expanded(
                     child: GestureDetector(
-                      onTap: () => _openImageViewer(imageUrls, 3),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          CachedNetworkImage(
-                            imageUrl: imageUrls[3],
-                            fit: BoxFit.cover,
-                          ),
-                          if (imageUrls.length > 4)
-                            Container(
-                              color: Colors.black.withOpacity(0.6),
-                              child: Center(
-                                child: Text(
-                                  '+${imageUrls.length - 4}',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
+                      onTap: () => _openImageViewer(imageUrls, 2),
+                      child: CachedNetworkImage(
+                        imageUrl: imageUrls[2],
+                        width: double.infinity,
+                        fit: BoxFit.cover,
                       ),
                     ),
                   ),
@@ -932,6 +868,88 @@ class _SocialPostCardState extends State<SocialPostCard> {
             ),
           ],
         ),
+      );
+    }
+
+    // Four+ images - 2x2 grid, with "+X" overlay for more
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _openImageViewer(imageUrls, 0),
+                    child: CachedNetworkImage(
+                      imageUrl: imageUrls[0],
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _openImageViewer(imageUrls, 2),
+                    child: CachedNetworkImage(
+                      imageUrl: imageUrls[2],
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 2),
+          Expanded(
+            child: Column(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _openImageViewer(imageUrls, 1),
+                    child: CachedNetworkImage(
+                      imageUrl: imageUrls[1],
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _openImageViewer(imageUrls, 3),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        CachedNetworkImage(
+                          imageUrl: imageUrls[3],
+                          fit: BoxFit.cover,
+                        ),
+                        if (imageUrls.length > 4)
+                          Container(
+                            color: Colors.black.withOpacity(0.6),
+                            child: Center(
+                              child: Text(
+                                '+${imageUrls.length - 4}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

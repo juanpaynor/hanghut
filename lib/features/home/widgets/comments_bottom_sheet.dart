@@ -105,7 +105,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
     setState(() => _isLoading = true);
     try {
-      final result = await SocialService().getComments(postId, limit: _pageSize, offset: 0);
+      final result = await SocialService().getComments(
+        postId,
+        limit: _pageSize,
+        offset: 0,
+      );
       if (mounted) {
         setState(() {
           _comments = List<Map<String, dynamic>>.from(result['comments'] ?? []);
@@ -133,7 +137,9 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       );
       if (mounted) {
         setState(() {
-          final newComments = List<Map<String, dynamic>>.from(result['comments'] ?? []);
+          final newComments = List<Map<String, dynamic>>.from(
+            result['comments'] ?? [],
+          );
           _comments.addAll(newComments);
           _hasMore = result['hasMore'] ?? false;
           _isLoadingMore = false;
@@ -147,7 +153,8 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
   Future<void> _postComment() async {
     final text = _commentController.text.trim();
-    if (text.isEmpty && _selectedImage == null && _selectedGifUrl == null) return;
+    if (text.isEmpty && _selectedImage == null && _selectedGifUrl == null)
+      return;
 
     setState(() => _isPosting = true);
 
@@ -158,7 +165,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       // Resolve @mentions to UUIDs
       List<String>? mentionedUserIds;
       final mentionRegex = RegExp(r'@([a-zA-Z0-9_]+)');
-      final usernames = mentionRegex.allMatches(text).map((m) => m.group(1)!).toSet().toList();
+      final usernames = mentionRegex
+          .allMatches(text)
+          .map((m) => m.group(1)!)
+          .toSet()
+          .toList();
       if (usernames.isNotEmpty) {
         final usernameToId = await SocialService().resolveUsernames(usernames);
         mentionedUserIds = usernameToId.values.toList();
@@ -237,7 +248,9 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     final newText = '${text.substring(0, atIndex)}@$username $afterCursor';
     _commentController.text = newText;
     final newCursorPos = atIndex + username.length + 2;
-    _commentController.selection = TextSelection.collapsed(offset: newCursorPos);
+    _commentController.selection = TextSelection.collapsed(
+      offset: newCursorPos,
+    );
     _hideMentionOverlay();
   }
 
@@ -427,7 +440,8 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 : ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.all(16),
-                    itemCount: _parentComments.length + (_isLoadingMore ? 1 : 0),
+                    itemCount:
+                        _parentComments.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (index == _parentComments.length) {
                         return const Padding(
@@ -457,7 +471,13 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+        border: Border(
+          bottom: BorderSide(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? Colors.grey[800]!
+                : Colors.grey[200]!,
+          ),
+        ),
       ),
       child: Row(
         children: [
@@ -521,7 +541,12 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             child: Container(
               decoration: BoxDecoration(
                 border: Border(
-                  left: BorderSide(color: Colors.grey[300]!, width: 2),
+                  left: BorderSide(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.grey[700]!
+                        : Colors.grey[300]!,
+                    width: 2,
+                  ),
                 ),
               ),
               child: Column(
@@ -655,7 +680,9 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.grey[100],
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF2A2A2A)
+                          : Colors.grey[100],
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Column(
@@ -674,11 +701,14 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                           style: TextStyle(
                             fontSize: 14,
                             height: 1.3,
-                            color: Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black,
+                            color:
+                                Theme.of(context).textTheme.bodyMedium?.color ??
+                                Colors.black,
                           ),
                         ),
                         // Attached image
-                        if (comment['image_url'] != null && (comment['image_url'] as String).isNotEmpty) ...[
+                        if (comment['image_url'] != null &&
+                            (comment['image_url'] as String).isNotEmpty) ...[
                           const SizedBox(height: 8),
                           GestureDetector(
                             onTap: () {
@@ -700,38 +730,54 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                                 placeholder: (context, url) => Container(
                                   height: 120,
                                   color: Colors.grey[200],
-                                  child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
                                 ),
                                 errorWidget: (context, url, error) => Container(
                                   height: 60,
                                   color: Colors.grey[100],
-                                  child: const Icon(Icons.broken_image, color: Colors.grey),
+                                  child: const Icon(
+                                    Icons.broken_image,
+                                    color: Colors.grey,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ],
                         // Attached GIF
-                        if (comment['gif_url'] != null && (comment['gif_url'] as String).isNotEmpty) ...[
+                        if (comment['gif_url'] != null &&
+                            (comment['gif_url'] as String).isNotEmpty) ...[
                           const SizedBox(height: 8),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(12),
                             child: Image.network(
                               comment['gif_url'],
                               fit: BoxFit.cover,
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return Container(
-                                  height: 100,
-                                  color: Colors.grey[200],
-                                  child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                                );
-                              },
+                              loadingBuilder:
+                                  (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return Container(
+                                      height: 100,
+                                      color: Colors.grey[200],
+                                      child: const Center(
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                    );
+                                  },
                               errorBuilder: (context, error, stackTrace) {
                                 return Container(
                                   height: 60,
                                   color: Colors.grey[100],
-                                  child: const Icon(Icons.gif_box_outlined, color: Colors.grey),
+                                  child: const Icon(
+                                    Icons.gif_box_outlined,
+                                    color: Colors.grey,
+                                  ),
                                 );
                               },
                             ),
@@ -937,12 +983,13 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             .eq('is_primary', true)
             .limit(1)
             .then((res) {
-          if (res.isNotEmpty && mounted) {
-            setState(() {
-              _currentUserAvatarUrl = res[0]['photo_url'] as String?;
-            });
-          }
-        }).catchError((_) {});
+              if (res.isNotEmpty && mounted) {
+                setState(() {
+                  _currentUserAvatarUrl = res[0]['photo_url'] as String?;
+                });
+              }
+            })
+            .catchError((_) {});
       }
     }
     final avatarUrl = _currentUserAvatarUrl;
@@ -1019,7 +1066,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                               color: Colors.black.withOpacity(0.7),
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.close,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -1050,7 +1101,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                               color: Colors.black.withOpacity(0.7),
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.close,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -1072,7 +1127,9 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             12,
             8,
             12,
-            8 + MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom,
+            8 +
+                MediaQuery.of(context).viewInsets.bottom +
+                MediaQuery.of(context).viewPadding.bottom,
           ),
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,

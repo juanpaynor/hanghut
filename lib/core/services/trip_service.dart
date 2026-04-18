@@ -1,10 +1,11 @@
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class TripService {
   final SupabaseClient _client = SupabaseConfig.client;
 
-  // Create a new trip
+  // Create a new trip and auto-match with other travelers
   Future<Map<String, dynamic>?> createTrip(
     Map<String, dynamic> tripData,
   ) async {
@@ -14,9 +15,24 @@ class TripService {
           .insert(tripData)
           .select()
           .single();
+
+      // Auto-match: find overlapping trips, create/join bucket chat, notify
+      try {
+        final matchResult = await _client.rpc(
+          'auto_match_trip',
+          params: {'p_trip_id': response['id']},
+        );
+        final result = matchResult as Map<String, dynamic>?;
+        if (result != null && result['matches_found'] != null) {
+          print('✅ Trip auto-match: ${result['matches_found']} matches found');
+        }
+      } catch (e) {
+        // Non-critical — trip is already created, matching is best-effort
+        print('⚠️ Trip auto-match failed: $e');
+      }
+
       return response;
     } catch (e) {
-      print('❌ Error creating trip: $e');
       rethrow;
     }
   }
@@ -30,12 +46,11 @@ class TripService {
       );
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
-      print('❌ Error fetching trip matches: $e');
       return [];
     }
   }
 
-  // Get user's trips
+  // Get user's trips — auto-syncs status based on current date
   Future<List<Map<String, dynamic>>> getUserTrips(String userId) async {
     try {
       final response = await _client
@@ -43,10 +58,46 @@ class TripService {
           .select()
           .eq('user_id', userId)
           .order('start_date', ascending: true);
-      return List<Map<String, dynamic>>.from(response);
+      final trips = List<Map<String, dynamic>>.from(response);
+
+      // Auto-update status based on today's date (client-side sync)
+      final now = DateTime.now();
+      final updates = <Future>[];
+      for (final trip in trips) {
+        final start = DateTime.parse(trip['start_date']);
+        final end = DateTime.parse(trip['end_date']);
+        String? newStatus;
+        if (now.isAfter(end) && trip['status'] != 'completed') {
+          newStatus = 'completed';
+        } else if (now.isAfter(start) &&
+            now.isBefore(end) &&
+            trip['status'] != 'active') {
+          newStatus = 'active';
+        }
+        if (newStatus != null) {
+          trip['status'] = newStatus;
+          updates.add(
+            _client
+                .from('user_trips')
+                .update({'status': newStatus})
+                .eq('id', trip['id']),
+          );
+        }
+      }
+      if (updates.isNotEmpty) await Future.wait(updates);
+      return trips;
     } catch (e) {
-      print('❌ Error fetching user trips: $e');
       return [];
+    }
+  }
+
+  // Update an existing trip
+  Future<bool> updateTrip(String tripId, Map<String, dynamic> data) async {
+    try {
+      await _client.from('user_trips').update(data).eq('id', tripId);
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 
@@ -56,7 +107,6 @@ class TripService {
       await _client.from('user_trips').delete().eq('id', tripId);
       return true;
     } catch (e) {
-      print('❌ Error deleting trip: $e');
       return false;
     }
   }
@@ -150,9 +200,10 @@ class TripService {
         }, onConflict: 'chat_id, user_id');
       }
 
+      AnalyticsService().logJoinTripChat(chat['id']);
+
       return {'channelId': bucketId, 'chatId': chat['id']};
     } catch (e) {
-      print('❌ Error joining trip chat: $e');
       return null;
     }
   }
@@ -174,7 +225,6 @@ class TripService {
 
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
-      print('❌ Error fetching my trip chats: $e');
       return [];
     }
   }

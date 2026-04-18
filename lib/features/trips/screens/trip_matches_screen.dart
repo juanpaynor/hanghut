@@ -96,8 +96,12 @@ class _TripMatchesScreenState extends State<TripMatchesScreen> {
   }
 
   Widget _buildMatchCard(Map<String, dynamic> match) {
-    final overlapDays = match['overlap_days'];
-    final matchScore = match['match_score'];
+    final overlapDays = match['overlap_days'] ?? 0;
+    final rawScore = match['match_score'];
+    // Compute client-side fallback if RPC doesn't return match_score
+    final matchScore = rawScore != null
+        ? rawScore as int
+        : (50 + ((overlapDays as int) * 10)).clamp(50, 95);
     final startDate = DateTime.parse(match['start_date']);
     final endDate = DateTime.parse(match['end_date']);
 

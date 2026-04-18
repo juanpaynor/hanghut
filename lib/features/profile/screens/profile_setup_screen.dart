@@ -279,7 +279,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not select photo');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Could not select photo',
+        );
       }
     }
   }
@@ -325,7 +329,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       return publicUrl;
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not upload photo');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Could not upload photo',
+        );
       }
       return null;
     }
@@ -387,7 +395,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         username: _usernameController.text.trim().isNotEmpty
             ? _usernameController.text.trim().toLowerCase()
             : null,
-        bio: _bioController.text,
+        bio: _bioController.text.trim(),
         dob: _dateOfBirth ?? DateTime(2000),
         gender: _genderIdentity ?? 'Prefer not to say',
         personality: personalityScores,
@@ -398,6 +406,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           'budget_max': 1000,
         },
         photoUrl: _uploadedPhotoUrl,
+        nationality: _selectedCountry != null
+            ? '${_selectedCountry!.flagEmoji} ${_selectedCountry!.name}'
+            : null,
       );
 
       // Play Confetti! 🎉
@@ -415,7 +426,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not save your profile');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Could not save your profile',
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -1205,7 +1220,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           ).animate().fadeIn(delay: 200.ms).moveY(begin: 20, end: 0),
 
           const SizedBox(height: 32),
-
 
           // Primary Goal
           const Text(

@@ -147,7 +147,11 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     } catch (e) {
       if (mounted) {
         HapticFeedback.heavyImpact();
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to sign in with Google. Please try again.');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Unable to sign in with Google. Please try again.',
+        );
       }
     }
   }
@@ -347,7 +351,7 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
                               },
                             ),
 
-                            const Spacer(flex: 2),
+                            const SizedBox(height: 20),
 
                             // FOOTER
                             Row(
@@ -377,7 +381,7 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 32),
+                            const Spacer(flex: 2),
                           ],
                         ),
                       ),

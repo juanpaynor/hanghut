@@ -25,6 +25,7 @@ class ChatMessageBubble extends StatelessWidget {
   final VoidCallback onReact; // Double tap quick react
   final Function(LinkableElement) onOpenLink;
   final Function(String userId)? onMentionTap;
+  final Function(String userId)? onAvatarTap;
   final List<Map<String, dynamic>> participants;
   final String searchQuery;
   final bool isCurrentMatch;
@@ -44,6 +45,7 @@ class ChatMessageBubble extends StatelessWidget {
     required this.onReact,
     required this.onOpenLink,
     this.onMentionTap,
+    this.onAvatarTap,
     this.participants = const [],
     this.searchQuery = '',
     this.isCurrentMatch = false,
@@ -64,13 +66,17 @@ class ChatMessageBubble extends StatelessWidget {
               padding: const EdgeInsets.only(right: 8, bottom: 4),
               child: GestureDetector(
                 onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          UserProfileScreen(userId: msg['senderId']),
-                    ),
-                  );
+                  if (onAvatarTap != null) {
+                    onAvatarTap!(msg['senderId']);
+                  } else {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            UserProfileScreen(userId: msg['senderId']),
+                      ),
+                    );
+                  }
                 },
                 child: CircleAvatar(
                   radius: 16,
@@ -277,7 +283,9 @@ class ChatMessageBubble extends StatelessWidget {
                                         else if (msg['contentType'] == 'image')
                                           GestureDetector(
                                             onTap: () => _showFullScreenImage(
-                                                context, msg['content'] as String),
+                                              context,
+                                              msg['content'] as String,
+                                            ),
                                             child: ClipRRect(
                                               borderRadius:
                                                   BorderRadius.circular(12),
@@ -371,45 +379,81 @@ class ChatMessageBubble extends StatelessWidget {
                                                       match.start,
                                                       match.end,
                                                     );
-                                                
+
                                                 // ✅ Detect image URLs (Supabase storage or common extensions)
-                                                final lowerUrl = url.toLowerCase();
-                                                final isImageUrl = lowerUrl.contains('/storage/v1/object/') ||
+                                                final lowerUrl = url
+                                                    .toLowerCase();
+                                                final isImageUrl =
+                                                    lowerUrl.contains(
+                                                      '/storage/v1/object/',
+                                                    ) ||
                                                     lowerUrl.endsWith('.jpg') ||
-                                                    lowerUrl.endsWith('.jpeg') ||
+                                                    lowerUrl.endsWith(
+                                                      '.jpeg',
+                                                    ) ||
                                                     lowerUrl.endsWith('.png') ||
                                                     lowerUrl.endsWith('.gif') ||
-                                                    lowerUrl.endsWith('.webp') ||
-                                                    lowerUrl.contains('.jpg?') ||
-                                                    lowerUrl.contains('.jpeg?') ||
-                                                    lowerUrl.contains('.png?') ||
+                                                    lowerUrl.endsWith(
+                                                      '.webp',
+                                                    ) ||
+                                                    lowerUrl.contains(
+                                                      '.jpg?',
+                                                    ) ||
+                                                    lowerUrl.contains(
+                                                      '.jpeg?',
+                                                    ) ||
+                                                    lowerUrl.contains(
+                                                      '.png?',
+                                                    ) ||
                                                     lowerUrl.contains('.webp?');
-                                                
+
                                                 if (isImageUrl) {
                                                   // Render as inline image instead of link preview
                                                   return Padding(
-                                                    padding: const EdgeInsets.only(top: 8.0),
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          top: 8.0,
+                                                        ),
                                                     child: GestureDetector(
-                                                      onTap: () => _showFullScreenImage(context, url),
+                                                      onTap: () =>
+                                                          _showFullScreenImage(
+                                                            context,
+                                                            url,
+                                                          ),
                                                       child: ClipRRect(
-                                                        borderRadius: BorderRadius.circular(12),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              12,
+                                                            ),
                                                         child: CachedNetworkImage(
                                                           imageUrl: url,
                                                           width: 220,
                                                           fit: BoxFit.cover,
-                                                          placeholder: (context, url) =>
-                                                              Container(
+                                                          placeholder:
+                                                              (
+                                                                context,
+                                                                url,
+                                                              ) => Container(
                                                                 width: 220,
                                                                 height: 160,
-                                                                color: Colors.grey[200],
+                                                                color: Colors
+                                                                    .grey[200],
                                                                 child: const Center(
                                                                   child: CircularProgressIndicator(
-                                                                    strokeWidth: 2,
+                                                                    strokeWidth:
+                                                                        2,
                                                                   ),
                                                                 ),
                                                               ),
-                                                          errorWidget: (context, url, error) =>
-                                                              const Icon(Icons.broken_image),
+                                                          errorWidget:
+                                                              (
+                                                                context,
+                                                                url,
+                                                                error,
+                                                              ) => const Icon(
+                                                                Icons
+                                                                    .broken_image,
+                                                              ),
                                                         ),
                                                       ),
                                                     ),
@@ -430,7 +474,8 @@ class ChatMessageBubble extends StatelessWidget {
                                                     bodyTextOverflow:
                                                         TextOverflow.ellipsis,
                                                     cache: const Duration(
-                                                        days: 7),
+                                                      days: 7,
+                                                    ),
                                                     titleStyle: TextStyle(
                                                       color: isMe
                                                           ? Colors.black87
@@ -542,17 +587,13 @@ class ChatMessageBubble extends StatelessWidget {
   }
 
   /// Build text with @mentions highlighted and tappable
-  Widget _buildMentionAwareText(
-    BuildContext context,
-    String text,
-    bool isMe,
-  ) {
+  Widget _buildMentionAwareText(BuildContext context, String text, bool isMe) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final defaultColor = isMe
         ? Colors.white
         : isDark
-            ? Colors.white
-            : Colors.black87;
+        ? Colors.white
+        : Colors.black87;
     final mentionColor = isMe ? Colors.amber[200]! : Colors.indigo;
     final linkColor = isMe ? Colors.white : Colors.blue;
 
@@ -571,13 +612,15 @@ class ChatMessageBubble extends StatelessWidget {
     final allMatches = <_TextMatch>[];
 
     for (final match in mentionRegex.allMatches(text)) {
-      allMatches.add(_TextMatch(
-        start: match.start,
-        end: match.end,
-        text: match.group(0)!,
-        type: _MatchType.mention,
-        name: match.group(1)!.trim(),
-      ));
+      allMatches.add(
+        _TextMatch(
+          start: match.start,
+          end: match.end,
+          text: match.group(0)!,
+          type: _MatchType.mention,
+          name: match.group(1)!.trim(),
+        ),
+      );
     }
 
     for (final match in urlRegex.allMatches(text)) {
@@ -586,12 +629,14 @@ class ChatMessageBubble extends StatelessWidget {
         (m) => m.start <= match.start && m.end >= match.end,
       );
       if (!overlaps) {
-        allMatches.add(_TextMatch(
-          start: match.start,
-          end: match.end,
-          text: match.group(0)!,
-          type: _MatchType.url,
-        ));
+        allMatches.add(
+          _TextMatch(
+            start: match.start,
+            end: match.end,
+            text: match.group(0)!,
+            type: _MatchType.url,
+          ),
+        );
       }
     }
 
@@ -600,50 +645,56 @@ class ChatMessageBubble extends StatelessWidget {
     for (final match in allMatches) {
       // Add plain text before this match
       if (match.start > lastEnd) {
-        spans.add(TextSpan(
-          text: text.substring(lastEnd, match.start),
-          style: TextStyle(color: defaultColor, fontSize: 15),
-        ));
+        spans.add(
+          TextSpan(
+            text: text.substring(lastEnd, match.start),
+            style: TextStyle(color: defaultColor, fontSize: 15),
+          ),
+        );
       }
 
       if (match.type == _MatchType.mention) {
         // Find userId for this mention
         final userId = _resolveUserId(match.name ?? '');
-        spans.add(WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          child: GestureDetector(
-            onTap: userId != null && onMentionTap != null
-                ? () => onMentionTap!(userId)
-                : null,
-            child: Text(
-              match.text,
-              style: TextStyle(
-                color: mentionColor,
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: GestureDetector(
+              onTap: userId != null && onMentionTap != null
+                  ? () => onMentionTap!(userId)
+                  : null,
+              child: Text(
+                match.text,
+                style: TextStyle(
+                  color: mentionColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
-        ));
+        );
       } else {
         // URL
-        spans.add(WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          child: GestureDetector(
-            onTap: () => onOpenLink(LinkableElement(match.text, match.text)),
-            child: Text(
-              match.text,
-              style: TextStyle(
-                color: linkColor,
-                fontSize: 15,
-                decoration: TextDecoration.underline,
-                decorationColor: linkColor,
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: GestureDetector(
+              onTap: () => onOpenLink(LinkableElement(match.text, match.text)),
+              child: Text(
+                match.text,
+                style: TextStyle(
+                  color: linkColor,
+                  fontSize: 15,
+                  decoration: TextDecoration.underline,
+                  decorationColor: linkColor,
+                ),
               ),
             ),
           ),
-        ));
+        );
       }
 
       lastEnd = match.end;
@@ -651,17 +702,21 @@ class ChatMessageBubble extends StatelessWidget {
 
     // Add remaining text
     if (lastEnd < text.length) {
-      spans.add(TextSpan(
-        text: text.substring(lastEnd),
-        style: TextStyle(color: defaultColor, fontSize: 15),
-      ));
+      spans.add(
+        TextSpan(
+          text: text.substring(lastEnd),
+          style: TextStyle(color: defaultColor, fontSize: 15),
+        ),
+      );
     }
 
     if (spans.isEmpty) {
-      spans.add(TextSpan(
-        text: text,
-        style: TextStyle(color: defaultColor, fontSize: 15),
-      ));
+      spans.add(
+        TextSpan(
+          text: text,
+          style: TextStyle(color: defaultColor, fontSize: 15),
+        ),
+      );
     }
 
     // Apply search highlighting if a query is active
@@ -670,7 +725,10 @@ class ChatMessageBubble extends StatelessWidget {
       for (final span in spans) {
         if (span is TextSpan && span.text != null && span.text!.isNotEmpty) {
           highlightedSpans.addAll(
-            _highlightSearchMatches(span.text!, span.style ?? TextStyle(color: defaultColor, fontSize: 15)),
+            _highlightSearchMatches(
+              span.text!,
+              span.style ?? TextStyle(color: defaultColor, fontSize: 15),
+            ),
           );
         } else {
           highlightedSpans.add(span);
@@ -695,19 +753,23 @@ class ChatMessageBubble extends StatelessWidget {
 
       // Text before the match
       if (idx > start) {
-        result.add(TextSpan(text: text.substring(start, idx), style: baseStyle));
+        result.add(
+          TextSpan(text: text.substring(start, idx), style: baseStyle),
+        );
       }
 
       // The matched text (use original casing)
-      result.add(TextSpan(
-        text: text.substring(idx, idx + query.length),
-        style: baseStyle.copyWith(
-          backgroundColor: isCurrentMatch
-              ? Colors.yellow.withValues(alpha: 0.9)
-              : Colors.yellow.withValues(alpha: 0.45),
-          color: Colors.black87,
+      result.add(
+        TextSpan(
+          text: text.substring(idx, idx + query.length),
+          style: baseStyle.copyWith(
+            backgroundColor: isCurrentMatch
+                ? Colors.yellow.withValues(alpha: 0.9)
+                : Colors.yellow.withValues(alpha: 0.45),
+            color: Colors.black87,
+          ),
         ),
-      ));
+      );
 
       start = idx + query.length;
     }
@@ -752,26 +814,28 @@ class _TextMatch {
 
 /// Shows a full-screen image viewer when a chat image is tapped.
 void _showFullScreenImage(BuildContext context, String imageUrl) {
-  Navigator.of(context).push(MaterialPageRoute(
-    fullscreenDialog: true,
-    builder: (context) => Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (context) => Scaffold(
         backgroundColor: Colors.black,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          child: CachedNetworkImage(
-            imageUrl: imageUrl,
-            fit: BoxFit.contain,
-            placeholder: (context, url) =>
-                const CircularProgressIndicator(color: Colors.white),
-            errorWidget: (context, url, error) =>
-                const Icon(Icons.broken_image, color: Colors.white, size: 64),
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          iconTheme: const IconThemeData(color: Colors.white),
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            child: CachedNetworkImage(
+              imageUrl: imageUrl,
+              fit: BoxFit.contain,
+              placeholder: (context, url) =>
+                  const CircularProgressIndicator(color: Colors.white),
+              errorWidget: (context, url, error) =>
+                  const Icon(Icons.broken_image, color: Colors.white, size: 64),
+            ),
           ),
         ),
       ),
     ),
-  ));
+  );
 }

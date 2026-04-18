@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
+import 'package:bitemates/features/gamification/services/badge_service.dart';
 
 class TableMemberService {
   // Helper: get user display name for notification copy
@@ -51,11 +53,13 @@ class TableMemberService {
               .eq('user_id', user.id);
 
           // Notify friends asynchronously after re-join
-          final tableTitle = (await SupabaseConfig.client
+          final tableTitle =
+              (await SupabaseConfig.client
                   .from('tables')
                   .select('title')
                   .eq('id', tableId)
-                  .maybeSingle())?['title'] ?? 'an activity';
+                  .maybeSingle())?['title'] ??
+              'an activity';
           FriendsGoingService().notifyFriendsOfJoin(
             entityType: 'table',
             entityId: tableId,
@@ -81,7 +85,9 @@ class TableMemberService {
       // Get table info to check status, capacity, and approval setting
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('status, max_guests, title, location_name, host_id, datetime, requires_approval, visibility, filters')
+          .select(
+            'status, max_guests, title, location_name, host_id, datetime, requires_approval, visibility, filters, latitude, longitude, max_join_distance_km',
+          )
           .eq('id', tableId)
           .single();
 
@@ -106,8 +112,53 @@ class TableMemberService {
         if (followCheck == null) {
           return {
             'success': false,
-            'message': 'This hangout is for followers only. Follow the host first!',
+            'message':
+                'This hangout is for followers only. Follow the host first!',
           };
+        }
+      }
+
+      // ═══ Location Distance Check ═══
+      final tableLat = (table['latitude'] as num?)?.toDouble();
+      final tableLng = (table['longitude'] as num?)?.toDouble();
+      final maxDistKm =
+          (table['max_join_distance_km'] as num?)?.toDouble() ??
+          100.0; // default 100km
+      if (tableLat != null && tableLng != null) {
+        try {
+          bool locationPermissionOk = false;
+          LocationPermission permission = await Geolocator.checkPermission();
+          if (permission == LocationPermission.denied) {
+            permission = await Geolocator.requestPermission();
+          }
+          if (permission == LocationPermission.whileInUse ||
+              permission == LocationPermission.always) {
+            locationPermissionOk = true;
+          }
+          if (locationPermissionOk) {
+            final pos = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.low,
+              ),
+            );
+            final distanceMeters = Geolocator.distanceBetween(
+              pos.latitude,
+              pos.longitude,
+              tableLat,
+              tableLng,
+            );
+            final distanceKm = distanceMeters / 1000.0;
+            if (distanceKm > maxDistKm) {
+              return {
+                'success': false,
+                'message':
+                    'You are too far away to join this hangout (${distanceKm.toStringAsFixed(0)} km away, max ${maxDistKm.toStringAsFixed(0)} km).',
+              };
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ Location check skipped: $e');
+          // Non-fatal: if location check fails, allow join
         }
       }
 
@@ -128,15 +179,21 @@ class TableMemberService {
           // Gender check
           final genderFilter = filters['gender'] as String?;
           if (genderFilter != null && genderFilter != 'everyone') {
-            final userGender = (userProfile['gender_identity'] as String?)?.toLowerCase() ?? '';
+            final userGender =
+                (userProfile['gender_identity'] as String?)?.toLowerCase() ??
+                '';
             bool genderMatch = false;
-            if (genderFilter == 'women_only' && userGender == 'female') genderMatch = true;
-            if (genderFilter == 'men_only' && userGender == 'male') genderMatch = true;
-            if (genderFilter == 'nonbinary_only' && userGender == 'non-binary') genderMatch = true;
+            if (genderFilter == 'women_only' && userGender == 'female')
+              genderMatch = true;
+            if (genderFilter == 'men_only' && userGender == 'male')
+              genderMatch = true;
+            if (genderFilter == 'nonbinary_only' && userGender == 'non-binary')
+              genderMatch = true;
             if (!genderMatch) {
               return {
                 'success': false,
-                'message': 'This hangout has a gender requirement you don\'t match.',
+                'message':
+                    'This hangout has a gender requirement you don\'t match.',
               };
             }
           }
@@ -151,13 +208,16 @@ class TableMemberService {
               if (dob != null) {
                 final now = DateTime.now();
                 int age = now.year - dob.year;
-                if (now.month < dob.month || (now.month == dob.month && now.day < dob.day)) {
+                if (now.month < dob.month ||
+                    (now.month == dob.month && now.day < dob.day)) {
                   age--;
                 }
-                if ((ageMin != null && age < ageMin) || (ageMax != null && age > ageMax)) {
+                if ((ageMin != null && age < ageMin) ||
+                    (ageMax != null && age > ageMax)) {
                   return {
                     'success': false,
-                    'message': 'This hangout has an age requirement ($ageMin–$ageMax) you don\'t match.',
+                    'message':
+                        'This hangout has an age requirement ($ageMin–$ageMax) you don\'t match.',
                   };
                 }
               }
@@ -209,7 +269,10 @@ class TableMemberService {
           // Non-critical
         }
 
-        return {'success': true, 'message': 'Request sent! The host will review it.'};
+        return {
+          'success': true,
+          'message': 'Request sent! The host will review it.',
+        };
       }
 
       // No approval required — auto-join
@@ -238,6 +301,11 @@ class TableMemberService {
         entityId: tableId,
         entityTitle: tableTitle,
       );
+
+      // Award XP for joining an event
+      BadgeService()
+          .incrementStats(user.id, attended: 1, baseXp: XpValues.joinEvent)
+          .ignore();
 
       return {'success': true, 'message': 'Successfully joined the table!'};
     } catch (e) {
@@ -347,6 +415,54 @@ class TableMemberService {
   }
 
   // Remove a member (host only)
+  /// Host invites a user directly — skips approval, sets status to 'joined'
+  Future<Map<String, dynamic>> inviteUserToTable(
+    String tableId,
+    String userId,
+  ) async {
+    try {
+      final existing = await SupabaseConfig.client
+          .from('table_members')
+          .select('status')
+          .eq('table_id', tableId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+      if (existing != null) {
+        final status = existing['status'] as String;
+        if (status == 'joined' ||
+            status == 'approved' ||
+            status == 'attended') {
+          return {'success': false, 'message': 'User is already a member'};
+        }
+        // Re-activate removed/left member
+        await SupabaseConfig.client
+            .from('table_members')
+            .update({
+              'status': 'joined',
+              'joined_at': DateTime.now().toIso8601String(),
+              'approved_at': DateTime.now().toIso8601String(),
+              'left_at': null,
+            })
+            .eq('table_id', tableId)
+            .eq('user_id', userId);
+      } else {
+        await SupabaseConfig.client.from('table_members').insert({
+          'table_id': tableId,
+          'user_id': userId,
+          'status': 'joined',
+          'role': 'member',
+          'joined_at': DateTime.now().toIso8601String(),
+          'approved_at': DateTime.now().toIso8601String(),
+        });
+      }
+      return {'success': true, 'message': 'User added to hangout'};
+    } catch (e) {
+      debugPrint('⚠️ Error inviting user: $e');
+      return {'success': false, 'message': 'Failed to invite user'};
+    }
+  }
+
   Future<Map<String, dynamic>> removeMember(
     String tableId,
     String userId,
@@ -505,6 +621,59 @@ class TableMemberService {
     } catch (e) {
       debugPrint('⚠️ Error declining invite: $e');
       return {'success': false, 'message': 'Failed to decline invite'};
+    }
+  }
+
+  /// Mute a participant in a table chat (host only)
+  Future<Map<String, dynamic>> muteParticipant(
+    String tableId,
+    String userId,
+  ) async {
+    try {
+      await SupabaseConfig.client
+          .from('table_members')
+          .update({'is_muted': true})
+          .eq('table_id', tableId)
+          .eq('user_id', userId);
+      return {'success': true, 'message': 'User muted'};
+    } catch (e) {
+      debugPrint('⚠️ Error muting participant: $e');
+      return {'success': false, 'message': 'Failed to mute user'};
+    }
+  }
+
+  /// Unmute a participant in a table chat (host only)
+  Future<Map<String, dynamic>> unmuteParticipant(
+    String tableId,
+    String userId,
+  ) async {
+    try {
+      await SupabaseConfig.client
+          .from('table_members')
+          .update({'is_muted': false})
+          .eq('table_id', tableId)
+          .eq('user_id', userId);
+      return {'success': true, 'message': 'User unmuted'};
+    } catch (e) {
+      debugPrint('⚠️ Error unmuting participant: $e');
+      return {'success': false, 'message': 'Failed to unmute user'};
+    }
+  }
+
+  /// Check if current user is muted in a table
+  Future<bool> isCurrentUserMuted(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) return false;
+      final row = await SupabaseConfig.client
+          .from('table_members')
+          .select('is_muted')
+          .eq('table_id', tableId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+      return row?['is_muted'] == true;
+    } catch (e) {
+      return false;
     }
   }
 }

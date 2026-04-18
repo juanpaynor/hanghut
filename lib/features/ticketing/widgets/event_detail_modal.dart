@@ -8,6 +8,7 @@ import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart'
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
@@ -24,6 +25,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
   bool _isLoadingTiers = true;
   String? _organizerDisplayName;
   String? _organizerAvatarUrl;
+  String? _organizerUserId;
 
   @override
   void initState() {
@@ -36,7 +38,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
     try {
       final response = await SupabaseConfig.client
           .from('partners')
-          .select('business_name, profile_photo_url, verified, user_id, users!user_id (display_name, avatar_url)')
+          .select(
+            'business_name, profile_photo_url, verified, user_id, users!user_id (display_name, avatar_url)',
+          )
           .eq('id', widget.event.organizerId)
           .maybeSingle();
 
@@ -44,10 +48,13 @@ class _EventDetailModalState extends State<EventDetailModal> {
         // Use partner business name, or fall back to linked user's display name
         final userData = response['users'] as Map<String, dynamic>?;
         setState(() {
-          _organizerDisplayName = response['business_name'] as String?
-              ?? userData?['display_name'] as String?;
-          _organizerAvatarUrl = response['profile_photo_url'] as String?
-              ?? userData?['avatar_url'] as String?;
+          _organizerDisplayName =
+              response['business_name'] as String? ??
+              userData?['display_name'] as String?;
+          _organizerAvatarUrl =
+              response['profile_photo_url'] as String? ??
+              userData?['avatar_url'] as String?;
+          _organizerUserId = response['user_id'] as String?;
         });
       }
     } catch (e) {
@@ -138,7 +145,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFF1E1E1E)
+              : Colors.white,
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
@@ -165,8 +174,10 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     // Title
                     Text(
                       widget.event.title,
-                      style: const TextStyle(
-                        color: Colors.black87,
+                      style: TextStyle(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : Colors.black87,
                         fontSize: 24,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.5,
@@ -325,7 +336,11 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 customBorder: const CircleBorder(),
                 child: const Padding(
                   padding: EdgeInsets.all(8.0),
-                  child: Icon(Icons.flag_outlined, color: Colors.grey, size: 20),
+                  child: Icon(
+                    Icons.flag_outlined,
+                    color: Colors.grey,
+                    size: 20,
+                  ),
                 ),
               ),
             ),
@@ -424,22 +439,27 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildDateTimeBox() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: isDark ? Colors.grey[850] : Colors.grey[100],
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
-          Icon(Icons.calendar_today, size: 16, color: Colors.grey[800]),
+          Icon(
+            Icons.calendar_today,
+            size: 16,
+            color: isDark ? Colors.grey[400] : Colors.grey[800],
+          ),
           const SizedBox(width: 12),
           Text(
             DateFormat(
               'EEEE, MMM d  •  h:mm a',
             ).format(widget.event.startDatetime),
             style: TextStyle(
-              color: Colors.grey[800],
+              color: isDark ? Colors.grey[200] : Colors.grey[800],
               fontSize: 15,
               fontWeight: FontWeight.w600,
             ),
@@ -450,17 +470,22 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildPriceRow() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Row(
           children: [
-            Icon(Icons.confirmation_number, size: 16, color: Colors.grey[800]),
+            Icon(
+              Icons.confirmation_number,
+              size: 16,
+              color: isDark ? Colors.grey[400] : Colors.grey[800],
+            ),
             const SizedBox(width: 8),
             Text(
               '₱${widget.event.ticketPrice.toStringAsFixed(0)}',
-              style: const TextStyle(
-                color: Colors.black87,
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
               ),
@@ -480,82 +505,101 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildOrganizerCard() {
-    final displayName = widget.event.organizerName
-        ?? _organizerDisplayName
-        ?? 'Event Organizer';
-    final photoUrl = widget.event.organizerPhotoUrl
-        ?? _organizerAvatarUrl;
+    final displayName =
+        widget.event.organizerName ??
+        _organizerDisplayName ??
+        'Event Organizer';
+    final photoUrl = widget.event.organizerPhotoUrl ?? _organizerAvatarUrl;
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
+    final organizerUserId = _organizerUserId ?? widget.event.organizerId;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => UserProfileScreen(userId: organizerUserId),
+        ),
       ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundImage: photoUrl != null
-                ? NetworkImage(photoUrl)
-                : null,
-            backgroundColor: Colors.grey[300],
-            child: photoUrl == null
-                ? const Icon(Icons.business, color: Colors.white, size: 20)
-                : null,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.grey[850] : Colors.grey[50],
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        displayName,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (widget.event.organizerVerified) ...[
-                      const SizedBox(width: 4),
-                      const Icon(Icons.verified, size: 16, color: Colors.blue),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Event Organizer',
-                  style: TextStyle(
-                    color: Colors.grey[600],
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+              backgroundColor: Colors.grey[300],
+              child: photoUrl == null
+                  ? const Icon(Icons.business, color: Colors.white, size: 20)
+                  : null,
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (widget.event.organizerVerified) ...[
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.verified,
+                          size: 16,
+                          color: Colors.blue,
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Event Organizer',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildDescription() {
     if (widget.event.description.isEmpty) return const SizedBox.shrink();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           widget.event.description,
-          style: TextStyle(color: Colors.grey[700], fontSize: 14, height: 1.5),
+          style: TextStyle(
+            color: isDark ? Colors.grey[400] : Colors.grey[700],
+            fontSize: 14,
+            height: 1.5,
+          ),
           maxLines: _isExpanded ? null : 3,
           overflow: _isExpanded ? null : TextOverflow.ellipsis,
         ),

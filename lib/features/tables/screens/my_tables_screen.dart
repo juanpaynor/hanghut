@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 
-import 'package:bitemates/features/trips/widgets/add_trip_modal.dart';
+import 'package:bitemates/features/trips/widgets/create_trip/create_trip_flow.dart';
 import 'package:bitemates/features/trips/screens/trip_details_screen.dart';
 import 'package:intl/intl.dart';
 
@@ -60,14 +60,14 @@ class _MyTablesScreenState extends State<MyTablesScreen> {
   }
 
   void _showAddTripModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => AddTripModal(
-        onTripCreated: () {
-          _loadMyTrips();
-        },
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreateTripFlow(
+          onTripCreated: () {
+            _loadMyTrips();
+          },
+        ),
       ),
     );
   }

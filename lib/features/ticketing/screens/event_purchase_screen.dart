@@ -94,7 +94,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
     if (!_isPaymentInProgress || _currentPurchaseIntentId == null) return;
 
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
       // App going to background (payment browser opening) — PAUSE polling
       // to prevent network errors that will cause ANR on resume
       print('⏸️ App backgrounded during payment — pausing polling timer');
@@ -201,7 +202,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           _isPaymentInProgress = false;
           if (mounted) {
             Navigator.pop(context);
-            _showErrorDialog('Payment Failed', 'The payment was not completed.');
+            _showErrorDialog(
+              'Payment Failed',
+              'The payment was not completed.',
+            );
           }
         }
       } catch (e) {
@@ -843,7 +847,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                     // --- NEWSLETTER OPT-IN ---
                     CheckboxListTile(
                       value: _subscribedToNewsletter,
-                      onChanged: (val) => setState(() => _subscribedToNewsletter = val ?? true),
+                      onChanged: (val) =>
+                          setState(() => _subscribedToNewsletter = val ?? true),
                       title: const Text(
                         'Subscribe to updates from this organizer',
                         style: TextStyle(fontSize: 14),
@@ -1031,22 +1036,8 @@ class _EventSummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Event image
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: CachedNetworkImage(
-                imageUrl: event.coverImageUrl ?? '',
-                fit: BoxFit.cover,
-                placeholder: (_, __) => Container(color: Colors.grey[300]),
-                errorWidget: (_, __, ___) => Container(
-                  color: Colors.grey[300],
-                  child: const Icon(Icons.event, size: 48),
-                ),
-              ),
-            ),
-          ),
+          // Event image gallery
+          _EventImageGallery(event: event),
 
           // Event details
           Padding(
@@ -1307,6 +1298,215 @@ class _ProcessingDialog extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EventImageGallery extends StatefulWidget {
+  final Event event;
+  const _EventImageGallery({required this.event});
+
+  @override
+  State<_EventImageGallery> createState() => _EventImageGalleryState();
+}
+
+class _EventImageGalleryState extends State<_EventImageGallery> {
+  int _current = 0;
+  late final PageController _pageController;
+  late final List<String> _allImages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    final cover = widget.event.coverImageUrl;
+    final extras = widget.event.imageUrls;
+    final seen = <String>{};
+    _allImages = [
+      if (cover != null && cover.isNotEmpty) cover,
+      ...extras.where((u) => u != cover),
+    ].where((u) => seen.add(u)).toList();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _openFullscreen(int startIndex) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            _FullscreenGallery(images: _allImages, initialIndex: startIndex),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_allImages.isEmpty) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: Container(
+            color: Colors.grey[300],
+            child: const Icon(Icons.event, size: 48),
+          ),
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      child: Stack(
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: _allImages.length,
+              onPageChanged: (i) => setState(() => _current = i),
+              itemBuilder: (_, i) => GestureDetector(
+                onTap: () => _openFullscreen(i),
+                child: CachedNetworkImage(
+                  imageUrl: _allImages[i],
+                  fit: BoxFit.cover,
+                  placeholder: (_, __) => Container(color: Colors.grey[300]),
+                  errorWidget: (_, __, ___) => Container(
+                    color: Colors.grey[300],
+                    child: const Icon(Icons.broken_image, size: 48),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_allImages.length > 1)
+            Positioned(
+              top: 8,
+              left: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_current + 1} / ${_allImages.length}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () => _openFullscreen(_current),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.open_in_full_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+            ),
+          ),
+          if (_allImages.length > 1)
+            Positioned(
+              bottom: 8,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  _allImages.length,
+                  (i) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: _current == i ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: _current == i ? Colors.white : Colors.white54,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FullscreenGallery extends StatefulWidget {
+  final List<String> images;
+  final int initialIndex;
+  const _FullscreenGallery({required this.images, required this.initialIndex});
+
+  @override
+  State<_FullscreenGallery> createState() => _FullscreenGalleryState();
+}
+
+class _FullscreenGalleryState extends State<_FullscreenGallery> {
+  late int _current;
+  late final PageController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _current = widget.initialIndex;
+    _controller = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(
+          '${_current + 1} / ${widget.images.length}',
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+        ),
+        centerTitle: true,
+      ),
+      body: PageView.builder(
+        controller: _controller,
+        itemCount: widget.images.length,
+        onPageChanged: (i) => setState(() => _current = i),
+        itemBuilder: (_, i) => InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 4.0,
+          child: Center(
+            child: CachedNetworkImage(
+              imageUrl: widget.images[i],
+              fit: BoxFit.contain,
+              placeholder: (_, __) =>
+                  const CircularProgressIndicator(color: Colors.white),
+              errorWidget: (_, __, ___) =>
+                  const Icon(Icons.broken_image, color: Colors.white, size: 64),
+            ),
+          ),
+        ),
       ),
     );
   }

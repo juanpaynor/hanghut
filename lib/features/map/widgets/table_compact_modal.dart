@@ -12,6 +12,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
+import 'package:bitemates/features/map/widgets/manage_members_sheet.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 
@@ -82,7 +83,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
   }
 
   Future<void> _fetchAutoGifIfNeeded() async {
-    if (widget.table['image_url'] != null || widget.table['marker_image_url'] != null) return;
+    if (widget.table['image_url'] != null ||
+        widget.table['marker_image_url'] != null)
+      return;
 
     try {
       final title = widget.table['title']?.toString() ?? '';
@@ -96,28 +99,50 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
       final lowerQuery = searchQuery.toLowerCase();
       const activityKeywords = {
-        'coffee': 'coffee cafe latte', 'tea': 'tea drinking',
-        'eat': 'eating food delicious', 'food': 'food eating yummy',
-        'drink': 'drink cheers bar', 'beer': 'beer cheers pub',
-        'wine': 'wine cheers dinner', 'cocktail': 'cocktail bar drinks',
-        'mead': 'drink cheers medieval', 'brunch': 'brunch food morning',
-        'lunch': 'lunch food eating', 'dinner': 'dinner food restaurant',
-        'pizza': 'pizza delicious food', 'sushi': 'sushi japanese food',
-        'ramen': 'ramen noodles food', 'bbq': 'barbecue grilling food',
-        'gym': 'gym workout fitness', 'run': 'running jogging fitness',
-        'yoga': 'yoga exercise stretch', 'swim': 'swimming pool',
-        'basketball': 'basketball dunk nba', 'soccer': 'soccer football goal',
-        'tennis': 'tennis match', 'golf': 'golf swing',
-        'hike': 'hiking mountain nature', 'bike': 'cycling bike ride',
-        'dance': 'dancing party moves', 'karaoke': 'karaoke singing',
-        'movie': 'movie cinema popcorn', 'game': 'gaming video games',
-        'party': 'party celebration fun', 'concert': 'concert live music',
-        'study': 'studying books focus', 'cook': 'cooking chef kitchen',
-        'paint': 'painting art creative', 'shop': 'shopping mall retail',
-        'chill': 'chill relax vibes', 'hangout': 'hangout friends chill',
-        'beach': 'beach summer vibes', 'travel': 'travel adventure explore',
-        'camp': 'camping outdoor nature', 'climb': 'rock climbing',
-        'skate': 'skateboarding tricks', 'bowl': 'bowling strike',
+        'coffee': 'coffee cafe latte',
+        'tea': 'tea drinking',
+        'eat': 'eating food delicious',
+        'food': 'food eating yummy',
+        'drink': 'drink cheers bar',
+        'beer': 'beer cheers pub',
+        'wine': 'wine cheers dinner',
+        'cocktail': 'cocktail bar drinks',
+        'mead': 'drink cheers medieval',
+        'brunch': 'brunch food morning',
+        'lunch': 'lunch food eating',
+        'dinner': 'dinner food restaurant',
+        'pizza': 'pizza delicious food',
+        'sushi': 'sushi japanese food',
+        'ramen': 'ramen noodles food',
+        'bbq': 'barbecue grilling food',
+        'gym': 'gym workout fitness',
+        'run': 'running jogging fitness',
+        'yoga': 'yoga exercise stretch',
+        'swim': 'swimming pool',
+        'basketball': 'basketball dunk nba',
+        'soccer': 'soccer football goal',
+        'tennis': 'tennis match',
+        'golf': 'golf swing',
+        'hike': 'hiking mountain nature',
+        'bike': 'cycling bike ride',
+        'dance': 'dancing party moves',
+        'karaoke': 'karaoke singing',
+        'movie': 'movie cinema popcorn',
+        'game': 'gaming video games',
+        'party': 'party celebration fun',
+        'concert': 'concert live music',
+        'study': 'studying books focus',
+        'cook': 'cooking chef kitchen',
+        'paint': 'painting art creative',
+        'shop': 'shopping mall retail',
+        'chill': 'chill relax vibes',
+        'hangout': 'hangout friends chill',
+        'beach': 'beach summer vibes',
+        'travel': 'travel adventure explore',
+        'camp': 'camping outdoor nature',
+        'climb': 'rock climbing',
+        'skate': 'skateboarding tricks',
+        'bowl': 'bowling strike',
       };
 
       for (final entry in activityKeywords.entries) {
@@ -131,7 +156,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
       final results = await tenor.searchGifs(searchQuery, limit: 5);
 
       if (results.isNotEmpty && mounted) {
-        final randomIndex = DateTime.now().millisecondsSinceEpoch % results.length;
+        final randomIndex =
+            DateTime.now().millisecondsSinceEpoch % results.length;
         final gifUrl = tenor.getGifUrl(results[randomIndex]);
         if (gifUrl.isNotEmpty) {
           setState(() => _autoGifUrl = gifUrl);
@@ -201,7 +227,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
   Future<void> _fetchPendingCount() async {
     try {
-      final requests = await _memberService.getPendingRequests(widget.table['id']);
+      final requests = await _memberService.getPendingRequests(
+        widget.table['id'],
+      );
       if (mounted) {
         setState(() => _pendingCount = requests.length);
       }
@@ -220,7 +248,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
         String? photoUrl = user['avatar_url'];
 
         if (user['user_photos'] != null) {
-          final userPhotos = List<Map<String, dynamic>>.from(user['user_photos']);
+          final userPhotos = List<Map<String, dynamic>>.from(
+            user['user_photos'],
+          );
           final primary = userPhotos.firstWhere(
             (p) => p['is_primary'] == true,
             orElse: () => userPhotos.isNotEmpty ? userPhotos.first : {},
@@ -258,7 +288,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
     }
 
     if (!_isHost) {
-      final status = await _memberService.getUserMembershipStatus(widget.table['id']);
+      final status = await _memberService.getUserMembershipStatus(
+        widget.table['id'],
+      );
       if (mounted) {
         setState(() {
           _membershipStatus = status;
@@ -280,8 +312,12 @@ class _TableCompactModalState extends State<TableCompactModal> {
     // Surface colors from theme
     final modalBg = isDark ? AppTheme.darkSurface : Colors.white;
     final textColor = isDark ? AppTheme.darkTextPrimary : AppTheme.textPrimary;
-    final subtextColor = isDark ? AppTheme.darkTextSecondary : AppTheme.textSecondary;
-    final pillBg = isDark ? AppTheme.darkSurfaceVariant : const Color(0xFFF0F0F5);
+    final subtextColor = isDark
+        ? AppTheme.darkTextSecondary
+        : AppTheme.textSecondary;
+    final pillBg = isDark
+        ? AppTheme.darkSurfaceVariant
+        : const Color(0xFFF0F0F5);
     final pillTextColor = isDark ? Colors.white : primaryColor;
 
     // Data
@@ -291,7 +327,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
           DateTime.now().toIso8601String(),
     );
     final currentCapacity = widget.table['current_capacity'] ?? 0;
-    final maxCapacity = widget.table['max_guests'] ?? widget.table['max_capacity'] ?? 0;
+    final maxCapacity =
+        widget.table['max_guests'] ?? widget.table['max_capacity'] ?? 0;
 
     final displayTitle =
         widget.table['title'] ??
@@ -302,23 +339,27 @@ class _TableCompactModalState extends State<TableCompactModal> {
     final displayVenue =
         widget.table['location_name'] ?? widget.table['venue_name'];
 
-    final matchScore = (widget.matchData != null && widget.matchData!['score'] != null)
+    final matchScore =
+        (widget.matchData != null && widget.matchData!['score'] != null)
         ? (widget.matchData!['score'] * 100).toInt()
         : 0;
 
     final matchColor = widget.matchData != null
         ? Color(
             int.parse(
-              (widget.matchData?['color'] ?? '#666666').replaceFirst('#', '0xFF'),
+              (widget.matchData?['color'] ?? '#666666').replaceFirst(
+                '#',
+                '0xFF',
+              ),
             ),
           )
         : Colors.grey;
 
-
-
     // Resolve hero image
     final String? heroImageUrl =
-        widget.table['image_url'] ?? widget.table['marker_image_url'] ?? _autoGifUrl;
+        widget.table['image_url'] ??
+        widget.table['marker_image_url'] ??
+        _autoGifUrl;
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -344,351 +385,389 @@ class _TableCompactModalState extends State<TableCompactModal> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                      // ═══════════════════════════════════════
-                      // 1. EDGE-TO-EDGE HERO IMAGE
-                      // ═══════════════════════════════════════
-                      SizedBox(
-                        height: 210,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            // Image — edge to edge, clipped by modal's top radius
-                            ClipRRect(
-                              borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(24),
-                              ),
-                              child: heroImageUrl != null
-                                  ? CachedNetworkImage(
-                                      imageUrl: heroImageUrl,
-                                      fit: BoxFit.cover,
-                                      placeholder: (context, url) => Container(
-                                        color: isDark ? Colors.grey[800] : Colors.grey[200],
-                                        child: Center(
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: primaryColor.withOpacity(0.5),
-                                          ),
-                                        ),
-                                      ),
-                                      errorWidget: (context, url, error) =>
-                                          _buildFallbackHero(matchColor, isDark),
-                                    )
-                                  : _buildFallbackHero(matchColor, isDark),
-                            ),
-
-                            // Gradient overlay at bottom for text legibility
-                            Positioned(
-                              bottom: 0,
-                              left: 0,
-                              right: 0,
-                              height: 80,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.bottomCenter,
-                                    end: Alignment.topCenter,
-                                    colors: [
-                                      modalBg,
-                                      modalBg.withOpacity(0.0),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // Drag Handle (overlaid on image)
-                            Positioned(
-                              top: 8,
-                              left: 0,
-                              right: 0,
-                              child: Center(
-                                child: Container(
-                                  width: 36,
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.7),
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // Match Badge (bottom-left)
-                            if (matchScore > 0)
-                              Positioned(
-                                bottom: 12,
-                                left: 16,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 5,
-                                  ),
-                                  decoration: BoxDecoration(
+                  // ═══════════════════════════════════════
+                  // 1. EDGE-TO-EDGE HERO IMAGE
+                  // ═══════════════════════════════════════
+                  SizedBox(
+                    height: 210,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Image — edge to edge, clipped by modal's top radius
+                        ClipRRect(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(24),
+                          ),
+                          child: heroImageUrl != null
+                              ? CachedNetworkImage(
+                                  imageUrl: heroImageUrl,
+                                  fit: BoxFit.cover,
+                                  placeholder: (context, url) => Container(
                                     color: isDark
-                                        ? Colors.black.withOpacity(0.7)
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(20),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 6,
+                                        ? Colors.grey[800]
+                                        : Colors.grey[200],
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: primaryColor.withOpacity(0.5),
                                       ),
-                                    ],
+                                    ),
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.auto_awesome, color: matchColor, size: 13),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        '$matchScore% Match',
-                                        style: GoogleFonts.inter(
-                                          color: matchColor,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-
-                            // Report Button (Top Left)
-                            if (!_isHost)
-                              Positioned(
-                                top: 8,
-                                left: 12,
-                                child: _buildOverlayButton(
-                                  icon: Icons.flag_outlined,
-                                  isDark: isDark,
-                                  onTap: () {
-                                    showModalBottomSheet(
-                                      context: context,
-                                      isScrollControlled: true,
-                                      backgroundColor: Colors.transparent,
-                                      builder: (context) => ReportModal(
-                                        entityType: 'table',
-                                        entityId: widget.table['id'],
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-
-                            // Close Button (Top Right)
-                            Positioned(
-                              top: 8,
-                              right: 12,
-                              child: _buildOverlayButton(
-                                icon: Icons.close,
-                                isDark: isDark,
-                                onTap: () => Navigator.pop(context),
-                              ),
-                            ),
-                          ],
+                                  errorWidget: (context, url, error) =>
+                                      _buildFallbackHero(matchColor, isDark),
+                                )
+                              : _buildFallbackHero(matchColor, isDark),
                         ),
-                      ),
 
-                      // ═══════════════════════════════════════
-                      // 2. CONTENT
-                      // ═══════════════════════════════════════
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // ── Title ──
-                            Text(
-                              displayTitle,
-                              style: GoogleFonts.inter(
-                                color: textColor,
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.5,
-                                height: 1.2,
+                        // Gradient overlay at bottom for text legibility
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          height: 80,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.bottomCenter,
+                                end: Alignment.topCenter,
+                                colors: [modalBg, modalBg.withOpacity(0.0)],
                               ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
                             ),
+                          ),
+                        ),
 
-                            const SizedBox(height: 12),
+                        // Drag Handle (overlaid on image)
+                        Positioned(
+                          top: 8,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                        ),
 
-                            // ── Pill Tags (Date & Location) ──
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _buildPill(
-                                  icon: Icons.calendar_today_rounded,
-                                  label: DateFormat('EEE, MMM d • h:mm a').format(scheduledAt),
-                                  bg: pillBg,
-                                  fg: pillTextColor,
-                                  iconColor: primaryColor,
-                                ),
-                                if (displayVenue != null && displayVenue != displayTitle)
-                                  _buildPill(
-                                    icon: Icons.location_on_rounded,
-                                    label: displayVenue,
-                                    bg: pillBg,
-                                    fg: pillTextColor,
-                                    iconColor: primaryColor,
+                        // Match Badge (bottom-left)
+                        if (matchScore > 0)
+                          Positioned(
+                            bottom: 12,
+                            left: 16,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? Colors.black.withOpacity(0.7)
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 6,
                                   ),
-                                _buildPill(
-                                  icon: Icons.people_rounded,
-                                  label: '$currentCapacity / $maxCapacity spots',
-                                  bg: pillBg,
-                                  fg: pillTextColor,
-                                  iconColor: primaryColor,
-                                ),
-                              ],
-                            ),
-
-                            const SizedBox(height: 18),
-
-                            // ── Host Row (borderless) ──
-                            GestureDetector(
-                              onTap: () {
-                                if (_groupId != null) {
-                                  // Navigate to group detail
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => GroupDetailScreen(
-                                        groupId: _groupId!,
-                                      ),
-                                    ),
-                                  );
-                                } else {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => UserProfileScreen(
-                                        userId: widget.table['host_id'],
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
+                                ],
+                              ),
                               child: Row(
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  // Host/Group Avatar
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      shape: _groupId != null ? BoxShape.rectangle : BoxShape.circle,
-                                      borderRadius: _groupId != null ? BorderRadius.circular(10) : null,
-                                      border: Border.all(
-                                        color: primaryColor.withOpacity(0.4),
-                                        width: 2,
-                                      ),
-                                    ),
-                                    child: _groupId != null
-                                        ? ClipRRect(
-                                            borderRadius: BorderRadius.circular(8),
-                                            child: (_groupCoverUrl != null)
-                                                ? Image.network(
-                                                    _groupCoverUrl!,
-                                                    width: 56,
-                                                    height: 56,
-                                                    fit: BoxFit.cover,
-                                                  )
-                                                : Container(
-                                                    width: 56,
-                                                    height: 56,
-                                                    color: isDark ? Colors.grey[800] : Colors.grey[200],
-                                                    child: Icon(Icons.groups, color: subtextColor, size: 24),
-                                                  ),
-                                          )
-                                        : CircleAvatar(
-                                            radius: 28,
-                                            backgroundImage:
-                                                (_hostPhotoUrl ?? widget.table['host_photo_url']) != null
-                                                    ? NetworkImage(
-                                                        _hostPhotoUrl ?? widget.table['host_photo_url'],
-                                                      )
-                                                    : null,
-                                            backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
-                                            child: (_hostPhotoUrl ?? widget.table['host_photo_url']) == null
-                                                ? Icon(Icons.person, color: subtextColor, size: 24)
-                                                : null,
-                                          ),
+                                  Icon(
+                                    Icons.auto_awesome,
+                                    color: matchColor,
+                                    size: 13,
                                   ),
-                                  const SizedBox(width: 12),
-
-                                  // Host/Group Name & Label
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        _groupId != null ? 'Hosted by group' : 'Hosted by',
-                                        style: GoogleFonts.inter(
-                                          color: subtextColor,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500,
-                                          letterSpacing: 0.3,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 1),
-                                      Text(
-                                        _hostName ?? widget.table['host_name'] ?? 'Loading...',
-                                        style: GoogleFonts.inter(
-                                          color: textColor,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-
-                                  const SizedBox(width: 12),
-
-                                  // Attendee Avatar Stack
-                                  if (_memberPhotoUrls.isNotEmpty)
-                                    AvatarStack(
-                                      avatarUrls: _memberPhotoUrls,
-                                      totalCount: _totalMembers,
-                                      size: 36,
-                                      borderColor: modalBg,
-                                      borderWidth: 2,
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '$matchScore% Match',
+                                    style: GoogleFonts.inter(
+                                      color: matchColor,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
                                     ),
+                                  ),
                                 ],
                               ),
                             ),
+                          ),
 
-                            // ── Friends Going ──
-                            FriendsGoingRow(
-                              entityType: 'table',
-                              entityId: widget.table['id'],
+                        // Report Button (Top Left)
+                        if (!_isHost)
+                          Positioned(
+                            top: 8,
+                            left: 12,
+                            child: _buildOverlayButton(
+                              icon: Icons.flag_outlined,
+                              isDark: isDark,
+                              onTap: () {
+                                showModalBottomSheet(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (context) => ReportModal(
+                                    entityType: 'table',
+                                    entityId: widget.table['id'],
+                                  ),
+                                );
+                              },
                             ),
+                          ),
 
-                            // ── Description ──
-                            if (widget.table['description'] != null &&
-                                widget.table['description'].toString().isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                widget.table['description'],
-                                style: GoogleFonts.inter(
-                                  color: subtextColor,
-                                  fontSize: 13,
-                                  height: 1.5,
-                                ),
-                                maxLines: 4,
-                                overflow: TextOverflow.ellipsis,
+                        // Close Button (Top Right)
+                        Positioned(
+                          top: 8,
+                          right: 12,
+                          child: _buildOverlayButton(
+                            icon: Icons.close,
+                            isDark: isDark,
+                            onTap: () => Navigator.pop(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ═══════════════════════════════════════
+                  // 2. CONTENT
+                  // ═══════════════════════════════════════
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // ── Title ──
+                        Text(
+                          displayTitle,
+                          style: GoogleFonts.inter(
+                            color: textColor,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                            height: 1.2,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // ── Pill Tags (Date & Location) ──
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _buildPill(
+                              icon: Icons.calendar_today_rounded,
+                              label: DateFormat(
+                                'EEE, MMM d • h:mm a',
+                              ).format(scheduledAt),
+                              bg: pillBg,
+                              fg: pillTextColor,
+                              iconColor: primaryColor,
+                            ),
+                            if (displayVenue != null &&
+                                displayVenue != displayTitle)
+                              _buildPill(
+                                icon: Icons.location_on_rounded,
+                                label: displayVenue,
+                                bg: pillBg,
+                                fg: pillTextColor,
+                                iconColor: primaryColor,
                               ),
-                            ],
-
-                            const SizedBox(height: 12),
+                            _buildPill(
+                              icon: Icons.people_rounded,
+                              label: '$currentCapacity / $maxCapacity spots',
+                              bg: pillBg,
+                              fg: pillTextColor,
+                              iconColor: primaryColor,
+                            ),
                           ],
                         ),
-                      ),
-              ],
-            ),
+
+                        const SizedBox(height: 18),
+
+                        // ── Host Row (borderless) ──
+                        GestureDetector(
+                          onTap: () {
+                            if (_groupId != null) {
+                              // Navigate to group detail
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      GroupDetailScreen(groupId: _groupId!),
+                                ),
+                              );
+                            } else {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => UserProfileScreen(
+                                    userId: widget.table['host_id'],
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          child: Row(
+                            children: [
+                              // Host/Group Avatar
+                              Container(
+                                decoration: BoxDecoration(
+                                  shape: _groupId != null
+                                      ? BoxShape.rectangle
+                                      : BoxShape.circle,
+                                  borderRadius: _groupId != null
+                                      ? BorderRadius.circular(10)
+                                      : null,
+                                  border: Border.all(
+                                    color: primaryColor.withOpacity(0.4),
+                                    width: 2,
+                                  ),
+                                ),
+                                child: _groupId != null
+                                    ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: (_groupCoverUrl != null)
+                                            ? Image.network(
+                                                _groupCoverUrl!,
+                                                width: 56,
+                                                height: 56,
+                                                fit: BoxFit.cover,
+                                              )
+                                            : Container(
+                                                width: 56,
+                                                height: 56,
+                                                color: isDark
+                                                    ? Colors.grey[800]
+                                                    : Colors.grey[200],
+                                                child: Icon(
+                                                  Icons.groups,
+                                                  color: subtextColor,
+                                                  size: 24,
+                                                ),
+                                              ),
+                                      )
+                                    : CircleAvatar(
+                                        radius: 28,
+                                        backgroundImage:
+                                            (_hostPhotoUrl ??
+                                                    widget
+                                                        .table['host_photo_url']) !=
+                                                null
+                                            ? NetworkImage(
+                                                _hostPhotoUrl ??
+                                                    widget
+                                                        .table['host_photo_url'],
+                                              )
+                                            : null,
+                                        backgroundColor: isDark
+                                            ? Colors.grey[800]
+                                            : Colors.grey[200],
+                                        child:
+                                            (_hostPhotoUrl ??
+                                                    widget
+                                                        .table['host_photo_url']) ==
+                                                null
+                                            ? Icon(
+                                                Icons.person,
+                                                color: subtextColor,
+                                                size: 24,
+                                              )
+                                            : null,
+                                      ),
+                              ),
+                              const SizedBox(width: 12),
+
+                              // Host/Group Name & Label
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _groupId != null
+                                        ? 'Hosted by group'
+                                        : 'Hosted by',
+                                    style: GoogleFonts.inter(
+                                      color: subtextColor,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 1),
+                                  Text(
+                                    _hostName ??
+                                        widget.table['host_name'] ??
+                                        'Loading...',
+                                    style: GoogleFonts.inter(
+                                      color: textColor,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+
+                              const SizedBox(width: 12),
+
+                              // Attendee Avatar Stack
+                              if (_memberPhotoUrls.isNotEmpty)
+                                AvatarStack(
+                                  avatarUrls: _memberPhotoUrls,
+                                  totalCount: _totalMembers,
+                                  size: 36,
+                                  borderColor: modalBg,
+                                  borderWidth: 2,
+                                ),
+                            ],
+                          ),
+                        ),
+
+                        // ── Friends Going ──
+                        FriendsGoingRow(
+                          entityType: 'table',
+                          entityId: widget.table['id'],
+                        ),
+
+                        // ── Description ──
+                        if (widget.table['description'] != null &&
+                            widget.table['description']
+                                .toString()
+                                .isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            widget.table['description'],
+                            style: GoogleFonts.inter(
+                              color: subtextColor,
+                              fontSize: 13,
+                              height: 1.5,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
 
               // ═══════════════════════════════════════
               // 3. PINNED ACTION BUTTONS
               // ═══════════════════════════════════════
               Container(
                 padding: EdgeInsets.fromLTRB(
-                  20, 12, 20,
+                  20,
+                  12,
+                  20,
                   MediaQuery.of(context).padding.bottom + 16,
                 ),
                 decoration: BoxDecoration(
@@ -893,6 +972,16 @@ class _TableCompactModalState extends State<TableCompactModal> {
             ),
           ),
           const SizedBox(width: 8),
+          // Manage Members (kick/mute)
+          SizedBox(
+            width: 52,
+            child: ElevatedButton(
+              onPressed: _openManageMembers,
+              style: secondaryButtonStyle,
+              child: const Icon(Icons.manage_accounts_rounded, size: 22),
+            ),
+          ),
+          const SizedBox(width: 8),
           SizedBox(
             width: 52,
             child: ElevatedButton(
@@ -969,7 +1058,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
                 : Colors.orange[50],
             foregroundColor: isDark ? Colors.orange[300] : Colors.orange[800],
             padding: EdgeInsets.zero,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
             elevation: 0,
             textStyle: GoogleFonts.inter(
               fontSize: 16,
@@ -984,9 +1075,13 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
     // ── Table status guard: table deleted or no longer open ──
     final effectiveStatus = _liveTableStatus ?? widget.table['status'];
-    final isTableEnded = !_tableExists || (effectiveStatus != null && effectiveStatus != 'open');
+    final isTableEnded =
+        !_tableExists || (effectiveStatus != null && effectiveStatus != 'open');
 
-    if (isTableEnded && !_isHost && (_membershipStatus == null || !['approved', 'joined'].contains(_membershipStatus!['status']))) {
+    if (isTableEnded &&
+        !_isHost &&
+        (_membershipStatus == null ||
+            !['approved', 'joined'].contains(_membershipStatus!['status']))) {
       return ElevatedButton(
         onPressed: null, // disabled
         style: ElevatedButton.styleFrom(
@@ -995,7 +1090,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
           disabledBackgroundColor: isDark ? Colors.grey[800] : Colors.grey[300],
           disabledForegroundColor: isDark ? Colors.grey[500] : Colors.grey[600],
           padding: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
           elevation: 0,
           textStyle: GoogleFonts.inter(
             fontSize: 16,
@@ -1042,6 +1139,20 @@ class _TableCompactModalState extends State<TableCompactModal> {
     });
   }
 
+  void _openManageMembers() {
+    final tableTitle =
+        widget.table['title'] ?? widget.table['location_name'] ?? 'Table';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ManageMembersSheet(
+        tableId: widget.table['id'],
+        tableTitle: tableTitle,
+      ),
+    ).then((_) => _fetchMembers());
+  }
+
   void _openChat() {
     Navigator.pop(context);
 
@@ -1075,10 +1186,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
         final isPending = message.contains('Request sent');
 
         if (isPending) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.orange,
-          ));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message), backgroundColor: Colors.orange),
+          );
           _checkMembershipStatus();
           _fetchPendingCount();
         } else {
@@ -1089,7 +1199,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
               'Unknown Venue';
 
           Navigator.pop(context, true);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
 
           showModalBottomSheet(
             context: context,
@@ -1231,9 +1343,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
     await _memberService.declineInvite(widget.table['id']);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invite declined')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Invite declined')));
       Navigator.pop(context, true);
     }
   }

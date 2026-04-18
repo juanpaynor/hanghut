@@ -123,15 +123,68 @@ class ReportService {
     }
   }
 
+  /// Get all blocked user IDs (both directions) via DB function.
+  /// Use this for client-side filtering (map, search, etc.)
+  Future<Set<String>> getBlockedUserIds() async {
+    try {
+      final response = await _client.rpc('get_blocked_user_ids');
+      if (response == null) return {};
+      return (response as List).map((e) => e.toString()).toSet();
+    } catch (e) {
+      print('❌ Error getting blocked user IDs: $e');
+      return {};
+    }
+  }
+
   /// Reason categories for report UI
   static const List<Map<String, String>> reasonCategories = [
-    {'key': 'spam', 'label': 'Spam', 'icon': '🚫', 'desc': 'Unsolicited or repetitive content'},
-    {'key': 'harassment', 'label': 'Harassment', 'icon': '😤', 'desc': 'Bullying, threats, or intimidation'},
-    {'key': 'hate_speech', 'label': 'Hate Speech', 'icon': '🚨', 'desc': 'Discrimination or hateful content'},
-    {'key': 'inappropriate', 'label': 'Inappropriate Content', 'icon': '⚠️', 'desc': 'Nudity, violence, or graphic'},
-    {'key': 'fake_account', 'label': 'Fake Account', 'icon': '🎭', 'desc': 'Impersonation or fake identity'},
-    {'key': 'scam', 'label': 'Scam or Fraud', 'icon': '💰', 'desc': 'Misleading offers or fraud'},
-    {'key': 'underage', 'label': 'Underage User', 'icon': '🔞', 'desc': 'User appears to be under 18'},
-    {'key': 'other', 'label': 'Other', 'icon': '📝', 'desc': 'Something else not listed above'},
+    {
+      'key': 'spam',
+      'label': 'Spam',
+      'icon': '🚫',
+      'desc': 'Unsolicited or repetitive content',
+    },
+    {
+      'key': 'harassment',
+      'label': 'Harassment',
+      'icon': '😤',
+      'desc': 'Bullying, threats, or intimidation',
+    },
+    {
+      'key': 'hate_speech',
+      'label': 'Hate Speech',
+      'icon': '🚨',
+      'desc': 'Discrimination or hateful content',
+    },
+    {
+      'key': 'inappropriate',
+      'label': 'Inappropriate Content',
+      'icon': '⚠️',
+      'desc': 'Nudity, violence, or graphic',
+    },
+    {
+      'key': 'fake_account',
+      'label': 'Fake Account',
+      'icon': '🎭',
+      'desc': 'Impersonation or fake identity',
+    },
+    {
+      'key': 'scam',
+      'label': 'Scam or Fraud',
+      'icon': '💰',
+      'desc': 'Misleading offers or fraud',
+    },
+    {
+      'key': 'underage',
+      'label': 'Underage User',
+      'icon': '🔞',
+      'desc': 'User appears to be under 18',
+    },
+    {
+      'key': 'other',
+      'label': 'Other',
+      'icon': '📝',
+      'desc': 'Something else not listed above',
+    },
   ];
 }

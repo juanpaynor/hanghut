@@ -88,13 +88,15 @@ Future<void> main() async {
   // transparent so Flutter's MediaQuery.padding reports the correct bottom
   // inset and SafeArea / BottomNavigationBar work out of the box.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarIconBrightness: Brightness.dark,
-    systemNavigationBarContrastEnforced: false,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
+    ),
+  );
 
   // Initialize Workmanager
   Workmanager().initialize(
@@ -103,12 +105,16 @@ Future<void> main() async {
   );
 
   // Register Periodic Task (15 min interval)
+  // existingWorkPolicy.replace ensures re-registration on each app launch
+  // doesn't stack duplicate tasks
   Workmanager().registerPeriodicTask(
     "geofence-check",
     "geofenceTask",
     frequency: const Duration(minutes: 15),
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     constraints: Constraints(
-      networkType: NetworkType.connected, // Optional, but good for sync
+      networkType: NetworkType.connected,
+      requiresBatteryNotLow: false, // Run even on low battery
     ),
   );
 
@@ -273,7 +279,7 @@ class _SessionHandlerState extends State<SessionHandler> {
           );
         }
 
-        final statusData = statusSnapshot.data as Map<String, dynamic>?;
+        final statusData = statusSnapshot.data;
         final status = statusData?['status'] ?? 'active';
 
         if (status == 'suspended' ||

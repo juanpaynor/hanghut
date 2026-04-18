@@ -6,7 +6,7 @@ import 'package:bitemates/core/services/group_member_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
-import 'package:bitemates/features/map/widgets/create_table_modal.dart';
+import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -109,9 +109,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     HapticFeedback.mediumImpact();
     final result = await _memberService.joinGroup(widget.groupId);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Done')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result['message'] ?? 'Done')));
       await _loadAll();
     }
   }
@@ -139,9 +139,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
     final result = await _memberService.leaveGroup(widget.groupId);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Done')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result['message'] ?? 'Done')));
       Navigator.pop(context);
     }
   }
@@ -284,7 +284,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                               ),
                               const SizedBox(width: 8),
                               _pill(
-                                text: privacy[0].toUpperCase() +
+                                text:
+                                    privacy[0].toUpperCase() +
                                     privacy.substring(1),
                                 icon: _privacyIcon(privacy),
                               ),
@@ -307,24 +308,24 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     // Member count + location
                     Row(
                       children: [
-                        Icon(Icons.people_outline,
-                            size: 16, color: mutedText),
+                        Icon(Icons.people_outline, size: 16, color: mutedText),
                         const SizedBox(width: 6),
                         Text(
                           '$memberCount member${memberCount == 1 ? '' : 's'}',
-                          style: TextStyle(
-                              fontSize: 14, color: mutedText),
+                          style: TextStyle(fontSize: 14, color: mutedText),
                         ),
                         if (group['location_city'] != null) ...[
                           const SizedBox(width: 16),
-                          Icon(Icons.location_on_outlined,
-                              size: 16, color: mutedText),
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 16,
+                            color: mutedText,
+                          ),
                           const SizedBox(width: 4),
                           Flexible(
                             child: Text(
                               group['location_city'],
-                              style: TextStyle(
-                                  fontSize: 14, color: mutedText),
+                              style: TextStyle(fontSize: 14, color: mutedText),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -343,13 +344,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed: _shareGroup,
-                            icon: Icon(Icons.share_outlined,
-                                size: 18, color: mutedText),
-                            label: Text('Share',
-                                style: TextStyle(color: mutedText)),
+                            icon: Icon(
+                              Icons.share_outlined,
+                              size: 18,
+                              color: mutedText,
+                            ),
+                            label: Text(
+                              'Share',
+                              style: TextStyle(color: mutedText),
+                            ),
                             style: OutlinedButton.styleFrom(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 14),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                               side: BorderSide(
                                 color: isDark
                                     ? Colors.grey[800]!
@@ -396,12 +401,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('Activities'),
+                          const Flexible(
+                            child: Text(
+                              'Activities',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                           if (_activities.isNotEmpty) ...[
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 4),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
                                 color: primaryColor.withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(8),
@@ -428,7 +440,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.orange,
                                 borderRadius: BorderRadius.circular(8),
@@ -530,9 +544,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         foregroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(vertical: 14),
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -545,19 +557,22 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.lock_outline,
-                size: 48, color: Colors.grey[400]),
+            Icon(Icons.lock_outline, size: 48, color: Colors.grey[400]),
             const SizedBox(height: 16),
-            Text('Join the group to access the chat',
-                style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+            Text(
+              'Join the group to access the chat',
+              style: TextStyle(color: Colors.grey[500], fontSize: 15),
+            ),
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: _joinGroup,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.primary,
                 foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 14,
+                ),
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),
@@ -601,11 +616,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.event_outlined,
-                size: 48, color: Colors.grey[400]),
+            Icon(Icons.event_outlined, size: 48, color: Colors.grey[400]),
             const SizedBox(height: 16),
-            Text('No activities yet',
-                style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+            Text(
+              'No activities yet',
+              style: TextStyle(color: Colors.grey[500], fontSize: 15),
+            ),
           ],
         ),
       );
@@ -620,8 +636,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             children: [
               // Upcoming
               if (upcoming.isNotEmpty) ...[
-                _sectionHeader('Upcoming', primaryColor,
-                    count: upcoming.length),
+                _sectionHeader(
+                  'Upcoming',
+                  primaryColor,
+                  count: upcoming.length,
+                ),
                 const SizedBox(height: 10),
                 ...upcoming.map((a) => _buildActivityCard(a, isDark)),
               ],
@@ -633,28 +652,24 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? Colors.grey[900]
-                        : Colors.grey[50],
+                    color: isDark ? Colors.grey[900] : Colors.grey[50],
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: isDark
-                          ? Colors.grey[800]!
-                          : Colors.grey[200]!,
+                      color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
                       width: 0.5,
                     ),
                   ),
                   child: Column(
                     children: [
-                      Icon(Icons.celebration_outlined,
-                          size: 40, color: Colors.grey[400]),
+                      Icon(
+                        Icons.celebration_outlined,
+                        size: 40,
+                        color: Colors.grey[400],
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'Create the first group activity!',
-                        style: TextStyle(
-                          color: Colors.grey[500],
-                          fontSize: 14,
-                        ),
+                        style: TextStyle(color: Colors.grey[500], fontSize: 14),
                       ),
                       const SizedBox(height: 16),
                       ElevatedButton.icon(
@@ -666,7 +681,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 24, vertical: 12),
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
@@ -680,11 +697,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               // Past
               if (past.isNotEmpty) ...[
                 const SizedBox(height: 24),
-                _sectionHeader(
-                  'Past',
-                  Colors.grey[500]!,
-                  count: past.length,
-                ),
+                _sectionHeader('Past', Colors.grey[500]!, count: past.length),
                 const SizedBox(height: 10),
                 ...past.map((a) => _buildActivityCard(a, isDark, isPast: true)),
               ],
@@ -704,16 +717,21 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               foregroundColor: Colors.white,
               elevation: 3,
               icon: const Icon(Icons.add, size: 20),
-              label: const Text('Activity',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              label: const Text(
+                'Activity',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
             ),
           ),
       ],
     );
   }
 
-  Widget _buildActivityCard(Map<String, dynamic> activity, bool isDark,
-      {bool isPast = false}) {
+  Widget _buildActivityCard(
+    Map<String, dynamic> activity,
+    bool isDark, {
+    bool isPast = false,
+  }) {
     final title = activity['title'] as String? ?? 'Untitled';
     final venue = activity['location_name'] as String? ?? '';
     final emoji = activity['marker_emoji'] as String? ?? '📍';
@@ -731,9 +749,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           context: context,
           isScrollControlled: true,
           backgroundColor: Colors.transparent,
-          builder: (_) => TableCompactModal(
-            table: activity,
-          ),
+          builder: (_) => TableCompactModal(table: activity),
         );
       },
       child: Container(
@@ -756,9 +772,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.grey[800]
-                    : Colors.grey[100],
+                color: isDark ? Colors.grey[800] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Center(
@@ -784,20 +798,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Icon(Icons.schedule,
-                          size: 13,
-                          color: isPast
-                              ? Colors.grey[500]
-                              : Colors.grey[400]),
+                      Icon(
+                        Icons.schedule,
+                        size: 13,
+                        color: isPast ? Colors.grey[500] : Colors.grey[400],
+                      ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
                           dateStr,
                           style: TextStyle(
                             fontSize: 12,
-                            color: isPast
-                                ? Colors.grey[500]
-                                : Colors.grey[400],
+                            color: isPast ? Colors.grey[500] : Colors.grey[400],
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -809,14 +821,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     const SizedBox(height: 2),
                     Row(
                       children: [
-                        Icon(Icons.location_on_outlined,
-                            size: 13, color: Colors.grey[400]),
+                        Icon(
+                          Icons.location_on_outlined,
+                          size: 13,
+                          color: Colors.grey[400],
+                        ),
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
                             venue,
                             style: TextStyle(
-                                fontSize: 12, color: Colors.grey[400]),
+                              fontSize: 12,
+                              color: Colors.grey[400],
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -834,7 +851,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 if (visibility == 'group_only')
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.amber.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(6),
@@ -842,8 +861,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.lock_outline,
-                            size: 10, color: Colors.amber[700]),
+                        Icon(
+                          Icons.lock_outline,
+                          size: 10,
+                          color: Colors.amber[700],
+                        ),
                         const SizedBox(width: 3),
                         Text(
                           'Private',
@@ -859,8 +881,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 const SizedBox(height: 4),
                 Text(
                   '$maxGuests spots',
-                  style: TextStyle(
-                      fontSize: 11, color: Colors.grey[500]),
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
               ],
             ),
@@ -872,16 +893,30 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   void _openCreateActivityModal() {
     HapticFeedback.mediumImpact();
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => CreateTableModal(
-        groupId: widget.groupId,
-        groupName: _group?['name'] ?? 'Group',
-        onTableCreated: () {
-          _loadActivities();
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            CreateHangoutFlow(
+              groupId: widget.groupId,
+              groupName: _group?['name'] ?? 'Group',
+              onTableCreated: () {
+                _loadActivities();
+              },
+            ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          );
         },
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
       ),
     );
   }
@@ -910,10 +945,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
       final results = await SocialService().searchUsers(cleanQuery, limit: 5);
 
       // Get existing member IDs to filter them out
-      final memberIds = _members.map((m) {
-        final user = m['users'] as Map<String, dynamic>?;
-        return user?['id'] as String?;
-      }).whereType<String>().toSet();
+      final memberIds = _members
+          .map((m) {
+            final user = m['users'] as Map<String, dynamic>?;
+            return user?['id'] as String?;
+          })
+          .whereType<String>()
+          .toSet();
 
       final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
 
@@ -955,7 +993,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result['message'] ?? 'Done'),
-          backgroundColor: result['success'] == true ? Colors.green : Colors.red,
+          backgroundColor: result['success'] == true
+              ? Colors.green
+              : Colors.red,
         ),
       );
 
@@ -991,10 +1031,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               onChanged: _onInviteSearchChanged,
               decoration: InputDecoration(
                 hintText: '@username',
-                hintStyle: TextStyle(
-                  color: Colors.grey[500],
-                  fontSize: 14,
-                ),
+                hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
                 prefixIcon: Icon(
                   Icons.alternate_email,
                   color: primaryColor.withOpacity(0.6),
@@ -1040,8 +1077,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     return ListTile(
                       leading: CircleAvatar(
                         radius: 18,
-                        backgroundColor:
-                            isDark ? Colors.grey[800] : Colors.grey[200],
+                        backgroundColor: isDark
+                            ? Colors.grey[800]
+                            : Colors.grey[200],
                         backgroundImage: avatarUrl != null
                             ? NetworkImage(avatarUrl)
                             : null,
@@ -1080,8 +1118,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : Container(
                               padding: const EdgeInsets.symmetric(
@@ -1105,9 +1142,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                                 ),
                               ),
                             ),
-                      onTap: _isInviting
-                          ? null
-                          : () => _handleInviteTap(user),
+                      onTap: _isInviting ? null : () => _handleInviteTap(user),
                     );
                   }).toList(),
                 ),
@@ -1127,20 +1162,26 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               ),
 
             Divider(
-                height: 28,
-                color: isDark ? Colors.grey[800] : Colors.grey[200]),
+              height: 28,
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+            ),
           ],
 
           // Pending requests section (admin only)
           if (_isAdmin && _pendingRequests.isNotEmpty) ...[
-            _sectionHeader('Pending Requests', Colors.orange[600]!,
-                count: _pendingRequests.length),
+            _sectionHeader(
+              'Pending Requests',
+              Colors.orange[600]!,
+              count: _pendingRequests.length,
+            ),
             const SizedBox(height: 10),
-            ..._pendingRequests
-                .map((req) => _buildMemberTile(req, isPending: true)),
+            ..._pendingRequests.map(
+              (req) => _buildMemberTile(req, isPending: true),
+            ),
             Divider(
-                height: 32,
-                color: isDark ? Colors.grey[800] : Colors.grey[200]),
+              height: 32,
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+            ),
           ],
 
           // Members
@@ -1183,22 +1224,24 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     );
   }
 
-  Widget _buildMemberTile(Map<String, dynamic> member,
-      {bool isPending = false}) {
+  Widget _buildMemberTile(
+    Map<String, dynamic> member, {
+    bool isPending = false,
+  }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final user = member['users'] as Map<String, dynamic>? ?? {};
     final displayName = user['display_name'] ?? 'Unknown';
     final photos = user['user_photos'] as List? ?? [];
     final primaryPhoto = photos.isNotEmpty
         ? (photos.firstWhere(
-            (p) => p['is_primary'] == true,
-            orElse: () => photos.first,
-          )['photo_url'] as String?)
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              )['photo_url']
+              as String?)
         : null;
     final role = member['role'] as String? ?? 'member';
     final joinedAt = member['joined_at'] != null
-        ? DateFormat('MMM d, yyyy')
-            .format(DateTime.parse(member['joined_at']))
+        ? DateFormat('MMM d, yyyy').format(DateTime.parse(member['joined_at']))
         : null;
 
     return Container(
@@ -1222,14 +1265,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           CircleAvatar(
             radius: 20,
             backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
-            backgroundImage:
-                primaryPhoto != null ? NetworkImage(primaryPhoto) : null,
+            backgroundImage: primaryPhoto != null
+                ? NetworkImage(primaryPhoto)
+                : null,
             child: primaryPhoto == null
-                ? Text(displayName[0].toUpperCase(),
+                ? Text(
+                    displayName[0].toUpperCase(),
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: isDark ? Colors.grey[300] : Colors.grey[600],
-                    ))
+                    ),
+                  )
                 : null,
           ),
           const SizedBox(width: 12),
@@ -1255,14 +1301,15 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: role == 'owner'
                               ? Colors.amber.withOpacity(0.12)
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withOpacity(0.1),
+                              : Theme.of(
+                                  context,
+                                ).colorScheme.primary.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
@@ -1282,9 +1329,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 if (joinedAt != null && !isPending)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Text('Joined $joinedAt',
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.grey[500])),
+                    child: Text(
+                      'Joined $joinedAt',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
                   ),
               ],
             ),
@@ -1295,8 +1343,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               icon: Icons.check_circle,
               color: Colors.green,
               onTap: () async {
-                await _memberService.approveRequest(
-                    widget.groupId, user['id']);
+                await _memberService.approveRequest(widget.groupId, user['id']);
                 await _loadAll();
               },
             ),
@@ -1305,8 +1352,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               icon: Icons.cancel,
               color: Colors.red[400]!,
               onTap: () async {
-                await _memberService.rejectRequest(
-                    widget.groupId, user['id']);
+                await _memberService.rejectRequest(widget.groupId, user['id']);
                 await _loadAll();
               },
             ),
@@ -1316,10 +1362,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               role != 'owner') ...[
             PopupMenuButton<String>(
               iconSize: 18,
-              icon: Icon(Icons.more_horiz,
-                  size: 18, color: Colors.grey[500]),
-              onSelected: (v) =>
-                  _handleMemberAction(v, user['id'], role),
+              icon: Icon(Icons.more_horiz, size: 18, color: Colors.grey[500]),
+              onSelected: (v) => _handleMemberAction(v, user['id'], role),
               itemBuilder: (_) => [
                 if (role == 'member')
                   const PopupMenuItem(
@@ -1333,8 +1377,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                   ),
                 const PopupMenuItem(
                   value: 'kick',
-                  child:
-                      Text('Remove', style: TextStyle(color: Colors.red)),
+                  child: Text('Remove', style: TextStyle(color: Colors.red)),
                 ),
               ],
             ),
@@ -1360,25 +1403,34 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   }
 
   Future<void> _handleMemberAction(
-      String action, String userId, String currentRole) async {
+    String action,
+    String userId,
+    String currentRole,
+  ) async {
     Map<String, dynamic>? result;
     switch (action) {
       case 'promote':
         result = await _memberService.updateRole(
-            widget.groupId, userId, 'admin');
+          widget.groupId,
+          userId,
+          'admin',
+        );
         break;
       case 'demote':
         result = await _memberService.updateRole(
-            widget.groupId, userId, 'member');
+          widget.groupId,
+          userId,
+          'member',
+        );
         break;
       case 'kick':
         result = await _memberService.removeMember(widget.groupId, userId);
         break;
     }
     if (result != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Done')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result['message'] ?? 'Done')));
       await _loadAll();
     }
   }
@@ -1391,8 +1443,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     final description = group['description'] as String?;
     final rules = group['rules'] as String?;
     final createdAt = group['created_at'] != null
-        ? DateFormat('MMMM d, yyyy')
-            .format(DateTime.parse(group['created_at']))
+        ? DateFormat('MMMM d, yyyy').format(DateTime.parse(group['created_at']))
         : 'Unknown';
     final creator = group['creator'] as Map<String, dynamic>? ?? {};
     final creatorName = creator['display_name'] ?? 'Unknown';
@@ -1425,10 +1476,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               color: Colors.amber.withOpacity(isDark ? 0.06 : 0.04),
               borderRadius: BorderRadius.circular(10),
               border: Border(
-                left: BorderSide(
-                  color: Colors.amber[600]!,
-                  width: 3,
-                ),
+                left: BorderSide(color: Colors.amber[600]!, width: 3),
               ),
             ),
             child: Text(
@@ -1448,8 +1496,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         const SizedBox(height: 12),
         _infoRow(Icons.calendar_today_outlined, 'Created', createdAt),
         _infoRow(Icons.person_outline, 'Created by', creatorName),
-        _infoRow(Icons.category_outlined, 'Category',
-            _getCategoryLabel(group['category']?.toString() ?? 'other')),
+        _infoRow(
+          Icons.category_outlined,
+          'Category',
+          _getCategoryLabel(group['category']?.toString() ?? 'other'),
+        ),
       ],
     );
   }
@@ -1474,18 +1525,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         children: [
           Icon(icon, size: 16, color: Colors.grey[500]),
           const SizedBox(width: 10),
-          Text('$label',
-              style: TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 14,
-                  color: Colors.grey[500])),
+          Text(
+            '$label',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              color: Colors.grey[500],
+            ),
+          ),
           const Spacer(),
-          Text(value,
-              style: TextStyle(
-                fontSize: 14,
-                color: isDark ? Colors.grey[300] : Colors.grey[800],
-                fontWeight: FontWeight.w500,
-              )),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              color: isDark ? Colors.grey[300] : Colors.grey[800],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ],
       ),
     );
@@ -1493,8 +1549,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   // ─── Helpers ───────────────────────────────────
 
-  Widget _circleIconButton(
-      {required IconData icon, required VoidCallback onTap}) {
+  Widget _circleIconButton({
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
     return Padding(
       padding: const EdgeInsets.all(6),
       child: InkWell(
@@ -1513,11 +1571,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     );
   }
 
-  Widget _pill({
-    required String text,
-    String? emoji,
-    IconData? icon,
-  }) {
+  Widget _pill({required String text, String? emoji, IconData? icon}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -1564,8 +1618,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         ),
       ),
       child: Center(
-        child:
-            Icon(Icons.groups, size: 64, color: Colors.white.withOpacity(0.2)),
+        child: Icon(
+          Icons.groups,
+          size: 64,
+          color: Colors.white.withOpacity(0.2),
+        ),
       ),
     );
   }
@@ -1606,8 +1663,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             if (_isOwner)
               ListTile(
                 leading: Icon(Icons.delete_outline, color: Colors.red[400]),
-                title: Text('Delete Group',
-                    style: TextStyle(color: Colors.red[400])),
+                title: Text(
+                  'Delete Group',
+                  style: TextStyle(color: Colors.red[400]),
+                ),
                 onTap: () {
                   Navigator.pop(ctx);
                   _deleteGroup();
@@ -1701,9 +1760,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(result['success'] == true
+          content: Text(
+            result['success'] == true
                 ? 'Group deleted'
-                : result['message'] ?? 'Error')),
+                : result['message'] ?? 'Error',
+          ),
+        ),
       );
       if (result['success'] == true) Navigator.pop(context);
     }
@@ -1726,11 +1788,11 @@ class _SliverTabBarDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: backgroundColor,
-      child: tabBar,
-    );
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Container(color: backgroundColor, child: tabBar);
   }
 
   @override

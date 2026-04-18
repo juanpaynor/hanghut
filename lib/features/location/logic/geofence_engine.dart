@@ -31,13 +31,16 @@ class GeofenceEngine {
 
   // Config
   static const double kGeofenceRadiusMeters = 200.0;
-  static const double kJoinedActivityRadiusMeters = 100.0; // Tighter radius for auto-checkin
-  static const int kDwellTimeSeconds = 20; // Production value (was 5 for testing)
-  static const int kCheckinDwellTimeSeconds = 10; // Faster dwell for joined activities
+  static const double kJoinedActivityRadiusMeters =
+      100.0; // Tighter radius for auto-checkin
+  static const int kDwellTimeSeconds =
+      20; // Production value (was 5 for testing)
+  static const int kCheckinDwellTimeSeconds =
+      10; // Faster dwell for joined activities
 
   // PHASE 1: Rate limiting config
-  static const Duration kNotificationCooldown = Duration(hours: 6);
-  static const int kMaxNotificationsPerHour = 3;
+  static const Duration kNotificationCooldown = Duration(minutes: 30);
+  static const int kMaxNotificationsPerHour = 10;
 
   // Stream for UI (Foreground) — carries full event data for the modal
   final StreamController<Map<String, dynamic>> _eventStreamController =
@@ -47,7 +50,8 @@ class GeofenceEngine {
   // Stream for auto-checkin events (joined activities within tight radius)
   final StreamController<Map<String, dynamic>> _checkinStreamController =
       StreamController.broadcast();
-  Stream<Map<String, dynamic>> get checkinStream => _checkinStreamController.stream;
+  Stream<Map<String, dynamic>> get checkinStream =>
+      _checkinStreamController.stream;
 
   // Track user's joined table IDs for activity-specific check-in
   Set<String> _userJoinedTableIds = {};
@@ -78,9 +82,18 @@ class GeofenceEngine {
     // Start Listening to Foreground Location
     _locationService.startTracking(); // Ensure service is tracking
     _positionSubscription?.cancel();
-    _positionSubscription = _locationService.locationStream.listen((position) {
-      checkProximity(position.latitude, position.longitude);
-    });
+    _positionSubscription = _locationService.locationStream.listen(
+      (position) {
+        checkProximity(position.latitude, position.longitude);
+      },
+      onError: (e) {
+        print('⚠️ GEOFENCE: Location stream error — $e. Restarting in 10s...');
+        _positionSubscription?.cancel();
+        _positionSubscription = null;
+        Future.delayed(const Duration(seconds: 10), () => init());
+      },
+      cancelOnError: false,
+    );
 
     print(
       '📍 GEOFENCE: Engine Initialized. ${_activeGeofences.length} fences loaded. Monitoring...',
@@ -193,8 +206,8 @@ class GeofenceEngine {
         final eventTime = DateTime.parse(datetimeStr);
         final timeUntilEvent = eventTime.difference(DateTime.now());
 
-        if (timeUntilEvent > const Duration(hours: 4)) {
-          return false; // Too far in future
+        if (timeUntilEvent > const Duration(hours: 48)) {
+          return false; // More than 2 days away — skip
         }
 
         if (timeUntilEvent.isNegative &&
@@ -205,7 +218,8 @@ class GeofenceEngine {
       // If no datetime (e.g. a table), it's always relevant
 
       // 2. Event not full
-      final currentCapacity = (event['current_capacity'] ?? event['member_count'] ?? 0) as num;
+      final currentCapacity =
+          (event['current_capacity'] ?? event['member_count'] ?? 0) as num;
       final maxGuests = (event['max_guests'] ?? event['capacity'] ?? 99) as num;
 
       if (currentCapacity >= maxGuests) {
@@ -225,16 +239,21 @@ class GeofenceEngine {
 
     try {
       // Time relevance (starts soon = higher priority)
-      final eventTime = DateTime.parse(event['datetime']);
-      final minutesUntil = eventTime.difference(DateTime.now()).inMinutes;
-
-      if (minutesUntil < 60) {
-        score += 50;
-      } else if (minutesUntil < 120) {
-        score += 30;
+      final datetimeRaw = event['datetime'] ?? event['start_datetime'];
+      if (datetimeRaw == null) {
+        score += 20; // Tables with no datetime get baseline score
       } else {
-        score += 10;
-      }
+        final eventTime = DateTime.parse(datetimeRaw as String);
+        final minutesUntil = eventTime.difference(DateTime.now()).inMinutes;
+
+        if (minutesUntil < 60) {
+          score += 50;
+        } else if (minutesUntil < 120) {
+          score += 30;
+        } else {
+          score += 10;
+        }
+      } // end datetime check
 
       // Capacity (nearly full = FOMO = higher priority)
       final currentCapacity = event['current_capacity'] ?? 0;
@@ -266,6 +285,10 @@ class GeofenceEngine {
   }
 
   void _triggerEvent(String id, String title, Map<String, dynamic> event) {
+    print(
+      '🔍 GEOFENCE TRIGGER CHECK: $title | muted=${_mutedZones.contains(id)} | insideZones=$_insideZones',
+    );
+
     // Check 1: User muted?
     if (_mutedZones.contains(id)) {
       print('🔇 GEOFENCE: $id is muted. Skipping.');
@@ -278,21 +301,27 @@ class GeofenceEngine {
       final elapsed = DateTime.now().difference(lastTime);
       if (elapsed < kNotificationCooldown) {
         print(
-          '🔇 GEOFENCE: $id cooldown active (${elapsed.inMinutes}m/${kNotificationCooldown.inHours}h)',
+          '🔇 GEOFENCE: $id cooldown active (${elapsed.inMinutes}m / ${kNotificationCooldown.inMinutes}m required)',
         );
         return;
       }
     }
 
     // PHASE 2: Check 3: Event relevant?
-    if (!_shouldNotify(event)) {
+    final relevant = _shouldNotify(event);
+    print(
+      '🔍 GEOFENCE: _shouldNotify=$relevant | event datetime=${event['datetime'] ?? event['start_datetime']} | capacity=${event['current_capacity'] ?? event['member_count']}/${event['max_guests'] ?? event['capacity']}',
+    );
+    if (!relevant) {
       print('⏭️ GEOFENCE: $id not relevant. Skipping.');
       return;
     }
 
     // PHASE 1: Check 4: Global rate limit?
     if (!_canSendNotification()) {
-      print('🚦 GEOFENCE: Rate limit - skipping $id');
+      print(
+        '🚦 GEOFENCE: Rate limit - skipping $id (${_recentNotifications.length} recent)',
+      );
       return;
     }
 
@@ -312,9 +341,11 @@ class GeofenceEngine {
       'id': id,
       'title': title,
       'datetime': event['datetime'] ?? event['start_datetime'],
-      'current_capacity': event['current_capacity'] ?? event['member_count'] ?? 0,
+      'current_capacity':
+          event['current_capacity'] ?? event['member_count'] ?? 0,
       'max_guests': event['max_guests'] ?? event['capacity'] ?? 0,
-      'location_name': event['location_name'] ?? event['venue_name'] ?? event['title'],
+      'location_name':
+          event['location_name'] ?? event['venue_name'] ?? event['title'],
       'ticket_price': event['ticket_price'] ?? event['price_per_person'] ?? 0,
     });
 
@@ -434,8 +465,10 @@ class GeofenceEngine {
     // First pass: collect all nearby events with distances
     for (final fence in _activeGeofences) {
       // Support both table (location_lat/lng) and event (latitude/longitude) schemas
-      final double fenceLat = ((fence['latitude'] ?? fence['location_lat']) as num).toDouble();
-      final double fenceLng = ((fence['longitude'] ?? fence['location_lng']) as num).toDouble();
+      final double fenceLat =
+          ((fence['latitude'] ?? fence['location_lat']) as num).toDouble();
+      final double fenceLng =
+          ((fence['longitude'] ?? fence['location_lng']) as num).toDouble();
 
       final double distance = _locationService.distanceBetween(
         userLat,
@@ -451,7 +484,11 @@ class GeofenceEngine {
 
       if (isJoinedActivity && distance < kJoinedActivityRadiusMeters) {
         // Joined activity within tight radius → auto-checkin prompt
-        checkinEvents.add({...fence, '_distance': distance, '_is_joined': true});
+        checkinEvents.add({
+          ...fence,
+          '_distance': distance,
+          '_is_joined': true,
+        });
       } else if (distance < kGeofenceRadiusMeters) {
         // Generic nearby event → discovery notification
         nearbyEvents.add(fence);
@@ -462,7 +499,11 @@ class GeofenceEngine {
 
     // Process joined activity check-ins first (higher priority, faster dwell)
     for (final event in checkinEvents) {
-      _handleCheckinEnter(event['id'], event['title'] ?? 'Your Activity', event);
+      _handleCheckinEnter(
+        event['id'],
+        event['title'] ?? 'Your Activity',
+        event,
+      );
     }
 
     // PHASE 2: Sort discovery events by priority if multiple
@@ -491,35 +532,46 @@ class GeofenceEngine {
   // --- State Machine ---
 
   /// Handle entry into a joined activity zone (tighter radius, faster dwell)
-  void _handleCheckinEnter(String id, String title, Map<String, dynamic> event) {
+  void _handleCheckinEnter(
+    String id,
+    String title,
+    Map<String, dynamic> event,
+  ) {
     final checkinKey = 'checkin_$id';
     // If already inside or triggered, do nothing
     if (_insideZones.contains(checkinKey)) return;
     if (_dwellTimers.containsKey(checkinKey)) return;
 
-    print('📍 CHECKIN: Near joined activity: $title (Starting ${kCheckinDwellTimeSeconds}s dwell)');
+    print(
+      '📍 CHECKIN: Near joined activity: $title (Starting ${kCheckinDwellTimeSeconds}s dwell)',
+    );
 
-    _dwellTimers[checkinKey] = Timer(Duration(seconds: kCheckinDwellTimeSeconds), () {
-      _insideZones.add(checkinKey);
-      _dwellTimers.remove(checkinKey);
+    _dwellTimers[checkinKey] = Timer(
+      Duration(seconds: kCheckinDwellTimeSeconds),
+      () {
+        _insideZones.add(checkinKey);
+        _dwellTimers.remove(checkinKey);
 
-      // Emit on auto-checkin stream (GeofenceModal will handle differently)
-      _checkinStreamController.add({
-        'id': id,
-        'title': title,
-        'datetime': event['datetime'] ?? event['start_datetime'],
-        'current_capacity': event['current_capacity'] ?? event['member_count'] ?? 0,
-        'max_guests': event['max_guests'] ?? event['capacity'] ?? 0,
-        'location_name': event['location_name'] ?? event['venue_name'] ?? event['title'],
-        'is_joined': true,
-      });
+        // Emit on auto-checkin stream (GeofenceModal will handle differently)
+        _checkinStreamController.add({
+          'id': id,
+          'title': title,
+          'datetime': event['datetime'] ?? event['start_datetime'],
+          'current_capacity':
+              event['current_capacity'] ?? event['member_count'] ?? 0,
+          'max_guests': event['max_guests'] ?? event['capacity'] ?? 0,
+          'location_name':
+              event['location_name'] ?? event['venue_name'] ?? event['title'],
+          'is_joined': true,
+        });
 
-      // Show a gentler notification for joined activities
-      _showGeofenceNotification(
-        "You've Arrived! 👋",
-        "Tap to check in to $title",
-      );
-    });
+        // Show a gentler notification for joined activities
+        _showGeofenceNotification(
+          "You've Arrived! 👋",
+          "Tap to check in to $title",
+        );
+      },
+    );
   }
 
   void _handleEnter(String id, String title, Map<String, dynamic> event) {

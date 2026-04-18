@@ -223,9 +223,7 @@ class SocialService {
         'longitude': longitude,
         'h3_cell': h3Cell,
         'image_urls': imageUrls,
-        'image_url': imageUrls?.isNotEmpty == true
-            ? imageUrls!.first
-            : null,
+        'image_url': imageUrls?.isNotEmpty == true ? imageUrls!.first : null,
         'video_url': videoUrl,
         'gif_url': gifUrl,
       };
@@ -233,18 +231,14 @@ class SocialService {
         postData['mentioned_user_ids'] = mentionedUserIds;
       }
 
-      final response = await _client
-          .from('posts')
-          .insert(postData)
-          .select('''
+      final response = await _client.from('posts').insert(postData).select('''
             *,
             user:user_id (
               id,
               display_name,
               avatar_url
             )
-          ''')
-          .single();
+          ''').single();
 
       // ✅ Publish to Ably philippines channel for real-time updates
       AblyService().publishPostCreated(
@@ -346,9 +340,10 @@ class SocialService {
         return false;
       } else {
         // Like (ignoreDuplicates as safety net for edge cases)
-        await _client.from('post_likes').insert(
-          {'post_id': postId, 'user_id': userId},
-        );
+        await _client.from('post_likes').insert({
+          'post_id': postId,
+          'user_id': userId,
+        });
 
         return true;
       }
@@ -519,10 +514,7 @@ class SocialService {
         };
       }).toList();
 
-      return {
-        'comments': comments,
-        'hasMore': comments.length > limit,
-      };
+      return {'comments': comments, 'hasMore': comments.length > limit};
     } catch (e) {
       print('❌ Error fetching comments: $e');
       return {'comments': <Map<String, dynamic>>[], 'hasMore': false};
@@ -576,10 +568,8 @@ class SocialService {
         insertData['mentioned_user_ids'] = mentionedUserIds;
       }
 
-      final response = await _client
-          .from('comments')
-          .insert(insertData)
-          .select('''
+      final response = await _client.from('comments').insert(insertData).select(
+        '''
             *,
             user:user_id!inner (
               id,
@@ -587,8 +577,8 @@ class SocialService {
               avatar_url,
               user_photos (photo_url, is_primary)
             )
-          ''')
-          .single();
+          ''',
+      ).single();
 
       // Ensure user avatar is populated in return for immediate UI update
       final userData = response['user'] as Map<String, dynamic>?;
@@ -1009,11 +999,14 @@ class SocialService {
 
     try {
       final currentUserId = _client.auth.currentUser?.id;
-      final response = await _client.rpc('search_users', params: {
-        'p_query': query.trim(),
-        'p_limit': limit,
-        'p_exclude_user_id': currentUserId,
-      });
+      final response = await _client.rpc(
+        'search_users',
+        params: {
+          'p_query': query.trim(),
+          'p_limit': limit,
+          'p_exclude_user_id': currentUserId,
+        },
+      );
 
       if (response == null) return [];
       return List<Map<String, dynamic>>.from(
@@ -1023,6 +1016,136 @@ class SocialService {
       print('❌ Error searching users: $e');
       return [];
     }
+  }
+
+  /// Unified search: single RPC round-trip, FTS + trigram + ILIKE fallback.
+  /// Returns {'hangouts': [...], 'events': [...], 'people': [...]}.
+  Future<Map<String, List<Map<String, dynamic>>>> searchAll(
+    String query, {
+    int limit = 10,
+  }) async {
+    if (query.trim().isEmpty) {
+      return {'hangouts': [], 'events': [], 'people': []};
+    }
+    try {
+      final userId =
+          _client.auth.currentUser?.id ??
+          '00000000-0000-0000-0000-000000000000';
+      final response = await _client.rpc(
+        'search_all',
+        params: {
+          'p_query': query.trim(),
+          'p_user_id': userId,
+          'p_limit': limit,
+        },
+      );
+      final data = Map<String, dynamic>.from(response as Map);
+      return {
+        'hangouts': List<Map<String, dynamic>>.from(
+          (data['hangouts'] as List).map((e) => Map<String, dynamic>.from(e)),
+        ),
+        'events': List<Map<String, dynamic>>.from(
+          (data['events'] as List).map((e) => Map<String, dynamic>.from(e)),
+        ),
+        'people': List<Map<String, dynamic>>.from(
+          (data['people'] as List).map((e) => Map<String, dynamic>.from(e)),
+        ),
+      };
+    } catch (e) {
+      print('❌ Error in searchAll: $e');
+      return {'hangouts': [], 'events': [], 'people': []};
+    }
+  }
+
+  /// Search hangouts via FTS RPC (for tab-specific queries).
+  Future<List<Map<String, dynamic>>> searchHangouts(
+    String query, {
+    int limit = 15,
+  }) async {
+    if (query.trim().isEmpty) return [];
+    try {
+      final response = await _client.rpc(
+        'search_hangouts_fts',
+        params: {'p_query': query.trim(), 'p_limit': limit},
+      );
+      return List<Map<String, dynamic>>.from(
+        (response as List).map((e) => Map<String, dynamic>.from(e)),
+      );
+    } catch (e) {
+      print('❌ Error searching hangouts: $e');
+      return [];
+    }
+  }
+
+  /// Search events via FTS RPC (for tab-specific queries).
+  Future<List<Map<String, dynamic>>> searchEvents(
+    String query, {
+    int limit = 15,
+  }) async {
+    if (query.trim().isEmpty) return [];
+    try {
+      final response = await _client.rpc(
+        'search_events_fts',
+        params: {'p_query': query.trim(), 'p_limit': limit},
+      );
+      return List<Map<String, dynamic>>.from(
+        (response as List).map((e) => Map<String, dynamic>.from(e)),
+      );
+    } catch (e) {
+      print('❌ Error searching events: $e');
+      return [];
+    }
+  }
+
+  /// Fetch discover feed data: trending hangouts, upcoming events, suggested people.
+  Future<Map<String, List<Map<String, dynamic>>>> getDiscoverFeed() async {
+    final currentUserId = _client.auth.currentUser?.id;
+    final userId = currentUserId ?? '00000000-0000-0000-0000-000000000000';
+
+    final results = await Future.wait<dynamic>([
+      // Top open hangouts ordered by most filled
+      _client
+          .from('tables')
+          .select(
+            'id, title, location_name, city, datetime, status, '
+            'current_capacity, max_guests, image_url, cuisine_type, marker_emoji',
+          )
+          .eq('status', 'open')
+          .gt('datetime', DateTime.now().toIso8601String())
+          .order('current_capacity', ascending: false)
+          .limit(8),
+
+      // Next active events
+      _client
+          .from('events')
+          .select(
+            'id, title, venue_name, start_datetime, status, cover_image_url, '
+            'event_type, ticket_price, capacity, tickets_sold',
+          )
+          .eq('status', 'active')
+          .gt('start_datetime', DateTime.now().toIso8601String())
+          .order('start_datetime', ascending: true)
+          .limit(8),
+
+      // Suggested people — avatar resolved from user_photos via RPC
+      _client.rpc(
+        'suggest_users',
+        params: {'p_current_user_id': userId, 'p_limit': 10},
+      ),
+    ]);
+
+    List<Map<String, dynamic>> toMaps(dynamic r) {
+      if (r == null) return [];
+      return List<Map<String, dynamic>>.from(
+        (r as List).map((e) => Map<String, dynamic>.from(e)),
+      );
+    }
+
+    return {
+      'hangouts': toMaps(results[0]),
+      'events': toMaps(results[1]),
+      'people': toMaps(results[2]),
+    };
   }
 
   /// Resolve a list of @usernames to their user IDs (batch, no N+1).

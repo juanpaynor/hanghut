@@ -147,7 +147,13 @@ class _FriendsGoingRowState extends State<FriendsGoingRow> {
                         decoration: BoxDecoration(
                           color: Theme.of(context).primaryColor,
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
+                          border: Border.all(
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? const Color(0xFF1E1E1E)
+                                : Colors.white,
+                            width: 2,
+                          ),
                         ),
                         child: Center(
                           child: Text(
@@ -172,7 +178,9 @@ class _FriendsGoingRowState extends State<FriendsGoingRow> {
                 style: GoogleFonts.inter(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Theme.of(context).textTheme.bodyLarge?.color,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white.withOpacity(0.9)
+                      : Colors.black87,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -205,7 +213,12 @@ class _FriendAvatar extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
+        border: Border.all(
+          color: Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFF1E1E1E)
+              : Colors.white,
+          width: 2,
+        ),
         color: Colors.grey[200],
       ),
       clipBehavior: Clip.antiAlias,
@@ -213,22 +226,12 @@ class _FriendAvatar extends StatelessWidget {
           ? CachedNetworkImage(
               imageUrl: avatarUrl!,
               fit: BoxFit.cover,
-              placeholder: (_, __) => Icon(
-                Icons.person,
-                size: size * 0.5,
-                color: Colors.grey[400],
-              ),
-              errorWidget: (_, __, ___) => Icon(
-                Icons.person,
-                size: size * 0.5,
-                color: Colors.grey[400],
-              ),
+              placeholder: (_, __) =>
+                  Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
+              errorWidget: (_, __, ___) =>
+                  Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
             )
-          : Icon(
-              Icons.person,
-              size: size * 0.5,
-              color: Colors.grey[400],
-            ),
+          : Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
     );
   }
 }
@@ -260,7 +263,7 @@ class _FriendsListSheet extends StatelessWidget {
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'Friends who $verb',
+              'Friends who are $verb',
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -268,16 +271,18 @@ class _FriendsListSheet extends StatelessWidget {
             ),
           ),
         ),
-        ...friends.map((friend) => ListTile(
-              leading: _FriendAvatar(
-                avatarUrl: friend['photo_url'] as String?,
-                size: 40,
-              ),
-              title: Text(
-                friend['display_name'] ?? 'Unknown',
-                style: GoogleFonts.inter(fontWeight: FontWeight.w500),
-              ),
-            )),
+        ...friends.map(
+          (friend) => ListTile(
+            leading: _FriendAvatar(
+              avatarUrl: friend['photo_url'] as String?,
+              size: 40,
+            ),
+            title: Text(
+              friend['display_name'] ?? 'Unknown',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w500),
+            ),
+          ),
+        ),
         const SizedBox(height: 20),
       ],
     );

@@ -62,23 +62,67 @@ class _ReportModalState extends State<ReportModal> {
       description: _descriptionController.text.trim().isNotEmpty
           ? _descriptionController.text.trim()
           : null,
-      metadata: {
-        'target_name': widget.targetName,
-      },
+      metadata: {'target_name': widget.targetName},
     );
 
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? 'Report submitted. We\'ll review it shortly.'
-                : 'Failed to submit report. Please try again.',
+      if (success && widget.targetType == 'user') {
+        // Prompt to block the user after reporting
+        final shouldBlock = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text('Block this user?'),
+            content: Text(
+              'Would you also like to block ${widget.targetName ?? 'this user'}? '
+              'They won\'t be able to see your profile, posts, or message you.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('No thanks'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text(
+                  'Block',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
+        );
+        if (shouldBlock == true && mounted) {
+          await ReportService().blockUser(widget.targetId);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('User blocked and report submitted.'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+          return;
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              success
+                  ? 'Report submitted. We\'ll review it shortly.'
+                  : 'Failed to submit report. Please try again.',
+            ),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -127,10 +171,17 @@ class _ReportModalState extends State<ReportModal> {
 
               // Header
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
-                    const Icon(Icons.flag_outlined, color: Colors.red, size: 24),
+                    const Icon(
+                      Icons.flag_outlined,
+                      color: Colors.red,
+                      size: 24,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -186,11 +237,11 @@ class _ReportModalState extends State<ReportModal> {
                             decoration: BoxDecoration(
                               color: isSelected
                                   ? (isDark
-                                      ? Colors.red.withOpacity(0.15)
-                                      : Colors.red.withOpacity(0.08))
+                                        ? Colors.red.withOpacity(0.15)
+                                        : Colors.red.withOpacity(0.08))
                                   : (isDark
-                                      ? Colors.grey[850]
-                                      : Colors.grey[50]),
+                                        ? Colors.grey[850]
+                                        : Colors.grey[50]),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: isSelected
@@ -208,7 +259,8 @@ class _ReportModalState extends State<ReportModal> {
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         category['label']!,
@@ -230,7 +282,11 @@ class _ReportModalState extends State<ReportModal> {
                                   ),
                                 ),
                                 if (isSelected)
-                                  const Icon(Icons.check_circle, color: Colors.red, size: 22),
+                                  const Icon(
+                                    Icons.check_circle,
+                                    color: Colors.red,
+                                    size: 22,
+                                  ),
                               ],
                             ),
                           ),
@@ -258,7 +314,9 @@ class _ReportModalState extends State<ReportModal> {
                           hintText: 'Tell us more about what happened...',
                           hintStyle: TextStyle(color: Colors.grey[400]),
                           filled: true,
-                          fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                          fillColor: isDark
+                              ? Colors.grey[800]
+                              : Colors.grey[100],
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide.none,

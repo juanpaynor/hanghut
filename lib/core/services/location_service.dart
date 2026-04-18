@@ -7,6 +7,8 @@ class LocationService {
   factory LocationService() => _instance;
   LocationService._internal();
 
+  StreamSubscription<Position>? _trackingSubscription;
+
   Position? _cachedPosition;
   DateTime? _lastUpdate;
   static const _cacheValidityMinutes = 5;
@@ -84,22 +86,54 @@ class LocationService {
 
   /// Start Foreground Stream
   void startTracking() {
+    // Cancel any existing subscription before starting a new one
+    _trackingSubscription?.cancel();
+    _trackingSubscription = null;
+
     print('📍 Location Tracking Started');
     const settings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 10, // Update every 10 meters
     );
 
-    Geolocator.getPositionStream(locationSettings: settings).listen(
+    _trackingSubscription = Geolocator.getPositionStream(locationSettings: settings).listen(
       (Position position) {
         _cachedPosition = position;
         _lastUpdate = DateTime.now();
         _locationController.add(position);
       },
       onError: (e) {
-        print('❌ LOCATION: Stream error - $e');
+        // kCLErrorDomain error 1 = kCLErrorLocationUnknown — transient iOS error,
+        // location will resume automatically. Just log and keep the stream alive.
+        // kCLErrorDomain error 0 = kCLErrorLocationDenied — user revoked permission.
+        final msg = e.toString();
+        if (msg.contains('kCLErrorDomain error 1') ||
+            msg.contains('kCLErrorLocationUnknown')) {
+          // Transient — iOS couldn't determine location momentarily; safe to ignore
+          print(
+            '⚠️ LOCATION: Temporary location unknown (kCLErrorDomain 1) — will retry automatically',
+          );
+        } else if (msg.contains('kCLErrorDomain error 0') ||
+            msg.contains('kCLErrorDenied')) {
+          print('⚠️ LOCATION: Permission revoked — stopping tracking');
+          stopTracking();
+        } else {
+          print('⚠️ LOCATION: Stream error (non-fatal) — $e');
+        }
+        // Reschedule tracking after a brief delay so the stream recovers
+        Future.delayed(const Duration(seconds: 5), () {
+          if (_trackingSubscription == null) startTracking();
+        });
       },
+      cancelOnError: false, // Keep subscription alive on errors
     );
+  }
+
+  /// Stop location tracking and release resources
+  void stopTracking() {
+    _trackingSubscription?.cancel();
+    _trackingSubscription = null;
+    print('📍 Location Tracking Stopped');
   }
 
   /// Calculate distance between two points (in meters)

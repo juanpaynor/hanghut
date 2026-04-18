@@ -8,6 +8,7 @@ class Badge {
   final String iconKey;
   final Map<String, dynamic> requirements;
   final DateTime createdAt;
+  final int xpReward;
 
   Badge({
     required this.id,
@@ -19,6 +20,7 @@ class Badge {
     required this.iconKey,
     required this.requirements,
     required this.createdAt,
+    this.xpReward = 0,
   });
 
   factory Badge.fromJson(Map<String, dynamic> json) {
@@ -34,6 +36,7 @@ class Badge {
           ? Map<String, dynamic>.from(json['requirements'] as Map)
           : {},
       createdAt: DateTime.parse(json['created_at'] as String),
+      xpReward: json['xp_reward'] as int? ?? 0,
     );
   }
 }

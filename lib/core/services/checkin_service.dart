@@ -23,11 +23,7 @@ class CheckinService {
     try {
       final response = await _supabase.rpc(
         'geo_checkin',
-        params: {
-          'p_table_id': tableId,
-          'p_user_lat': lat,
-          'p_user_lng': lng,
-        },
+        params: {'p_table_id': tableId, 'p_user_lat': lat, 'p_user_lng': lng},
       );
 
       final result = Map<String, dynamic>.from(response as Map);
@@ -68,9 +64,7 @@ class CheckinService {
   }
 
   /// Get all check-ins for an activity (for host dashboard / checkin banner)
-  Future<List<Map<String, dynamic>>> getActivityCheckins(
-    String tableId,
-  ) async {
+  Future<List<Map<String, dynamic>>> getActivityCheckins(String tableId) async {
     try {
       final result = await _supabase
           .from('activity_checkins')
@@ -107,8 +101,10 @@ class CheckinService {
       // 3. Update stats via BadgeService (which also checks for new badges)
       await _badgeService.incrementStats(
         userId,
+        checkins: 1,
         uniquePeople: uniquePeople,
         uniqueLocations: uniqueLocations,
+        baseXp: XpValues.checkIn,
       );
     } catch (e) {
       // Non-critical — stats update can fail silently
