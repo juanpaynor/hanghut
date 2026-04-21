@@ -90,86 +90,107 @@ class _ReportModalState extends State<ReportModal> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      // Handle keyboard padding
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-        left: 16,
-        right: 16,
-        top: 16,
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Report ${widget.entityType[0].toUpperCase()}${widget.entityType.substring(1)}',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+            left: 16,
+            right: 16,
+            top: 16,
           ),
-          const SizedBox(height: 24),
-          DropdownButtonFormField<String>(
-            value: _selectedReason,
-            hint: const Text('Select a reason'),
-            items: _reasons.map((reason) {
-              return DropdownMenuItem(value: reason, child: Text(reason));
-            }).toList(),
-            onChanged: (value) => setState(() => _selectedReason = value),
-            decoration: InputDecoration(
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _descriptionController,
-            decoration: InputDecoration(
-              hintText: 'Additional details (optional)...',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            maxLines: 3,
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _isSubmitting || _selectedReason == null
-                ? null
-                : _submit,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: _isSubmitting
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
-                  )
-                : const Text(
-                    'Submit Report',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
                   ),
+                ),
+              ),
+              Text(
+                'Report ${widget.entityType[0].toUpperCase()}${widget.entityType.substring(1)}',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              DropdownButtonFormField<String>(
+                value: _selectedReason,
+                hint: const Text('Select a reason'),
+                items: _reasons.map((reason) {
+                  return DropdownMenuItem(value: reason, child: Text(reason));
+                }).toList(),
+                onChanged: (value) => setState(() => _selectedReason = value),
+                decoration: InputDecoration(
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _descriptionController,
+                decoration: InputDecoration(
+                  hintText: 'Additional details (optional)...',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 24),
+              Material(
+                color: _isSubmitting || _selectedReason == null
+                    ? Colors.redAccent.withOpacity(0.4)
+                    : Colors.redAccent,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: _isSubmitting || _selectedReason == null ? null : _submit,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: double.infinity,
+                    height: 52,
+                    alignment: Alignment.center,
+                    child: _isSubmitting
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Submit Report',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
-        ],
+        ),
       ),
     );
   }

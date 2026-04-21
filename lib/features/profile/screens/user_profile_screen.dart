@@ -354,28 +354,66 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       // Unblock
       final confirm = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Text('Unblock User'),
-          content: Text('Are you sure you want to unblock $displayName?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
-                'Unblock',
-                style: TextStyle(
-                  color: Colors.green,
-                  fontWeight: FontWeight.bold,
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(color: Colors.green.shade50, shape: BoxShape.circle),
+                  child: const Icon(Icons.lock_open_rounded, color: Colors.green, size: 28),
                 ),
-              ),
+                const SizedBox(height: 16),
+                Text(
+                  'Unblock $displayName?',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'They\'ll be able to see your profile and message you again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.black54, height: 1.5),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.black54,
+                          side: const BorderSide(color: Color(0xFFE0E0E0)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: const Text('Unblock', style: TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       );
       if (confirm == true) {
@@ -391,32 +429,93 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       // Block
       final confirm = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
           ),
-          title: const Text('Block User'),
-          content: Text(
-            'Block $displayName?\n\n'
-            'They won\'t be able to see your profile, posts, or message you. '
-            'You won\'t see their content either.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
-                'Block',
-                style: TextStyle(
-                  color: Colors.red,
-                  fontWeight: FontWeight.bold,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.block_rounded,
+                    color: Colors.red,
+                    size: 28,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 16),
+                Text(
+                  'Block $displayName?',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'They won\'t be able to see your profile, posts, or message you. You won\'t see their content either.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.black54,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.black54,
+                          side: const BorderSide(color: Color(0xFFE0E0E0)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Block',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       );
       if (confirm == true) {

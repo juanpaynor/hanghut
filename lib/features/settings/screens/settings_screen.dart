@@ -48,7 +48,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final response = await SupabaseConfig.client
           .from('users')
-          .select('notification_preferences, hide_activity_from_friends')
+          .select('notification_preferences, hide_activity_from_friends, hide_distance')
           .eq('id', userId)
           .single();
 
@@ -63,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _notifPostComments = prefs['post_comments'] as bool? ?? true;
           _hideActivityFromFriends =
               response['hide_activity_from_friends'] as bool? ?? false;
+          _hideDistance = response['hide_distance'] as bool? ?? false;
           _isLoadingPrefs = false;
         });
       }
@@ -195,8 +196,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: Icons.straighten,
                 title: 'Hide my distance away from others',
                 value: _hideDistance,
-                // Nomadtable style has pink toggles for these
-                onChanged: (val) => setState(() => _hideDistance = val),
+                onChanged: (val) async {
+                  setState(() => _hideDistance = val);
+                  try {
+                    final userId = SupabaseConfig.client.auth.currentUser?.id;
+                    if (userId != null) {
+                      await SupabaseConfig.client
+                          .from('users')
+                          .update({'hide_distance': val})
+                          .eq('id', userId);
+                    }
+                  } catch (e) {
+                    print('Error updating hide_distance: $e');
+                  }
+                },
               ),
               SettingsSwitchTile(
                 icon: Icons.people_outline,

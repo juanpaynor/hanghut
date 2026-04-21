@@ -15,7 +15,7 @@ class MyTripsList extends StatefulWidget {
 class _MyTripsListState extends State<MyTripsList> {
   List<Map<String, dynamic>> _myTrips = [];
   bool _isLoading = true;
-  String _filter = 'upcoming'; // 'upcoming', 'past', 'all'
+  String _filter = 'all'; // 'all', 'upcoming', 'past'
 
   @override
   void initState() {
@@ -89,11 +89,11 @@ class _MyTripsListState extends State<MyTripsList> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
+                      _buildFilterChip('All', 'all'),
+                      const SizedBox(width: 8),
                       _buildFilterChip('Upcoming', 'upcoming'),
                       const SizedBox(width: 8),
                       _buildFilterChip('Past', 'past'),
-                      const SizedBox(width: 8),
-                      _buildFilterChip('All', 'all'),
                     ],
                   ),
                 ),

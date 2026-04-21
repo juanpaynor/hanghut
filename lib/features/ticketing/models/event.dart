@@ -18,6 +18,7 @@ class Event {
   final String? organizerName;
   final String? organizerPhotoUrl;
   final bool organizerVerified;
+  final String status;
   final DateTime createdAt;
 
   Event({
@@ -40,6 +41,7 @@ class Event {
     this.organizerName,
     this.organizerPhotoUrl,
     this.organizerVerified = false,
+    this.status = 'active',
     required this.createdAt,
     this.passFeesToCustomer,
     this.fixedFeePerTicket,
@@ -53,6 +55,7 @@ class Event {
   int get ticketsAvailable => capacity - ticketsSold;
   bool get isSoldOut => ticketsAvailable <= 0;
   bool get isLowAvailability => ticketsAvailable > 0 && ticketsAvailable < 10;
+  bool get isHidden => status == 'hidden';
 
   factory Event.fromJson(Map<String, dynamic> json) {
     return Event(
@@ -78,6 +81,7 @@ class Event {
       ticketsSold: json['tickets_sold'] as int? ?? 0,
       category: (json['category'] ?? json['event_type'] ?? '') as String,
       organizerId: json['organizer_id'] as String,
+      status: json['status'] as String? ?? 'active',
       organizerName: json['organizer_name'] as String?,
       organizerPhotoUrl: json['organizer_photo_url'] as String?,
       organizerVerified: json['organizer_verified'] as bool? ?? false,

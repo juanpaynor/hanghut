@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -25,12 +26,10 @@ import 'package:bitemates/providers/theme_provider.dart';
 import 'package:bitemates/features/splash/screens/cloud_opening_screen.dart';
 import 'package:bitemates/features/map/widgets/map_cluster_sheet.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
-import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
 import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
 import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
-
 
 // Filter enum for toggling marker visibility
 enum MapFilter { all, hangouts, events, experiences, stories }
@@ -39,11 +38,7 @@ class MapScreen extends StatefulWidget {
   final double? initialFlyToLat;
   final double? initialFlyToLng;
 
-  const MapScreen({
-    super.key,
-    this.initialFlyToLat,
-    this.initialFlyToLng,
-  });
+  const MapScreen({super.key, this.initialFlyToLat, this.initialFlyToLng});
 
   @override
   State<MapScreen> createState() => MapScreenState();
@@ -232,10 +227,8 @@ class MapScreenState extends State<MapScreen>
         final offsetLat = lat.toDouble() - 0.0015;
         _mapboxMap?.flyTo(
           CameraOptions(
-            center: Point(
-              coordinates: Position(lng.toDouble(), offsetLat),
-            ),
-          zoom: 17.5,
+            center: Point(coordinates: Position(lng.toDouble(), offsetLat)),
+            zoom: 17.5,
             pitch: 50.0,
           ),
           MapAnimationOptions(duration: 800),
@@ -248,14 +241,16 @@ class MapScreenState extends State<MapScreen>
         final size = MediaQuery.of(context).size;
         final center = Offset(size.width / 2, size.height / 2);
 
-        Navigator.of(context).push(
-          LiquidMorphRoute(
-            center: center,
-            page: TableCompactModal(table: table, matchData: matchData),
-          ),
-        ).then((_) {
-          if (mounted) setState(() => _isTableModalOpen = false);
-        });
+        Navigator.of(context)
+            .push(
+              LiquidMorphRoute(
+                center: center,
+                page: TableCompactModal(table: table, matchData: matchData),
+              ),
+            )
+            .then((_) {
+              if (mounted) setState(() => _isTableModalOpen = false);
+            });
       }
     } catch (e) {
       print('❌ Error showing table details: $e');
@@ -625,110 +620,99 @@ class MapScreenState extends State<MapScreen>
 
           // Filter Chips Row
           if (!_isTableModalOpen)
-          Positioned(
-            top: 100,
-            left: 0,
-            right: 0, // No constraint needed — buttons are lower now
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: MapFilter.values.map((filter) {
-                  final isSelected = _currentFilter == filter;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(_filterLabel(filter)),
-                      avatar: isSelected ? null : Icon(
-                        _filterIcon(filter),
-                        size: 16,
-                        color: Colors.black54,
+            Positioned(
+              top: 100,
+              left: 0,
+              right: 0, // No constraint needed — buttons are lower now
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: MapFilter.values.map((filter) {
+                    final isSelected = _currentFilter == filter;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(_filterLabel(filter)),
+                        avatar: isSelected
+                            ? null
+                            : Icon(
+                                _filterIcon(filter),
+                                size: 16,
+                                color: Colors.black54,
+                              ),
+                        selected: isSelected,
+                        onSelected: (_) => _onFilterChanged(filter),
+                        selectedColor: Theme.of(context).primaryColor,
+                        backgroundColor: Colors.white,
+                        labelStyle: TextStyle(
+                          color: isSelected ? Colors.white : Colors.black87,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 2,
+                        pressElevation: 4,
+                        showCheckmark: false,
                       ),
-                      selected: isSelected,
-                      onSelected: (_) => _onFilterChanged(filter),
-                      selectedColor: Theme.of(context).primaryColor,
-                      backgroundColor: Colors.white,
-                      labelStyle: TextStyle(
-                        color: isSelected ? Colors.white : Colors.black87,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      elevation: 2,
-                      pressElevation: 4,
-                      showCheckmark: false,
-                    ),
-                  );
-                }).toList(),
+                    );
+                  }).toList(),
+                ),
               ),
             ),
-          ),
 
           // Map Controls (upper-right)
           if (!_isTableModalOpen)
-          Positioned(
-            right: 16,
-            top: 180, // Lowered to avoid overlapping filter chips
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Refresh Button
-                FloatingActionButton(
-                  heroTag: 'map_refresh_btn',
-                  mini: true,
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black87,
-                  onPressed: _onRefreshTapped,
-                  child: const Icon(Icons.refresh, size: 20),
-                ),
-                const SizedBox(height: 12),
+            Positioned(
+              right: 16,
+              top: 180, // Lowered to avoid overlapping filter chips
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Refresh Button
+                  FloatingActionButton(
+                    heroTag: 'map_refresh_btn',
+                    mini: true,
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black87,
+                    onPressed: _onRefreshTapped,
+                    child: const Icon(Icons.refresh, size: 20),
+                  ),
+                  const SizedBox(height: 12),
 
-                // Focus Location Button
-                FloatingActionButton(
-                  heroTag: 'map_focus_btn',
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  onPressed: _onFocusLocationTapped,
-                  child: const Icon(Icons.my_location),
-                ),
-                const SizedBox(height: 12),
+                  // Focus Location Button
+                  FloatingActionButton(
+                    heroTag: 'map_focus_btn',
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    onPressed: _onFocusLocationTapped,
+                    child: const Icon(Icons.my_location),
+                  ),
+                  const SizedBox(height: 12),
 
-                // Camera/Story Button
-                FloatingActionButton(
-                  heroTag: 'map_story_camera_btn',
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const StoryCameraScreen(),
-                        fullscreenDialog: true,
-                      ),
-                    );
-                  },
-                  child: const Icon(Icons.add_a_photo),
-                ),
-                const SizedBox(height: 12),
-
-                // Isochrone Toggle
-                FloatingActionButton(
-                  heroTag: 'map_isochrone_btn',
-                  mini: true,
-                  backgroundColor: _showIsochrone
-                      ? Colors.indigo
-                      : Colors.white,
-                  foregroundColor: _showIsochrone
-                      ? Colors.white
-                      : Colors.black87,
-                  onPressed: _toggleIsochrone,
-                  child: Icon(_showIsochrone ? Icons.radar : Icons.radar, size: 20),
-                ),
-              ],
+                  // Isochrone Toggle
+                  FloatingActionButton(
+                    heroTag: 'map_isochrone_btn',
+                    mini: true,
+                    backgroundColor: _showIsochrone
+                        ? Colors.indigo
+                        : Colors.white,
+                    foregroundColor: _showIsochrone
+                        ? Colors.white
+                        : Colors.black87,
+                    onPressed: _showIsochrone
+                        ? _toggleIsochrone // already on → just turn off
+                        : _showIsochroneExplainer, // off → explain first
+                    child: Icon(
+                      _showIsochrone ? Icons.radar : Icons.radar,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
 
           // Isochrone is fixed at 15 minutes — no picker needed
 
@@ -772,21 +756,31 @@ class MapScreenState extends State<MapScreen>
 
   String _filterLabel(MapFilter filter) {
     switch (filter) {
-      case MapFilter.all: return 'All';
-      case MapFilter.hangouts: return 'Hangouts';
-      case MapFilter.events: return 'Events';
-      case MapFilter.experiences: return 'Experiences';
-      case MapFilter.stories: return 'Stories';
+      case MapFilter.all:
+        return 'All';
+      case MapFilter.hangouts:
+        return 'Hangouts';
+      case MapFilter.events:
+        return 'Events';
+      case MapFilter.experiences:
+        return 'Experiences';
+      case MapFilter.stories:
+        return 'Stories';
     }
   }
 
   IconData _filterIcon(MapFilter filter) {
     switch (filter) {
-      case MapFilter.all: return Icons.layers;
-      case MapFilter.hangouts: return Icons.restaurant;
-      case MapFilter.events: return Icons.confirmation_number;
-      case MapFilter.experiences: return Icons.palette;
-      case MapFilter.stories: return Icons.camera_alt;
+      case MapFilter.all:
+        return Icons.layers;
+      case MapFilter.hangouts:
+        return Icons.restaurant;
+      case MapFilter.events:
+        return Icons.confirmation_number;
+      case MapFilter.experiences:
+        return Icons.palette;
+      case MapFilter.stories:
+        return Icons.camera_alt;
     }
   }
 
@@ -798,7 +792,9 @@ class MapScreenState extends State<MapScreen>
 
   /// Filters the cached features list based on the active filter.
   /// Called both during initial fetch and on filter toggle.
-  List<Map<String, dynamic>> _filterFeatures(List<Map<String, dynamic>> features) {
+  List<Map<String, dynamic>> _filterFeatures(
+    List<Map<String, dynamic>> features,
+  ) {
     if (_currentFilter == MapFilter.all) return features;
 
     return features.where((f) {
@@ -931,7 +927,9 @@ class MapScreenState extends State<MapScreen>
       'features': filtered,
     });
 
-    print('🔍 Filter: ${_currentFilter.name} → ${filtered.length}/${features.length} features');
+    print(
+      '🔍 Filter: ${_currentFilter.name} → ${filtered.length}/${features.length} features',
+    );
 
     const sourceId = 'tables-cluster-source';
     final sourceExists = await style.styleSourceExists(sourceId);
@@ -1067,7 +1065,10 @@ class MapScreenState extends State<MapScreen>
                   index is int &&
                   index < _mysteryTables.length) {
                 final table = _mysteryTables[index];
-                stackedItems.add({...table, 'type': 'table'}); // Treat as table in sheet
+                stackedItems.add({
+                  ...table,
+                  'type': 'table',
+                }); // Treat as table in sheet
               } else if ((type == 'table' || type == 'experience') &&
                   index != null &&
                   index is int &&
@@ -1136,7 +1137,9 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return; // STOP processing
-          } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+          } else if (markerType == 'mystery' &&
+              index != null &&
+              index < _mysteryTables.length) {
             // Mystery marker tapped — open as normal table
             final table = _mysteryTables[index];
             final matchData = _matchingService.calculateMatch(
@@ -1267,7 +1270,9 @@ class MapScreenState extends State<MapScreen>
             );
           }
           return; // STOP processing
-        } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+        } else if (markerType == 'mystery' &&
+            index != null &&
+            index < _mysteryTables.length) {
           // Mystery marker tapped via 3D layer — open as normal table
           final table = _mysteryTables[index];
           final matchData = _matchingService.calculateMatch(
@@ -1440,9 +1445,7 @@ class MapScreenState extends State<MapScreen>
       final offsetLat = lat.toDouble() - 0.0015;
       _mapboxMap?.flyTo(
         CameraOptions(
-          center: Point(
-            coordinates: Position(lng.toDouble(), offsetLat),
-          ),
+          center: Point(coordinates: Position(lng.toDouble(), offsetLat)),
           zoom: 17.5,
           pitch: 50.0,
         ),
@@ -1455,14 +1458,16 @@ class MapScreenState extends State<MapScreen>
     final center = Offset(size.width / 2, size.height / 2);
 
     setState(() => _isTableModalOpen = true);
-    Navigator.of(context).push(
-      LiquidMorphRoute(
-        center: center,
-        page: TableCompactModal(table: table, matchData: matchData),
-      ),
-    ).then((_) {
-      if (mounted) setState(() => _isTableModalOpen = false);
-    });
+    Navigator.of(context)
+        .push(
+          LiquidMorphRoute(
+            center: center,
+            page: TableCompactModal(table: table, matchData: matchData),
+          ),
+        )
+        .then((_) {
+          if (mounted) setState(() => _isTableModalOpen = false);
+        });
   }
 
   // PHASE 1: Handle cluster tap
@@ -1676,8 +1681,11 @@ class MapScreenState extends State<MapScreen>
 
       // Filter mystery tables by isochrone proximity when pulse is active
       List<Map<String, dynamic>> activeMysteryTables = [];
-      if (_showIsochrone && _currentPosition != null && mysteryTablesRaw.isNotEmpty) {
-        final radiusKm = (_isochroneMinutes * 80.0) / 1000.0; // walking radius in km
+      if (_showIsochrone &&
+          _currentPosition != null &&
+          mysteryTablesRaw.isNotEmpty) {
+        final radiusKm =
+            (_isochroneMinutes * 80.0) / 1000.0; // walking radius in km
         activeMysteryTables = mysteryTablesRaw.where((table) {
           final lat = table['location_lat'] as num?;
           final lng = table['location_lng'] as num?;
@@ -1690,7 +1698,9 @@ class MapScreenState extends State<MapScreen>
           );
           return dist <= (radiusKm * 1000); // compare in meters
         }).toList();
-        print('🔮 Mystery tables in range: ${activeMysteryTables.length}/${mysteryTablesRaw.length}');
+        print(
+          '🔮 Mystery tables in range: ${activeMysteryTables.length}/${mysteryTablesRaw.length}',
+        );
       }
 
       // 4. Relevance Filtering: Sort by Match Score and Cap
@@ -1760,7 +1770,7 @@ class MapScreenState extends State<MapScreen>
       // --- ✅ PARALLEL Marker Generation: Tables, Events, Stories all at once ---
       // Previously these 3 blocks ran sequentially. Now they run in parallel
       // to reduce marker generation latency by ~60%.
-      
+
       final tableImagesFuture = () async {
         final tablesNeedImages = fetchedTables.where((table) {
           final imageId = 'table_img_${table['id']}';
@@ -1817,7 +1827,9 @@ class MapScreenState extends State<MapScreen>
                   );
                 }
 
-                final int imgHeight = table['is_experience'] == true ? 136 : 120;
+                final int imgHeight = table['is_experience'] == true
+                    ? 136
+                    : 120;
 
                 await style.addStyleImage(
                   imageId,
@@ -1932,7 +1944,9 @@ class MapScreenState extends State<MapScreen>
                 );
                 _addedImages.add(imageId);
               } catch (e) {
-                print('❌ Error generating mystery marker for ${table['id']}: $e');
+                print(
+                  '❌ Error generating mystery marker for ${table['id']}: $e',
+                );
               }
             }),
           );
@@ -1940,7 +1954,12 @@ class MapScreenState extends State<MapScreen>
       }();
 
       // ✅ Wait for ALL marker types to finish simultaneously
-      await Future.wait([tableImagesFuture, eventImagesFuture, storyImagesFuture, mysteryImagesFuture]);
+      await Future.wait([
+        tableImagesFuture,
+        eventImagesFuture,
+        storyImagesFuture,
+        mysteryImagesFuture,
+      ]);
 
       // --- Build feature data (fast, just data mapping) ---
 
@@ -2274,7 +2293,9 @@ class MapScreenState extends State<MapScreen>
       }
 
       // 3. Unclustered Points (Faces) with "Pop" Animation
-      final unclusteredExists = await style.styleLayerExists('unclustered-points');
+      final unclusteredExists = await style.styleLayerExists(
+        'unclustered-points',
+      );
       if (!unclusteredExists) {
         print('➕ Adding unclustered-points layer...');
         await style.addLayer(
@@ -2317,8 +2338,8 @@ class MapScreenState extends State<MapScreen>
     final double totalHeight = size + tailHeight;
     final double borderRadius = 12.0;
 
-    // Parse hex color
-    final color = Color(int.parse(glowColor.replaceFirst('#', '0xFF')));
+    // Experience markers always use fixed amber — consistent brand color
+    const Color color = Color(0xFFFF6F00); // Amber
 
     // 1. Build pin shape: rounded rect body + triangle tail
     final Path markerPath = Path();
@@ -2338,11 +2359,21 @@ class MapScreenState extends State<MapScreen>
     // Drop shadow
     canvas.drawShadow(markerPath, Colors.black.withOpacity(0.5), 4.0, true);
 
-    // White frame fill
+    // Amber-tinted frame fill (gives experience pins a warm identity)
     final Paint framePaint = Paint()
-      ..color = Colors.white
+      ..color =
+          const Color(0xFFFFF8F0) // Very light amber tint
       ..style = PaintingStyle.fill;
     canvas.drawPath(markerPath, framePaint);
+
+    // Amber border always visible (not conditional on glowIntensity)
+    canvas.drawPath(
+      markerPath,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
 
     // 2. Draw image content (clipped inside body)
     String? imageUrl = table['marker_image_url'];
@@ -2420,14 +2451,22 @@ class MapScreenState extends State<MapScreen>
       tp.paint(canvas, Offset(px + 7, py + (ph - tp.height) / 2));
     }
 
-    // 4. Glow border (follows pin shape)
-    if (glowIntensity > 0) {
-      canvas.drawPath(
-        markerPath,
-        Paint()
-          ..color = color.withOpacity(glowIntensity)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3,
+    // 4b. Experience type badge in top-right corner
+    {
+      const double badgeR = 14.0;
+      final Offset badgeCenter = Offset(size - 16.0, 16.0);
+      canvas.drawCircle(badgeCenter, badgeR + 2, Paint()..color = Colors.white);
+      canvas.drawCircle(badgeCenter, badgeR, Paint()..color = color);
+      final TextPainter tp = TextPainter(
+        text: const TextSpan(
+          text: '✦',
+          style: TextStyle(fontSize: 14, color: Colors.white),
+        ),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(badgeCenter.dx - tp.width / 2, badgeCenter.dy - tp.height / 2),
       );
     }
 
@@ -2459,12 +2498,34 @@ class MapScreenState extends State<MapScreen>
     final Paint bgPaint = Paint()..color = Colors.white;
     canvas.drawCircle(mainCenter, baseSize / 2 - 4, bgPaint);
 
-    // 2. Draw thick purple "Stories" ring
+    // 2. Draw pink→orange→yellow gradient ring (Instagram-style "Moments")
+    final double ringRadius = baseSize / 2 - 4;
+    final Rect ringRect = Rect.fromCircle(
+      center: mainCenter,
+      radius: ringRadius,
+    );
     final Paint ringPaint = Paint()
-      ..color = Colors.indigo.shade400
+      ..shader = SweepGradient(
+        colors: const [
+          Color(0xFFFF0080), // Hot pink
+          Color(0xFFFF6A00), // Orange
+          Color(0xFFFFD600), // Yellow
+          Color(0xFFFF0080), // Back to pink
+        ],
+        stops: const [0.0, 0.33, 0.66, 1.0],
+      ).createShader(ringRect)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 6;
-    canvas.drawCircle(mainCenter, baseSize / 2 - 4, ringPaint);
+      ..strokeWidth = 7;
+    canvas.drawCircle(mainCenter, ringRadius, ringPaint);
+    // White gap between ring and content
+    canvas.drawCircle(
+      mainCenter,
+      ringRadius - 5,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
 
     // 3. Draw image content (clipped to inner circle)
     String? imageUrl =
@@ -2506,6 +2567,29 @@ class MapScreenState extends State<MapScreen>
     } catch (e) {
       print('❌ Error loading story image: $e');
       _drawPlaceholder(canvas, baseSize, placeholderType);
+    }
+
+    // 3b. Camera badge in top-left (marks this as a Story/Moment)
+    {
+      const double badgeR = 14.0;
+      const Offset badgeCenter = Offset(22, 22);
+      canvas.drawCircle(badgeCenter, badgeR + 2, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        badgeCenter,
+        badgeR,
+        Paint()
+          ..shader = const LinearGradient(
+            colors: [Color(0xFFFF0080), Color(0xFFFF6A00)],
+          ).createShader(Rect.fromCircle(center: badgeCenter, radius: badgeR)),
+      );
+      final TextPainter tp = TextPainter(
+        text: const TextSpan(text: '📸', style: TextStyle(fontSize: 13)),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(badgeCenter.dx - tp.width / 2, badgeCenter.dy - tp.height / 2),
+      );
     }
 
     // 4. Draw author avatar overlapping bottom right
@@ -2952,7 +3036,8 @@ class MapScreenState extends State<MapScreen>
 
     // Dark background fill
     final Paint bgPaint = Paint()
-      ..color = const Color(0xFF1E1033) // Deep purple-black
+      ..color =
+          const Color(0xFF1E1033) // Deep purple-black
       ..style = PaintingStyle.fill;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -2964,10 +3049,7 @@ class MapScreenState extends State<MapScreen>
 
     // 🔮 Crystal ball emoji
     final textPainter = TextPainter(
-      text: const TextSpan(
-        text: '🔮',
-        style: TextStyle(fontSize: 44),
-      ),
+      text: const TextSpan(text: '🔮', style: TextStyle(fontSize: 44)),
       textAlign: TextAlign.center,
       textDirection: ui.TextDirection.ltr,
     );
@@ -2978,8 +3060,13 @@ class MapScreenState extends State<MapScreen>
     );
 
     // Convert to image
-    final ui.Image image = await pictureRecorder.endRecording().toImage(size, size);
-    final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final ui.Image image = await pictureRecorder.endRecording().toImage(
+      size,
+      size,
+    );
+    final ByteData? byteData = await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
     return byteData!.buffer.asUint8List();
   }
 
@@ -3046,14 +3133,47 @@ class MapScreenState extends State<MapScreen>
       );
     }
 
-    // 4. Draw Border Ring
-    final Paint borderPaint = Paint()
-      ..color = Colors
-          .black // Dark border for contrast
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4;
+    // 4. Draw Purple double-ring border (Events = Purple #7C4DFF)
+    // Outer ring
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      (size / 2) - 1,
+      Paint()
+        ..color = const Color(0xFF7C4DFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6,
+    );
+    // Inner accent ring
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      (size / 2) - 9,
+      Paint()
+        ..color = const Color(0xFF7C4DFF).withOpacity(0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
 
-    canvas.drawCircle(Offset(size / 2, size / 2), (size / 2) - 2, borderPaint);
+    // 4b. Ticket badge in top-left corner
+    {
+      const double badgeR = 14.0;
+      const Offset badgeCenter = Offset(22, 22);
+      // Purple circle bg
+      canvas.drawCircle(badgeCenter, badgeR + 2, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        badgeCenter,
+        badgeR,
+        Paint()..color = const Color(0xFF7C4DFF),
+      );
+      // Ticket emoji
+      final TextPainter tp = TextPainter(
+        text: const TextSpan(text: '🎟', style: TextStyle(fontSize: 14)),
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(badgeCenter.dx - tp.width / 2, badgeCenter.dy - tp.height / 2),
+      );
+    }
 
     // 5. Draw Badge (If count > 1)
     if (badgeCount > 1) {
@@ -3092,21 +3212,6 @@ class MapScreenState extends State<MapScreen>
       format: ui.ImageByteFormat.png,
     );
     return byteData!.buffer.asUint8List();
-  }
-
-  void _drawTicketIconFallback(Canvas canvas, int size) {
-    // Draw ticket/event icon (🎟️) as fallback
-    final textPainter = TextPainter(
-      text: const TextSpan(text: '🎟️', style: TextStyle(fontSize: 50)),
-      textAlign: TextAlign.center,
-      textDirection: ui.TextDirection.ltr,
-    );
-    textPainter.layout();
-
-    textPainter.paint(
-      canvas,
-      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
-    );
   }
 
   void _drawPlaceholder(Canvas canvas, int size, String? activityType) {
@@ -3249,7 +3354,8 @@ class MapScreenState extends State<MapScreen>
                 final table = _mysteryTables[idx];
                 stackedItems.add({...table, 'type': 'table'});
               } else if ((type == 'table' || type == 'experience') &&
-                  idx != null && idx < _tables.length) {
+                  idx != null &&
+                  idx < _tables.length) {
                 final table = _tables[idx];
                 stackedItems.add({...table, 'type': 'table'});
               }
@@ -3312,7 +3418,9 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return;
-          } else if (markerType == 'mystery' && index != null && index < _mysteryTables.length) {
+          } else if (markerType == 'mystery' &&
+              index != null &&
+              index < _mysteryTables.length) {
             final table = _mysteryTables[index];
             print('🔮 Opening mystery table: ${table['title']}');
             final matchData = _matchingService.calculateMatch(
@@ -3323,7 +3431,8 @@ class MapScreenState extends State<MapScreen>
               _openTableModal(context, table, matchData, screenCoordinate);
             }
           } else if ((markerType == 'table' || markerType == 'experience') &&
-              index != null && index < _tables.length) {
+              index != null &&
+              index < _tables.length) {
             final table = _tables[index];
             print('🍽️ Opening table: ${table['title']}');
 
@@ -3354,9 +3463,9 @@ class MapScreenState extends State<MapScreen>
     // Total ~15 frames. Each value is the iconSize at that frame.
     const List<double> keyframes = [
       0.00, 0.15, 0.35, 0.58, 0.80, // Ramp up (0-166ms)
-      1.00, 1.10, 1.15,              // Overshoot peak (200-266ms)
-      1.10, 1.02, 0.95,              // Settle back (300-366ms)
-      0.97, 1.00, 1.00, 1.00,        // Final settle (400-500ms)
+      1.00, 1.10, 1.15, // Overshoot peak (200-266ms)
+      1.10, 1.02, 0.95, // Settle back (300-366ms)
+      0.97, 1.00, 1.00, 1.00, // Final settle (400-500ms)
     ];
 
     int frame = 0;
@@ -3409,18 +3518,21 @@ class MapScreenState extends State<MapScreen>
   // ========================
 
   /// Generates a GeoJSON Polygon circle with [numPoints] vertices.
-  Map<String, dynamic> _buildCircleGeoJson(double lat, double lng, double radiusMeters, {int numPoints = 64}) {
+  Map<String, dynamic> _buildCircleGeoJson(
+    double lat,
+    double lng,
+    double radiusMeters, {
+    int numPoints = 64,
+  }) {
     const double earthRadius = 6371000; // meters
     final List<List<double>> coords = [];
 
     for (int i = 0; i <= numPoints; i++) {
       final angle = (2 * pi * i) / numPoints;
       final dLat = radiusMeters / earthRadius * (180 / pi);
-      final dLng = radiusMeters / (earthRadius * cos(lat * pi / 180)) * (180 / pi);
-      coords.add([
-        lng + dLng * cos(angle),
-        lat + dLat * sin(angle),
-      ]);
+      final dLng =
+          radiusMeters / (earthRadius * cos(lat * pi / 180)) * (180 / pi);
+      coords.add([lng + dLng * cos(angle), lat + dLat * sin(angle)]);
     }
 
     return {
@@ -3436,6 +3548,178 @@ class MapScreenState extends State<MapScreen>
         },
       ],
     };
+  }
+
+  Future<void> _showIsochroneExplainer() async {
+    final prefs = await SharedPreferences.getInstance();
+    final skip = prefs.getBool('isochrone_explainer_skip') ?? false;
+    if (skip) {
+      _toggleIsochrone();
+      return;
+    }
+
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final bg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
+        bool dontShowAgain = false;
+        return StatefulBuilder(
+          builder: (ctx2, setModalState) {
+            return Container(
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Handle
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 20),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  // Icon
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child:
+                        const Icon(Icons.radar, size: 32, color: Colors.indigo),
+                  ),
+                  const SizedBox(height: 16),
+                  // Title
+                  const Text(
+                    'Unlock Hidden Activities',
+                    style:
+                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  // Description
+                  Text(
+                    'Some hangouts, experiences, and events are hidden on the map — they only reveal themselves to people who are within walking distance.\n\nActivate your walking zone to uncover what\'s secret nearby.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? Colors.grey[400] : Colors.grey[600],
+                      height: 1.55,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // Tip row
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.lock_open,
+                            size: 18, color: Colors.indigo),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Only visible to people within a 15 min walk',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isDark
+                                  ? Colors.indigo[200]
+                                  : Colors.indigo[700],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // CTA button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        if (dontShowAgain) {
+                          await prefs.setBool(
+                              'isochrone_explainer_skip', true);
+                        }
+                        Navigator.pop(ctx2);
+                        _toggleIsochrone();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.indigo,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        'Reveal Hidden Activities',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Don't show again
+                  GestureDetector(
+                    onTap: () =>
+                        setModalState(() => dontShowAgain = !dontShowAgain),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: Checkbox(
+                            value: dontShowAgain,
+                            onChanged: (v) => setModalState(
+                                () => dontShowAgain = v ?? false),
+                            activeColor: Colors.indigo,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "Don't show this again",
+                          style: TextStyle(
+                            fontSize: 13,
+                            color:
+                                isDark ? Colors.grey[500] : Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _toggleIsochrone({bool forceRefresh = false}) async {
@@ -3482,9 +3766,7 @@ class MapScreenState extends State<MapScreen>
 
       await _removeIsochrone();
 
-      await style.addSource(
-        GeoJsonSource(id: sourceId, data: geoJsonStr),
-      );
+      await style.addSource(GeoJsonSource(id: sourceId, data: geoJsonStr));
 
       // Base fill — subtle indigo wash
       const fillColor = Color(0xFF3F51B5);
@@ -3538,7 +3820,9 @@ class MapScreenState extends State<MapScreen>
         );
       }
 
-      print('✅ Isochrone circle: ${_isochroneMinutes}min / ${radiusMeters.toInt()}m radius');
+      print(
+        '✅ Isochrone circle: ${_isochroneMinutes}min / ${radiusMeters.toInt()}m radius',
+      );
 
       // Start ripple scan animation
       _startIsochronePulse();
@@ -3592,60 +3876,66 @@ class MapScreenState extends State<MapScreen>
     final fullRadius = _isochroneMinutes * 80.0;
 
     // ~15fps — smooth enough, light on the style engine
-    _isochronePulseTimer = Timer.periodic(
-      const Duration(milliseconds: 66),
-      (_) {
-        if (!mounted || _mapboxMap == null || !_showIsochrone || _currentPosition == null) {
-          _stopIsochronePulse();
-          return;
-        }
+    _isochronePulseTimer = Timer.periodic(const Duration(milliseconds: 66), (
+      _,
+    ) {
+      if (!mounted ||
+          _mapboxMap == null ||
+          !_showIsochrone ||
+          _currentPosition == null) {
+        _stopIsochronePulse();
+        return;
+      }
 
-        // Advance phase: one full ripple cycle ~4 seconds (60 ticks * 66ms ≈ 4s)
-        _isochronePulsePhase += 1.0 / 60.0;
-        if (_isochronePulsePhase > 1.0) _isochronePulsePhase -= 1.0;
+      // Advance phase: one full ripple cycle ~4 seconds (60 ticks * 66ms ≈ 4s)
+      _isochronePulsePhase += 1.0 / 60.0;
+      if (_isochronePulsePhase > 1.0) _isochronePulsePhase -= 1.0;
 
-        try {
-          final style = _mapboxMap!.style;
+      try {
+        final style = _mapboxMap!.style;
 
-          // Two ripple rings, staggered 50% apart
-          for (int i = 0; i < 2; i++) {
-            // Each ring's progress: 0 → 1, offset by 0.5
-            double progress = (_isochronePulsePhase + i * 0.5) % 1.0;
+        // Two ripple rings, staggered 50% apart
+        for (int i = 0; i < 2; i++) {
+          // Each ring's progress: 0 → 1, offset by 0.5
+          double progress = (_isochronePulsePhase + i * 0.5) % 1.0;
 
-            // Ring expands from 10% to 100% of full radius
-            final radius = fullRadius * (0.1 + 0.9 * progress);
+          // Ring expands from 10% to 100% of full radius
+          final radius = fullRadius * (0.1 + 0.9 * progress);
 
-            // Opacity: fade in quickly then fade out as it expands
-            // Peak at ~20% progress, gone by 100%
-            double opacity;
-            if (progress < 0.2) {
-              opacity = progress / 0.2 * 0.6; // Ramp up to 0.6
-            } else {
-              opacity = 0.6 * (1.0 - (progress - 0.2) / 0.8); // Fade to 0
-            }
-
-            // Line width: thicker at start, thinner as it expands
-            final lineWidth = 4.0 * (1.0 - progress * 0.7);
-
-            // Update the ring's geometry
-            final circleGeoJson = _buildCircleGeoJson(
-              _currentPosition!.latitude,
-              _currentPosition!.longitude,
-              radius,
-            );
-
-            final sourceId = 'isochrone-ripple-$i';
-            final layerId = 'isochrone-ripple-line-$i';
-
-            style.setStyleSourceProperty(sourceId, 'data', jsonEncode(circleGeoJson));
-            style.setStyleLayerProperty(layerId, 'line-opacity', opacity);
-            style.setStyleLayerProperty(layerId, 'line-width', lineWidth);
+          // Opacity: fade in quickly then fade out as it expands
+          // Peak at ~20% progress, gone by 100%
+          double opacity;
+          if (progress < 0.2) {
+            opacity = progress / 0.2 * 0.6; // Ramp up to 0.6
+          } else {
+            opacity = 0.6 * (1.0 - (progress - 0.2) / 0.8); // Fade to 0
           }
-        } catch (_) {
-          // Layer may have been removed
+
+          // Line width: thicker at start, thinner as it expands
+          final lineWidth = 4.0 * (1.0 - progress * 0.7);
+
+          // Update the ring's geometry
+          final circleGeoJson = _buildCircleGeoJson(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            radius,
+          );
+
+          final sourceId = 'isochrone-ripple-$i';
+          final layerId = 'isochrone-ripple-line-$i';
+
+          style.setStyleSourceProperty(
+            sourceId,
+            'data',
+            jsonEncode(circleGeoJson),
+          );
+          style.setStyleLayerProperty(layerId, 'line-opacity', opacity);
+          style.setStyleLayerProperty(layerId, 'line-width', lineWidth);
         }
-      },
-    );
+      } catch (_) {
+        // Layer may have been removed
+      }
+    });
   }
 
   void _stopIsochronePulse() {

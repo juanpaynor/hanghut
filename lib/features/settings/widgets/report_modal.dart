@@ -71,31 +71,92 @@ class _ReportModalState extends State<ReportModal> {
         // Prompt to block the user after reporting
         final shouldBlock = await showDialog<bool>(
           context: context,
-          builder: (ctx) => AlertDialog(
+          builder: (ctx) => Dialog(
+            backgroundColor: Colors.white,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
             ),
-            title: const Text('Block this user?'),
-            content: Text(
-              'Would you also like to block ${widget.targetName ?? 'this user'}? '
-              'They won\'t be able to see your profile, posts, or message you.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('No thanks'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text(
-                  'Block',
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.block_rounded,
+                      color: Colors.red,
+                      size: 28,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Block User?',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Would you also like to block ${widget.targetName ?? 'this user'}? They won\'t be able to see your profile, posts, or message you.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.black54,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.black54,
+                            side: const BorderSide(color: Color(0xFFE0E0E0)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            'Skip',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            'Block',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
         if (shouldBlock == true && mounted) {
@@ -339,38 +400,41 @@ class _ReportModalState extends State<ReportModal> {
                   bottom: MediaQuery.of(context).padding.bottom + 16,
                   top: 8,
                 ),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: _selectedReason != null && !_isSubmitting
+                child: Material(
+                  color: _selectedReason != null && !_isSubmitting
+                      ? Colors.red
+                      : Colors.grey[300]!,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    onTap: _selectedReason != null && !_isSubmitting
                         ? _submit
                         : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: Colors.grey[300],
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(14),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 54,
+                      child: Center(
+                        child: _isSubmitting
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                'Submit Report',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: _selectedReason != null
+                                      ? Colors.white
+                                      : Colors.grey[500],
+                                ),
+                              ),
                       ),
-                      elevation: 0,
                     ),
-                    child: _isSubmitting
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Submit Report',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
                   ),
                 ),
               ),

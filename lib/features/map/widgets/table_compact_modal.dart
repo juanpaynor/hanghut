@@ -1186,8 +1186,23 @@ class _TableCompactModalState extends State<TableCompactModal> {
         final isPending = message.contains('Request sent');
 
         if (isPending) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message), backgroundColor: Colors.orange),
+          await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              icon: const Icon(
+                Icons.hourglass_top,
+                color: Colors.orange,
+                size: 40,
+              ),
+              title: const Text('Request Sent'),
+              content: Text(message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
           );
           _checkMembershipStatus();
           _fetchPendingCount();
@@ -1199,27 +1214,84 @@ class _TableCompactModalState extends State<TableCompactModal> {
               'Unknown Venue';
 
           Navigator.pop(context, true);
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(message)));
 
-          showModalBottomSheet(
+          await showDialog(
             context: context,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            enableDrag: true,
-            builder: (context) => ChatScreen(
-              channelId: 'table_${widget.table['id']}',
-              tableId: widget.table['id'],
-              tableTitle: venueName,
+            builder: (ctx) => AlertDialog(
+              icon: const Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 40,
+              ),
+              title: const Text("You're in! 🎉"),
+              content: Text(message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Later'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      enableDrag: true,
+                      builder: (context) => ChatScreen(
+                        channelId: 'table_${widget.table['id']}',
+                        tableId: widget.table['id'],
+                        tableTitle: venueName,
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                  ),
+                  child: const Text('Open Chat'),
+                ),
+              ],
             ),
           );
         }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message']),
-            backgroundColor: Colors.red,
+        final message =
+            result['message'] ?? 'Something went wrong. Please try again.';
+        final isTooFar =
+            message.toString().toLowerCase().contains('too far') ||
+            message.toString().toLowerCase().contains('km away');
+
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: Icon(
+              isTooFar ? Icons.location_off_outlined : Icons.error_outline,
+              color: isTooFar ? Colors.orange : Colors.red,
+              size: 40,
+            ),
+            title: Text(isTooFar ? "You're Too Far Away" : 'Could Not Join'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(message),
+                if (isTooFar) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'The host has set a location limit for this hangout. You need to be nearby to join.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
           ),
         );
       }

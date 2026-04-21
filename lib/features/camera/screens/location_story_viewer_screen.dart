@@ -56,6 +56,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
   // Story viewers tracking
   final Map<String, int> _viewerCounts = {}; // postId -> count
+
+  // Prefetch for next story (zero-wait on advance)
+  VideoPlayerController? _nextVideoController;
+  String? _prefetchedVideoUrl;
   final Set<String> _recordedViews = {}; // postIds we've already recorded
 
   // Timer for image stories
@@ -76,6 +80,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   void dispose() {
     _progressController.dispose();
     _videoController?.dispose();
+    _nextVideoController?.dispose();
     super.dispose();
   }
 
@@ -90,7 +95,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       final initialId = widget.initialStory['id']?.toString();
 
       if (widget.clusterId != null) {
-        final isUuid = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$').hasMatch(widget.clusterId!);
+        final isUuid = RegExp(
+          r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+        ).hasMatch(widget.clusterId!);
         final isEvent = widget.clusterId!.startsWith('evt_');
         final isTable = widget.clusterId!.startsWith('tbl_');
 
@@ -328,7 +335,11 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     } catch (e) {
       debugPrint('Error deleting story: $e');
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to delete story');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Failed to delete story',
+        );
       }
     }
   }
@@ -371,17 +382,19 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     if (currentUserId == null) return;
     if (currentUserId == authorId) return; // Don't count self-views
-    if (_recordedViews.contains(postId)) return; // Already recorded this session
+    if (_recordedViews.contains(postId))
+      return; // Already recorded this session
 
     _recordedViews.add(postId);
 
     // Fire-and-forget upsert
     Supabase.instance.client
         .from('story_views')
-        .upsert(
-          {'post_id': postId, 'viewer_id': currentUserId, 'viewed_at': DateTime.now().toUtc().toIso8601String()},
-          onConflict: 'post_id,viewer_id',
-        )
+        .upsert({
+          'post_id': postId,
+          'viewer_id': currentUserId,
+          'viewed_at': DateTime.now().toUtc().toIso8601String(),
+        }, onConflict: 'post_id,viewer_id')
         .then((_) => debugPrint('👁️ Recorded view for story $postId'))
         .catchError((e) => debugPrint('⚠️ Failed to record story view: $e'));
   }
@@ -411,6 +424,45 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     }
   }
 
+  /// Pre-downloads the next story so there's no wait when the user advances.
+  void _prefetchNextStory() {
+    // Discard any previous prefetch
+    _nextVideoController?.dispose();
+    _nextVideoController = null;
+    _prefetchedVideoUrl = null;
+
+    // Only prefetch within the current user's story list
+    final nextIndex = _currentIndex + 1;
+    if (nextIndex >= _stories.length) return;
+
+    final nextStory = _stories[nextIndex];
+    final imageUrl = nextStory['image_url'] as String?;
+    final videoUrl = nextStory['video_url'] as String?;
+
+    if (imageUrl != null && mounted) {
+      // Warm Flutter's image cache
+      precacheImage(NetworkImage(imageUrl), context);
+    } else if (videoUrl != null) {
+      // Pre-initialize the video controller in the background
+      _prefetchedVideoUrl = videoUrl;
+      final ctrl = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
+      ctrl
+          .initialize()
+          .then((_) {
+            if (mounted && _prefetchedVideoUrl == videoUrl) {
+              _nextVideoController = ctrl;
+              debugPrint('✅ Prefetched video story: $videoUrl');
+            } else {
+              ctrl.dispose();
+            }
+          })
+          .catchError((e) {
+            ctrl.dispose();
+            debugPrint('⚠️ Prefetch failed: $e');
+          });
+    }
+  }
+
   void _startImageStory() {
     _progressController.removeStatusListener(_onProgressComplete);
     _progressController.stop();
@@ -418,6 +470,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     _progressController.duration = _imageDuration;
     _progressController.addStatusListener(_onProgressComplete);
     _progressController.forward();
+    _prefetchNextStory();
   }
 
   void _startVideoStory() async {
@@ -426,6 +479,28 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
     final url = _stories[_currentIndex]['video_url'] as String;
 
+    // ── Use prefetched controller if it matches this URL ──
+    if (_nextVideoController != null &&
+        _prefetchedVideoUrl == url &&
+        _nextVideoController!.value.isInitialized) {
+      _videoController = _nextVideoController;
+      _nextVideoController = null;
+      _prefetchedVideoUrl = null;
+
+      if (!mounted) return;
+      setState(() => _videoInitialized = true);
+      _progressController.removeStatusListener(_onProgressComplete);
+      _progressController.stop();
+      _progressController.reset();
+      _progressController.duration = _videoController!.value.duration;
+      _progressController.addStatusListener(_onProgressComplete);
+      _progressController.forward();
+      _videoController!.play();
+      _prefetchNextStory(); // queue up the one after
+      return;
+    }
+
+    // ── Normal init (first story, or prefetch wasn't ready) ──
     try {
       _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
       await _videoController!.initialize();
@@ -442,6 +517,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       _progressController.forward();
 
       _videoController!.play();
+      _prefetchNextStory(); // start prefetching next while this plays
     } catch (e) {
       debugPrint('⚠️ Video load error: $e');
       if (!mounted) return;
@@ -495,6 +571,11 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   }
 
   void _goPrevious() {
+    // Discard next-prefetch since we're going backwards
+    _nextVideoController?.dispose();
+    _nextVideoController = null;
+    _prefetchedVideoUrl = null;
+
     if (_currentIndex <= 0) {
       // First story for this user — try going to previous user
       if (_userQueue.isNotEmpty && _currentUserIndex > 0) {
@@ -550,10 +631,15 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     }
 
     try {
-      final cutoff = DateTime.now().subtract(const Duration(hours: 24)).toUtc().toIso8601String();
+      final cutoff = DateTime.now()
+          .subtract(const Duration(hours: 24))
+          .toUtc()
+          .toIso8601String();
       final List<dynamic> response = await Supabase.instance.client
           .from('posts')
-          .select('*, user:user_id(id, display_name, avatar_url, user_photos(photo_url, is_primary))')
+          .select(
+            '*, user:user_id(id, display_name, avatar_url, user_photos(photo_url, is_primary))',
+          )
           .eq('is_story', true)
           .eq('user_id', userId)
           .gte('created_at', cutoff)
@@ -738,10 +824,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
             _buildHeader(),
 
             // Footer
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildFooter(),
-            ),
+            Align(alignment: Alignment.bottomCenter, child: _buildFooter()),
 
             // Loading overlay for user transitions
             if (_isLoadingNextUser)
@@ -804,7 +887,11 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       final imageUrl = story['image_url'] ?? '';
       if (imageUrl.isEmpty) {
         return const Center(
-          child: Icon(Icons.image_not_supported, color: Colors.white54, size: 48),
+          child: Icon(
+            Icons.image_not_supported,
+            color: Colors.white54,
+            size: 48,
+          ),
         );
       }
       return Image.network(
@@ -839,7 +926,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
         return Expanded(
           child: Padding(
-            padding: EdgeInsets.only(right: index < _stories.length - 1 ? 4 : 0),
+            padding: EdgeInsets.only(
+              right: index < _stories.length - 1 ? 4 : 0,
+            ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(1.5),
               child: LinearProgressIndicator(
@@ -1002,7 +1091,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
                     if (lat == null || lng == null) return;
 
                     // Stop playback
-                    _progressController.removeStatusListener(_onProgressComplete);
+                    _progressController.removeStatusListener(
+                      _onProgressComplete,
+                    );
                     _progressController.stop();
                     _videoController?.pause();
 

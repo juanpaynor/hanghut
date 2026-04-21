@@ -519,7 +519,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
     if (_isOwner) {
       return ElevatedButton.icon(
-        onPressed: _shareGroup,
+        onPressed: () => _tabController.animateTo(2),
         icon: const Icon(Icons.person_add_outlined, size: 18),
         label: const Text('Invite'),
         style: ElevatedButton.styleFrom(
@@ -552,6 +552,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   // ─── Chat Tab ──────────────────────────────────
 
   Widget _buildChatTab() {
+    if (_membership?['status'] == 'pending') {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.hourglass_top, size: 48, color: Colors.orange[400]),
+            const SizedBox(height: 16),
+            Text(
+              'Awaiting Approval',
+              style: TextStyle(
+                color: Colors.orange[400],
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Your join request is being reviewed\nby the group admin.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 14,
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (!_isMember) {
       return Center(
         child: Column(

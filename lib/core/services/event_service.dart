@@ -42,13 +42,14 @@ class EventService {
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, created_at,
+            capacity, tickets_sold, event_type, organizer_id, status, created_at,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,
               custom_percentage
             )
           ''')
+          .eq('status', 'active')
           .gte('start_datetime', DateTime.now().toIso8601String())
           .order('start_datetime', ascending: true)
           .limit(limit);
@@ -74,7 +75,7 @@ class EventService {
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, created_at,
+            capacity, tickets_sold, event_type, organizer_id, status, created_at,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,
@@ -82,6 +83,7 @@ class EventService {
             )
           ''')
           .eq('id', eventId)
+          .inFilter('status', ['active', 'hidden'])
           .single();
 
       return Event.fromJson(response);

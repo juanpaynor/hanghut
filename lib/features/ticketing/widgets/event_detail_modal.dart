@@ -171,6 +171,33 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Invite Only badge for hidden events
+                    if (widget.event.isHidden) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.deepPurple.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.deepPurple.withOpacity(0.3)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline, size: 14, color: Colors.deepPurple),
+                            SizedBox(width: 4),
+                            Text(
+                              'Invite Only',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.deepPurple,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     // Title
                     Text(
                       widget.event.title,

@@ -483,8 +483,24 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
       // Extract data from nested response structure
       final data = invoice['data'] as Map<String, dynamic>;
-      final invoiceUrl = data['payment_url'] as String;
       _currentPurchaseIntentId = data['intent_id'] as String;
+
+      // FREE TICKETS — backend marks as paid immediately, no Xendit
+      if (data['free'] == true) {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TicketSuccessScreen(
+                purchaseIntentId: _currentPurchaseIntentId!,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final invoiceUrl = data['payment_url'] as String;
 
       // Validate URL
       if (!invoiceUrl.startsWith('https://')) {
@@ -917,7 +933,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                             ),
                           )
                         : Text(
-                            'Pay Now • ₱${total.toStringAsFixed(2)}',
+                            total <= 0
+                                ? 'Get Free Tickets'
+                                : 'Pay Now • ₱${total.toStringAsFixed(2)}',
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,

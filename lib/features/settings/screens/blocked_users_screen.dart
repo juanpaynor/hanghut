@@ -33,19 +33,66 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
   Future<void> _unblockUser(String userId, String displayName) async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Unblock User'),
-        content: Text('Are you sure you want to unblock $displayName?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(color: Colors.green.shade50, shape: BoxShape.circle),
+                child: const Icon(Icons.lock_open_rounded, color: Colors.green, size: 28),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Unblock $displayName?',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'They\'ll be able to see your profile and message you again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.black54, height: 1.5),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.black54,
+                        side: const BorderSide(color: Color(0xFFE0E0E0)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Unblock', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Unblock', style: TextStyle(color: Colors.red)),
-          ),
-        ],
+        ),
       ),
     );
 
