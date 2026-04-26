@@ -1101,7 +1101,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(
                         builder: (_) => MainNavigationScreen(
-                          initialIndex: 1,
+                          initialIndex: 0,
                           flyToLat: lat.toDouble(),
                           flyToLng: lng.toDouble(),
                         ),

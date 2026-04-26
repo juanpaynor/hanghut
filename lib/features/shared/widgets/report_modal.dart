@@ -81,7 +81,11 @@ class _ReportModalState extends State<ReportModal> {
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Failed to submit report');
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Failed to submit report',
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -162,7 +166,9 @@ class _ReportModalState extends State<ReportModal> {
                     : Colors.redAccent,
                 borderRadius: BorderRadius.circular(12),
                 child: InkWell(
-                  onTap: _isSubmitting || _selectedReason == null ? null : _submit,
+                  onTap: _isSubmitting || _selectedReason == null
+                      ? null
+                      : _submit,
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: double.infinity,

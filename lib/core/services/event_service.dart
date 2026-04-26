@@ -43,6 +43,7 @@ class EventService {
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
             capacity, tickets_sold, event_type, organizer_id, status, created_at,
+            is_external, external_ticket_url, external_provider_name,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,
@@ -76,6 +77,7 @@ class EventService {
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
             capacity, tickets_sold, event_type, organizer_id, status, created_at,
+            is_external, external_ticket_url, external_provider_name,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,

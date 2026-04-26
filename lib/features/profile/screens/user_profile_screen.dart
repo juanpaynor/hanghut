@@ -50,8 +50,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Map<String, dynamic>? _stats;
   List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
-  Map<String, dynamic>? _userTrip;
-  List<Map<String, dynamic>> _pastTrips = [];
+
   GamificationStats? _gamificationStats;
   List<gm.Badge> _allBadges = [];
   List<UserBadge> _earnedBadges = [];
@@ -152,26 +151,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             .limit(5),
         // Photos
         supabase.from('user_photos').select().eq('user_id', widget.userId),
-        // Active/upcoming trip (only if end_date hasn't passed)
-        supabase
-            .from('user_trips')
-            .select()
-            .eq('user_id', widget.userId)
-            .inFilter('status', ['upcoming', 'active'])
-            .gte('end_date', DateTime.now().toIso8601String().substring(0, 10))
-            .order('start_date', ascending: true)
-            .limit(1)
-            .maybeSingle(),
-        // Past/completed trips
-        supabase
-            .from('user_trips')
-            .select()
-            .eq('user_id', widget.userId)
-            .or(
-              'status.eq.completed,end_date.lt.${DateTime.now().toIso8601String().substring(0, 10)}',
-            )
-            .order('end_date', ascending: false)
-            .limit(5),
         // Gamification stats (XP + level)
         supabase
             .from('user_gamification_stats')
@@ -187,9 +166,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final hostedTables = results[4] as List<dynamic>;
       final joinedTables = results[5] as List<dynamic>;
       final photosResponse = results[6] as List<dynamic>;
-      final tripResult = results[7] as Map<String, dynamic>?;
-      final pastTripsResult = results[8] as List<dynamic>;
-      final gamificationResult = results[9] as Map<String, dynamic>?;
+      final gamificationResult = results[7] as Map<String, dynamic>?;
 
       // PHASE 1 FIX: Combine hosted and joined tables for complete history
       final List<Map<String, dynamic>> allTables = [];
@@ -247,8 +224,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           };
           _hostedTables = allTables.take(10).toList();
           _userPhotos = photos;
-          _userTrip = tripResult;
-          _pastTrips = List<Map<String, dynamic>>.from(pastTripsResult);
           _gamificationStats = gamificationResult != null
               ? GamificationStats.fromJson(gamificationResult)
               : null;
@@ -356,7 +331,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         context: context,
         builder: (ctx) => Dialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
             child: Column(
@@ -365,20 +342,35 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 Container(
                   width: 56,
                   height: 56,
-                  decoration: BoxDecoration(color: Colors.green.shade50, shape: BoxShape.circle),
-                  child: const Icon(Icons.lock_open_rounded, color: Colors.green, size: 28),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.lock_open_rounded,
+                    color: Colors.green,
+                    size: 28,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'Unblock $displayName?',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 10),
                 const Text(
                   'They\'ll be able to see your profile and message you again.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, color: Colors.black54, height: 1.5),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.black54,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 24),
                 Row(
@@ -390,9 +382,14 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           foregroundColor: Colors.black54,
                           side: const BorderSide(color: Color(0xFFE0E0E0)),
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
-                        child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -404,9 +401,14 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
-                        child: const Text('Unblock', style: TextStyle(fontWeight: FontWeight.w700)),
+                        child: const Text(
+                          'Unblock',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
                       ),
                     ),
                   ],
@@ -994,7 +996,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     // Switch to Host Mode (own profile only)
                     if (_isOwnProfile) ...[
                       _HostModeButton(),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 8),
                     ],
 
                     // Bio
@@ -1170,65 +1172,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   profile: _organizerProfile!,
                   isDark: isDark,
                 ).animate().fadeIn(duration: 600.ms, delay: 700.ms),
-              ),
-
-            // 6. Trip Card (if user has an active/upcoming trip)
-            if (_userTrip != null)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                  child: _TripCard(trip: _userTrip!, isDark: isDark),
-                ).animate().fadeIn(duration: 500.ms, delay: 600.ms),
-              ),
-
-            // 6b. Past Trips
-            if (_pastTrips.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 4,
-                            height: 16,
-                            decoration: BoxDecoration(
-                              color: Colors.grey,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'TRIPS MADE',
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1.2,
-                                ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${_pastTrips.length}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[500],
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      ..._pastTrips.map(
-                        (trip) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _PastTripCard(trip: trip, isDark: isDark),
-                        ),
-                      ),
-                    ],
-                  ),
-                ).animate().fadeIn(duration: 500.ms, delay: 650.ms),
               ),
 
             // 7. Adventure Log (History)
@@ -1565,300 +1508,6 @@ class _XpLevelBar extends StatelessWidget {
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Trip Card ────────────────────────────────────────────────────────────────
-
-class _TripCard extends StatelessWidget {
-  final Map<String, dynamic> trip;
-  final bool isDark;
-
-  const _TripCard({required this.trip, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final city = trip['destination_city'] as String? ?? '';
-    final country = trip['destination_country'] as String? ?? '';
-    final startDate = trip['start_date'] != null
-        ? DateFormat('MMM d').format(DateTime.parse(trip['start_date']))
-        : null;
-    final endDate = trip['end_date'] != null
-        ? DateFormat('MMM d, y').format(DateTime.parse(trip['end_date']))
-        : null;
-    final status = trip['status'] as String? ?? 'upcoming';
-    final style = trip['travel_style'] as String?;
-    final description = trip['description'] as String?;
-    final interests = (trip['interests'] as List?)?.cast<String>() ?? [];
-
-    final isActive = status == 'active';
-    final accentColor = isActive ? Colors.green : AppTheme.accentColor;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 4,
-              height: 16,
-              decoration: BoxDecoration(
-                color: accentColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isActive ? 'CURRENT TRIP' : 'UPCOMING TRIP',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: accentColor.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                isActive ? 'NOW' : 'SOON',
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
-                  color: accentColor,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: isDark
-                  ? [
-                      accentColor.withOpacity(0.15),
-                      accentColor.withOpacity(0.05),
-                    ]
-                  : [
-                      accentColor.withOpacity(0.08),
-                      accentColor.withOpacity(0.02),
-                    ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: accentColor.withOpacity(isDark ? 0.25 : 0.18),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: accentColor.withOpacity(0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text('✈️', style: const TextStyle(fontSize: 18)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '$city, $country',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 17,
-                          ),
-                        ),
-                        if (startDate != null && endDate != null) ...[
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.calendar_today_outlined,
-                                size: 11,
-                                color: Colors.grey[500],
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '$startDate – $endDate',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[500],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  if (style != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withOpacity(0.08)
-                            : Colors.white.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        style[0].toUpperCase() + style.substring(1),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              if (description != null && description.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(
-                  description,
-                  style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              if (interests.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: interests.take(5).map((tag) {
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 9,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withOpacity(0.08)
-                            : Colors.white.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.1)
-                              : Colors.grey.shade200,
-                        ),
-                      ),
-                      child: Text(
-                        tag,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isDark ? Colors.white70 : Colors.grey[700],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Past Trip Card ──────────────────────────────────────────────────────────
-
-class _PastTripCard extends StatelessWidget {
-  final Map<String, dynamic> trip;
-  final bool isDark;
-
-  const _PastTripCard({required this.trip, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final city = trip['destination_city'] as String? ?? '';
-    final country = trip['destination_country'] as String? ?? '';
-    final startDate = trip['start_date'] != null
-        ? DateFormat('MMM d').format(DateTime.parse(trip['start_date']))
-        : null;
-    final endDate = trip['end_date'] != null
-        ? DateFormat('MMM d, y').format(DateTime.parse(trip['end_date']))
-        : null;
-    final style = trip['travel_style'] as String?;
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.08) : Colors.grey.shade200,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withOpacity(0.08)
-                  : Colors.grey.shade100,
-              shape: BoxShape.circle,
-            ),
-            child: const Text('✈️', style: TextStyle(fontSize: 16)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$city, $country',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
-                if (startDate != null && endDate != null)
-                  Text(
-                    '$startDate – $endDate',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
-              ],
-            ),
-          ),
-          if (style != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withOpacity(0.06)
-                    : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                style[0].toUpperCase() + style.substring(1),
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey[500],
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -2392,87 +2041,55 @@ class _HostModeButtonState extends State<_HostModeButton> {
 
     return GestureDetector(
       onTap: _onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          gradient: isApproved
-              ? const LinearGradient(
-                  colors: [AppTheme.primaryColor, Color(0xFF8B5CF6)],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                )
-              : null,
-          color: isPending ? Colors.orange[50] : null,
+          color: isApproved
+              ? AppTheme.primaryColor.withOpacity(0.08)
+              : isPending
+              ? Colors.orange.withOpacity(0.08)
+              : Colors.grey.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isApproved
-                ? Colors.transparent
+                ? AppTheme.primaryColor.withOpacity(0.3)
                 : isPending
-                ? Colors.orange
-                : AppTheme.primaryColor,
-            width: 1.5,
+                ? Colors.orange.withOpacity(0.4)
+                : Colors.grey.withOpacity(0.3),
           ),
-          borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               isApproved
-                  ? Icons.storefront_rounded
+                  ? Icons.storefront_outlined
                   : isPending
                   ? Icons.hourglass_top_rounded
                   : Icons.add_business_outlined,
+              size: 16,
               color: isApproved
-                  ? Colors.white
+                  ? AppTheme.primaryColor
                   : isPending
                   ? Colors.orange[700]
-                  : AppTheme.primaryColor,
-              size: 22,
+                  : Colors.grey[600],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isApproved
-                        ? 'Switch to Host Mode'
-                        : isPending
-                        ? 'Application Under Review'
-                        : 'Become a Host',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                      color: isApproved
-                          ? Colors.white
-                          : isPending
-                          ? Colors.orange[800]
-                          : AppTheme.primaryColor,
-                    ),
-                  ),
-                  Text(
-                    isApproved
-                        ? 'Manage experiences & earnings'
-                        : isPending
-                        ? 'We\'ll notify you when approved'
-                        : 'Create & sell your experiences',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isApproved
-                          ? Colors.white70
-                          : isPending
-                          ? Colors.orange[600]
-                          : AppTheme.primaryColor.withOpacity(0.7),
-                    ),
-                  ),
-                ],
+            const SizedBox(width: 8),
+            Text(
+              isApproved
+                  ? 'Switch to Host Mode'
+                  : isPending
+                  ? 'Application Under Review'
+                  : 'Become a Host',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isApproved
+                    ? AppTheme.primaryColor
+                    : isPending
+                    ? Colors.orange[700]
+                    : Colors.grey[700],
               ),
-            ),
-            Icon(
-              Icons.arrow_forward_ios,
-              size: 14,
-              color: isApproved ? Colors.white70 : Colors.grey[400],
             ),
           ],
         ),

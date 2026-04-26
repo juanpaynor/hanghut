@@ -9,7 +9,6 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 
-
 class PushNotificationService {
   static final PushNotificationService _instance =
       PushNotificationService._internal();
@@ -156,8 +155,11 @@ class PushNotificationService {
             }
           } else if (chatType == 'dm' || chatType == 'direct') {
             var chatId = data['chat_id']?.toString() ?? entityId;
-            channelId = chatId.startsWith('direct_') ? chatId : 'direct_$chatId';
-            tableTitle = data['sender_name'] ?? data['actor_name'] ?? 'Direct Message';
+            channelId = chatId.startsWith('direct_')
+                ? chatId
+                : 'direct_$chatId';
+            tableTitle =
+                data['sender_name'] ?? data['actor_name'] ?? 'Direct Message';
             entityId = chatId;
           } else {
             // Table / Hangout — look up title from DB
@@ -210,7 +212,7 @@ class PushNotificationService {
         navigatorKey.currentState?.pushAndRemoveUntil(
           MaterialPageRoute(
             builder: (_) => MainNavigationScreen(
-              initialIndex: 1, // Map Tab
+              initialIndex: 0, // Map Tab
               initialTableId: tableId,
             ),
           ),
@@ -225,9 +227,7 @@ class PushNotificationService {
         final navContext = navigatorKey.currentContext;
         if (navContext != null) {
           Navigator.of(navContext).push(
-            MaterialPageRoute(
-              builder: (_) => PostDetailScreen(postId: postId),
-            ),
+            MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId)),
           );
         }
       }

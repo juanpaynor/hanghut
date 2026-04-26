@@ -44,20 +44,35 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
               Container(
                 width: 56,
                 height: 56,
-                decoration: BoxDecoration(color: Colors.green.shade50, shape: BoxShape.circle),
-                child: const Icon(Icons.lock_open_rounded, color: Colors.green, size: 28),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.lock_open_rounded,
+                  color: Colors.green,
+                  size: 28,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
                 'Unblock $displayName?',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 10),
               const Text(
                 'They\'ll be able to see your profile and message you again.',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.black54, height: 1.5),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.black54,
+                  height: 1.5,
+                ),
               ),
               const SizedBox(height: 24),
               Row(
@@ -69,9 +84,14 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
                         foregroundColor: Colors.black54,
                         side: const BorderSide(color: Color(0xFFE0E0E0)),
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -83,9 +103,14 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
                         foregroundColor: Colors.white,
                         elevation: 0,
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      child: const Text('Unblock', style: TextStyle(fontWeight: FontWeight.w700)),
+                      child: const Text(
+                        'Unblock',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ],
@@ -100,9 +125,7 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
       final success = await ReportService().unblockUser(userId);
       if (success && mounted) {
         setState(() {
-          _blockedUsers.removeWhere(
-            (u) => u['blocked_user_id'] == userId,
-          );
+          _blockedUsers.removeWhere((u) => u['blocked_user_id'] == userId);
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$displayName has been unblocked')),
@@ -124,87 +147,79 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _blockedUsers.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.block, size: 64, color: Colors.grey[300]),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No blocked users',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Users you block won\'t be able to\nsee your profile or message you.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[400],
-                        ),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.block, size: 64, color: Colors.grey[300]),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No blocked users',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[500],
+                    ),
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _blockedUsers.length,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemBuilder: (context, index) {
-                    final block = _blockedUsers[index];
-                    final user = block['user'] as Map<String, dynamic>? ?? {};
-                    final displayName = user['display_name'] ?? 'Unknown';
-                    final avatarUrl = user['avatar_url'] as String?;
-                    final blockedAt = block['blocked_at'] != null
-                        ? DateTime.tryParse(block['blocked_at'])
-                        : null;
+                  const SizedBox(height: 8),
+                  Text(
+                    'Users you block won\'t be able to\nsee your profile or message you.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: _blockedUsers.length,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemBuilder: (context, index) {
+                final block = _blockedUsers[index];
+                final user = block['user'] as Map<String, dynamic>? ?? {};
+                final displayName = user['display_name'] ?? 'Unknown';
+                final avatarUrl = user['avatar_url'] as String?;
+                final blockedAt = block['blocked_at'] != null
+                    ? DateTime.tryParse(block['blocked_at'])
+                    : null;
 
-                    return ListTile(
-                      leading: CircleAvatar(
-                        radius: 22,
-                        backgroundColor: isDark
-                            ? Colors.grey[700]
-                            : Colors.grey[200],
-                        backgroundImage: avatarUrl != null
-                            ? CachedNetworkImageProvider(avatarUrl)
-                            : null,
-                        child: avatarUrl == null
-                            ? Icon(Icons.person,
-                                color: Colors.grey[400], size: 24)
-                            : null,
-                      ),
-                      title: Text(
-                        displayName,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: blockedAt != null
-                          ? Text(
-                              'Blocked ${timeago.format(blockedAt)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[500],
-                              ),
-                            )
-                          : null,
-                      trailing: TextButton(
-                        onPressed: () => _unblockUser(
-                          block['blocked_user_id'],
-                          displayName,
-                        ),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          textStyle: const TextStyle(
-                            fontWeight: FontWeight.w600,
+                return ListTile(
+                  leading: CircleAvatar(
+                    radius: 22,
+                    backgroundColor: isDark
+                        ? Colors.grey[700]
+                        : Colors.grey[200],
+                    backgroundImage: avatarUrl != null
+                        ? CachedNetworkImageProvider(avatarUrl)
+                        : null,
+                    child: avatarUrl == null
+                        ? Icon(Icons.person, color: Colors.grey[400], size: 24)
+                        : null,
+                  ),
+                  title: Text(
+                    displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: blockedAt != null
+                      ? Text(
+                          'Blocked ${timeago.format(blockedAt)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
                           ),
-                        ),
-                        child: const Text('Unblock'),
-                      ),
-                    );
-                  },
-                ),
+                        )
+                      : null,
+                  trailing: TextButton(
+                    onPressed: () =>
+                        _unblockUser(block['blocked_user_id'], displayName),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    child: const Text('Unblock'),
+                  ),
+                );
+              },
+            ),
     );
   }
 }

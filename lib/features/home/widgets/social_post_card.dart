@@ -12,6 +12,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/home/widgets/event_attachment_card.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 import 'package:bitemates/features/home/widgets/mention_text.dart';
@@ -449,12 +450,21 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
                           // Convert Map to Event model
                           final event = Event.fromJson(eventData);
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => EventPurchaseScreen(event: event),
-                            ),
-                          );
+
+                          if (event.isExternal) {
+                            // External events: show detail modal (which has the redirect CTA)
+                            showDialog(
+                              context: context,
+                              builder: (_) => EventDetailModal(event: event),
+                            );
+                          } else {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => EventPurchaseScreen(event: event),
+                              ),
+                            );
+                          }
                         } catch (e) {
                           debugPrint('Error parsing event: $e');
                           ErrorHandler.showError(

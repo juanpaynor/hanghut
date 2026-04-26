@@ -9,6 +9,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
@@ -174,16 +176,25 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     // Invite Only badge for hidden events
                     if (widget.event.isHidden) ...[
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.deepPurple.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.deepPurple.withOpacity(0.3)),
+                          border: Border.all(
+                            color: Colors.deepPurple.withOpacity(0.3),
+                          ),
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.lock_outline, size: 14, color: Colors.deepPurple),
+                            Icon(
+                              Icons.lock_outline,
+                              size: 14,
+                              color: Colors.deepPurple,
+                            ),
                             SizedBox(width: 4),
                             Text(
                               'Invite Only',
@@ -249,11 +260,12 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     // Price & Availability
                     _buildPriceRow(),
 
-                    // Friends Going
-                    FriendsGoingRow(
-                      entityType: 'event',
-                      entityId: widget.event.id,
-                    ),
+                    // Friends Going (hidden for external events — no attendee data)
+                    if (!widget.event.isExternal)
+                      FriendsGoingRow(
+                        entityType: 'event',
+                        entityId: widget.event.id,
+                      ),
 
                     const SizedBox(height: 12),
 
@@ -510,7 +522,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
             ),
             const SizedBox(width: 8),
             Text(
-              '₱${widget.event.ticketPrice.toStringAsFixed(0)}',
+              widget.event.isExternal
+                  ? 'From ₱${widget.event.ticketPrice.toStringAsFixed(0)}'
+                  : '₱${widget.event.ticketPrice.toStringAsFixed(0)}',
               style: TextStyle(
                 color: isDark ? Colors.white : Colors.black87,
                 fontSize: 20,
@@ -519,14 +533,38 @@ class _EventDetailModalState extends State<EventDetailModal> {
             ),
           ],
         ),
-        Text(
-          _isSoldOut ? 'Sold Out' : 'Available',
-          style: TextStyle(
-            color: _isSoldOut ? Colors.red : Colors.green[700],
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
+        if (!widget.event.isExternal)
+          Text(
+            _isSoldOut ? 'Sold Out' : 'Available',
+            style: TextStyle(
+              color: _isSoldOut ? Colors.red : Colors.green[700],
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        else if (widget.event.externalProviderName != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.open_in_new, size: 12, color: Colors.blue),
+                const SizedBox(width: 4),
+                Text(
+                  widget.event.externalProviderName!,
+                  style: const TextStyle(
+                    color: Colors.blue,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
@@ -650,6 +688,39 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildBuyButton() {
+    // External events: always active, different label
+    if (widget.event.isExternal) {
+      final providerName = widget.event.externalProviderName;
+      final label = providerName != null
+          ? 'Get Tickets on $providerName'
+          : 'Get Tickets';
+
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: _onBuyTickets,
+          icon: const Icon(Icons.open_in_new, size: 18),
+          label: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue[700],
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
+        ),
+      );
+    }
+
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
@@ -689,6 +760,18 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   void _onBuyTickets() {
+    if (widget.event.isExternal && widget.event.externalTicketUrl != null) {
+      // External event: redirect through our tracking endpoint
+      final currentUserId = SupabaseConfig.client.auth.currentUser?.id ?? '';
+      final supabaseUrl = SupabaseConfig.client.rest.url.replaceAll('/rest/v1', '');
+      final redirectUrl = '$supabaseUrl/functions/v1/redirect-to-external'
+          '?event_id=${widget.event.id}'
+          '&user_id=$currentUserId';
+      launchUrl(Uri.parse(redirectUrl), mode: LaunchMode.externalApplication);
+      return;
+    }
+
+    // Internal event: normal purchase flow
     Navigator.pop(context); // Close modal
     Navigator.push(
       context,

@@ -16,9 +16,10 @@ import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 
-import 'package:workmanager/workmanager.dart';
-import 'package:bitemates/features/location/logic/geofence_engine.dart';
-import 'package:bitemates/core/services/location_service.dart';
+// GEOFENCING DISABLED for Android review — uncomment to re-enable
+// import 'package:workmanager/workmanager.dart';
+// import 'package:bitemates/features/location/logic/geofence_engine.dart';
+// import 'package:bitemates/core/services/location_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
@@ -26,50 +27,29 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/app_location_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-@pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    print("📍 BACKGROUND TASK: $task started");
-
-    try {
-      // Initialize dependencies in the background isolate
-      WidgetsFlutterBinding.ensureInitialized();
-
-      try {
-        await dotenv.load();
-      } catch (_) {
-        // .env may not exist in release builds
-      }
-
-      await SupabaseConfig.initialize();
-
-      // 1. Initialize Engine (Loads cache)
-      final engine = GeofenceEngine();
-      await engine.init();
-
-      // 2. Get Location (One-shot)
-      final locationService = LocationService();
-      final pos = await locationService.getCurrentLocation();
-
-      if (pos != null) {
-        print(
-          "📍 BACKGROUND TASK: Got location ${pos.latitude}, ${pos.longitude}",
-        );
-        // 3. Run Check
-        engine.checkProximity(pos.latitude, pos.longitude);
-
-        // 4. Refresh cache from DB while we have connectivity
-        await engine.syncGeofences();
-      } else {
-        print("⚠️ BACKGROUND TASK: Could not get location");
-      }
-    } catch (e) {
-      print("❌ BACKGROUND TASK ERROR: $e");
-    }
-
-    return Future.value(true);
-  });
-}
+// GEOFENCING DISABLED for Android review — uncomment to re-enable
+// @pragma('vm:entry-point')
+// void callbackDispatcher() {
+//   Workmanager().executeTask((task, inputData) async {
+//     print("📍 BACKGROUND TASK: \$task started");
+//     try {
+//       WidgetsFlutterBinding.ensureInitialized();
+//       try { await dotenv.load(); } catch (_) {}
+//       await SupabaseConfig.initialize();
+//       final engine = GeofenceEngine();
+//       await engine.init();
+//       final locationService = LocationService();
+//       final pos = await locationService.getCurrentLocation();
+//       if (pos != null) {
+//         engine.checkProximity(pos.latitude, pos.longitude);
+//         await engine.syncGeofences();
+//       }
+//     } catch (e) {
+//       print("❌ BACKGROUND TASK ERROR: \$e");
+//     }
+//     return Future.value(true);
+//   });
+// }
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -98,25 +78,21 @@ Future<void> main() async {
     ),
   );
 
-  // Initialize Workmanager
-  Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: false, // Production: no debug notifications
-  );
-
-  // Register Periodic Task (15 min interval)
-  // existingWorkPolicy.replace ensures re-registration on each app launch
-  // doesn't stack duplicate tasks
-  Workmanager().registerPeriodicTask(
-    "geofence-check",
-    "geofenceTask",
-    frequency: const Duration(minutes: 15),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
-    constraints: Constraints(
-      networkType: NetworkType.connected,
-      requiresBatteryNotLow: false, // Run even on low battery
-    ),
-  );
+  // GEOFENCING DISABLED for Android review — uncomment to re-enable
+  // Workmanager().initialize(
+  //   callbackDispatcher,
+  //   isInDebugMode: false,
+  // );
+  // Workmanager().registerPeriodicTask(
+  //   "geofence-check",
+  //   "geofenceTask",
+  //   frequency: const Duration(minutes: 15),
+  //   existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+  //   constraints: Constraints(
+  //     networkType: NetworkType.connected,
+  //     requiresBatteryNotLow: false,
+  //   ),
+  // );
 
   // Load environment variables (optional for release builds)
   try {
@@ -152,8 +128,9 @@ Future<void> main() async {
 
   // Defer non-critical work to after the first frame renders
   WidgetsBinding.instance.addPostFrameCallback((_) async {
-    await GeofenceEngine().init();
-    GeofenceEngine().syncGeofences(); // Fire and forget
+    // GEOFENCING DISABLED for Android review — uncomment to re-enable
+    // await GeofenceEngine().init();
+    // GeofenceEngine().syncGeofences();
 
     AppLocationService().updateLocationIfNeeded().catchError((e) {
       print("⚠️ Location update failed (non-critical): $e");

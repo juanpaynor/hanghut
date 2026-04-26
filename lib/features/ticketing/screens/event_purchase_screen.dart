@@ -11,7 +11,8 @@ import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
 import 'package:bitemates/core/services/push_notification_service.dart';
-import 'package:workmanager/workmanager.dart';
+// GEOFENCING DISABLED for Android review — uncomment to re-enable
+// import 'package:workmanager/workmanager.dart';
 
 class EventPurchaseScreen extends StatefulWidget {
   final Event event;
@@ -73,13 +74,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     _pollingTimer?.cancel();
     PushNotificationService.suppressNotifications = false; // Always clear
 
-    // Re-register WorkManager geofence task that was cancelled during payment
-    Workmanager().registerPeriodicTask(
-      'geofence-check',
-      'geofenceTask',
-      frequency: const Duration(minutes: 15),
-      constraints: Constraints(networkType: NetworkType.connected),
-    );
+    // GEOFENCING DISABLED for Android review — uncomment to re-enable
+    // Workmanager().registerPeriodicTask(
+    //   'geofence-check',
+    //   'geofenceTask',
+    //   frequency: const Duration(minutes: 15),
+    //   constraints: Constraints(networkType: NetworkType.connected),
+    // );
 
     _nameController.dispose();
     _emailController.dispose();
@@ -554,8 +555,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     PushNotificationService.suppressNotifications = true;
     _consecutiveErrors = 0;
 
-    // Cancel WorkManager to prevent a 3rd Flutter engine spawning on resume
-    Workmanager().cancelByUniqueName('geofence-check');
+    // GEOFENCING DISABLED for Android review — uncomment to re-enable
+    // Workmanager().cancelByUniqueName('geofence-check');
 
     showDialog(
       context: context,

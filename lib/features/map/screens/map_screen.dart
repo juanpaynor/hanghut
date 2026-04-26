@@ -335,7 +335,8 @@ class MapScreenState extends State<MapScreen>
       });
 
       // Only set camera to user location if we DON'T have a flyTo target
-      if (_mapboxMap != null && !_hasFlyToTarget) {
+      // and the cloud intro is already done (avoid interrupting the animation)
+      if (_mapboxMap != null && !_hasFlyToTarget && !_showCloudIntro) {
         _mapboxMap?.setCamera(
           CameraOptions(
             center: Point(
@@ -425,10 +426,26 @@ class MapScreenState extends State<MapScreen>
   }
 
   Future<void> _playIntroAnimation() async {
+    // Wait for user location to be available (up to 5 seconds)
+    int waited = 0;
+    while (_currentPosition == null && waited < 5000) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waited += 100;
+    }
+
     // Sync with Cloud Dive (starts at 200ms, takes 3s)
     await Future.delayed(const Duration(milliseconds: 200));
+
     _mapboxMap?.flyTo(
       CameraOptions(
+        center: _currentPosition != null
+            ? Point(
+                coordinates: Position(
+                  _currentPosition!.longitude,
+                  _currentPosition!.latitude,
+                ),
+              )
+            : null,
         zoom: 16.0, // Land at street level
         pitch: 60.0,
         bearing: 45.0,
@@ -3571,8 +3588,9 @@ class MapScreenState extends State<MapScreen>
             return Container(
               decoration: BoxDecoration(
                 color: bg,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(24)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
               ),
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
               child: Column(
@@ -3598,15 +3616,17 @@ class MapScreenState extends State<MapScreen>
                       color: Colors.indigo.withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
-                    child:
-                        const Icon(Icons.radar, size: 32, color: Colors.indigo),
+                    child: const Icon(
+                      Icons.radar,
+                      size: 32,
+                      color: Colors.indigo,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   // Title
                   const Text(
                     'Unlock Hidden Activities',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 10),
                   // Description
@@ -3633,8 +3653,11 @@ class MapScreenState extends State<MapScreen>
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.lock_open,
-                            size: 18, color: Colors.indigo),
+                        const Icon(
+                          Icons.lock_open,
+                          size: 18,
+                          color: Colors.indigo,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -3657,8 +3680,7 @@ class MapScreenState extends State<MapScreen>
                     child: ElevatedButton(
                       onPressed: () async {
                         if (dontShowAgain) {
-                          await prefs.setBool(
-                              'isochrone_explainer_skip', true);
+                          await prefs.setBool('isochrone_explainer_skip', true);
                         }
                         Navigator.pop(ctx2);
                         _toggleIsochrone();
@@ -3666,8 +3688,7 @@ class MapScreenState extends State<MapScreen>
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.indigo,
                         foregroundColor: Colors.white,
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 16),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
@@ -3676,7 +3697,9 @@ class MapScreenState extends State<MapScreen>
                       child: const Text(
                         'Reveal Hidden Activities',
                         style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -3693,8 +3716,8 @@ class MapScreenState extends State<MapScreen>
                           height: 20,
                           child: Checkbox(
                             value: dontShowAgain,
-                            onChanged: (v) => setModalState(
-                                () => dontShowAgain = v ?? false),
+                            onChanged: (v) =>
+                                setModalState(() => dontShowAgain = v ?? false),
                             activeColor: Colors.indigo,
                             materialTapTargetSize:
                                 MaterialTapTargetSize.shrinkWrap,
@@ -3706,8 +3729,7 @@ class MapScreenState extends State<MapScreen>
                           "Don't show this again",
                           style: TextStyle(
                             fontSize: 13,
-                            color:
-                                isDark ? Colors.grey[500] : Colors.grey[600],
+                            color: isDark ? Colors.grey[500] : Colors.grey[600],
                           ),
                         ),
                       ],

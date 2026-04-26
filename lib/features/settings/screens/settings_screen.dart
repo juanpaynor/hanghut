@@ -48,7 +48,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final response = await SupabaseConfig.client
           .from('users')
-          .select('notification_preferences, hide_activity_from_friends, hide_distance')
+          .select(
+            'notification_preferences, hide_activity_from_friends, hide_distance',
+          )
           .eq('id', userId)
           .single();
 

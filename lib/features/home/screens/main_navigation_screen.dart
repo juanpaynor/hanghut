@@ -19,7 +19,7 @@ import 'package:bitemates/core/services/admin_popup_service.dart';
 import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
-import 'package:bitemates/features/trips/widgets/create_trip/create_trip_flow.dart';
+import 'package:bitemates/features/home/widgets/create_post_modal.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -163,7 +163,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           eventData: event,
           onCheckIn: () {
             setState(() {
-              _selectedIndex = 1; // Switch to Map Tab
+              _selectedIndex = 0; // Switch to Map Tab
             });
             // Small delay to ensure tab switch
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -179,11 +179,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
 
     return [
+      MapScreen(
+        key: _mapScreenKey,
+        initialFlyToLat: widget.flyToLat,
+        initialFlyToLng: widget.flyToLng,
+      ),
       FeedScreen(
         key: _feedScreenKey,
         onJoinTable: (tableId) {
           setState(() {
-            _selectedIndex = 1;
+            _selectedIndex = 0;
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showTableDetails(tableId);
@@ -191,7 +196,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         },
         onStoryTap: (story) {
           setState(() {
-            _selectedIndex = 1;
+            _selectedIndex = 0;
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showStoryDetails(story);
@@ -199,14 +204,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         },
         onSeeAllHangouts: () {
           setState(() {
-            _selectedIndex = 1;
+            _selectedIndex = 0;
           });
         },
-      ),
-      MapScreen(
-        key: _mapScreenKey,
-        initialFlyToLat: widget.flyToLat,
-        initialFlyToLng: widget.flyToLng,
       ),
       const ActivityScreen(),
       currentUserId != null
@@ -216,8 +216,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _onItemTapped(int index) {
-    // If Home tab is tapped while already on Home, scroll feed back to top
-    if (index == 0 && _selectedIndex == 0) {
+    // If Feed tab is tapped while already on Feed, scroll back to top
+    if (index == 1 && _selectedIndex == 1) {
       _feedScreenKey.currentState?.scrollToTop();
       return;
     }
@@ -225,7 +225,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       _selectedIndex = index;
     });
     // Track tab switch
-    const tabNames = ['home_feed', 'map', 'activity', 'profile'];
+    const tabNames = ['map', 'home_feed', 'activity', 'profile'];
     if (index < tabNames.length) {
       AnalyticsService().logScreenView(tabNames[index]);
     }
@@ -293,12 +293,31 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     );
   }
 
-  void _openCreateTrip() {
+  void _openCreatePost() {
     _closeDial();
-    AnalyticsService().logScreenView('create_trip_flow');
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => CreateTripFlow(onTripCreated: () {})),
+    AnalyticsService().logScreenView('create_post');
+    Navigator.of(context).push<Map<String, dynamic>?>(
+      PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: true,
+        barrierColor: Colors.black54,
+        transitionDuration: const Duration(milliseconds: 500),
+        reverseTransitionDuration: const Duration(milliseconds: 400),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const CreatePostModal(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          );
+        },
+      ),
     );
   }
 
@@ -459,8 +478,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _buildNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-            _buildNavItem(1, Icons.map_outlined, Icons.map, 'Map'),
+            _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map'),
+            _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed'),
             const SizedBox(width: 48),
             _buildNavItem(
               2,
@@ -486,7 +505,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         label: 'Moment',
         index: 1,
       ),
-      const _DialItem(icon: Icons.luggage_outlined, label: 'Trip', index: 2),
+      const _DialItem(icon: Icons.edit_outlined, label: 'Post', index: 2),
     ];
 
     // Angles in radians from positive x-axis, going counter-clockwise
@@ -562,7 +581,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                 onTap: () {
                   if (item.index == 0) _showCreateTableModal();
                   if (item.index == 1) _openShareMoment();
-                  if (item.index == 2) _openCreateTrip();
+                  if (item.index == 2) _openCreatePost();
                 },
                 child: SizedBox(
                   width: btnSize,

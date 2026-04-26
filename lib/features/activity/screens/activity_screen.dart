@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
-import 'package:bitemates/features/activity/widgets/my_trips_list.dart';
 import 'package:bitemates/features/activity/widgets/my_hangouts_list.dart';
 import 'package:bitemates/features/activity/widgets/my_experiences_list.dart';
 
@@ -15,7 +14,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 3,
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
@@ -42,17 +41,11 @@ class _ActivityScreenState extends State<ActivityScreen> {
               Tab(text: 'Tickets'),
               Tab(text: 'Hangouts'),
               Tab(text: 'Experiences'),
-              Tab(text: 'Trips'),
             ],
           ),
         ),
         body: const TabBarView(
-          children: [
-            MyTicketsScreen(),
-            MyHangoutsList(),
-            MyExperiencesList(),
-            MyTripsList(),
-          ],
+          children: [MyTicketsScreen(), MyHangoutsList(), MyExperiencesList()],
         ),
       ),
     );

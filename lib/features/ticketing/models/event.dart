@@ -21,6 +21,11 @@ class Event {
   final String status;
   final DateTime createdAt;
 
+  // External ticketing (PPC)
+  final bool isExternal;
+  final String? externalTicketUrl;
+  final String? externalProviderName;
+
   Event({
     required this.id,
     required this.title,
@@ -46,6 +51,9 @@ class Event {
     this.passFeesToCustomer,
     this.fixedFeePerTicket,
     this.customPercentage,
+    this.isExternal = false,
+    this.externalTicketUrl,
+    this.externalProviderName,
   });
 
   final bool? passFeesToCustomer;
@@ -91,6 +99,9 @@ class Event {
           ?.toDouble(),
       customPercentage: (json['partners']?['custom_percentage'] as num?)
           ?.toDouble(),
+      isExternal: json['is_external'] as bool? ?? false,
+      externalTicketUrl: json['external_ticket_url'] as String?,
+      externalProviderName: json['external_provider_name'] as String?,
     );
   }
 

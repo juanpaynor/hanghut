@@ -218,7 +218,9 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        price != null && price > 0 ? '₱${price}' : 'FREE',
+                        price != null && price > 0
+                            ? (widget.event['is_external'] == true ? 'From ₱${price}' : '₱${price}')
+                            : 'FREE',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.grey[800],
@@ -229,7 +231,9 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
 
                     // CTA Button
                     Text(
-                      'Get Tickets →',
+                      widget.event['is_external'] == true
+                          ? 'Get Tickets →'
+                          : 'Get Tickets →',
                       style: TextStyle(
                         color: Theme.of(context).primaryColor,
                         fontWeight: FontWeight.bold,
