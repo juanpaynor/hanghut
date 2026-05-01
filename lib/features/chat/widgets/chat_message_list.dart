@@ -27,6 +27,7 @@ class ChatMessageList extends StatelessWidget {
   final String searchQuery;
   final List<int> matchedIndices;
   final int currentMatchIndex;
+  final String channelId;
 
   const ChatMessageList({
     super.key,
@@ -48,6 +49,7 @@ class ChatMessageList extends StatelessWidget {
     this.searchQuery = '',
     this.matchedIndices = const [],
     this.currentMatchIndex = -1,
+    this.channelId = '',
   });
 
   @override
@@ -157,6 +159,7 @@ class ChatMessageList extends StatelessWidget {
           onAvatarTap: onAvatarTap,
           participants: participants,
           searchQuery: searchQuery,
+          channelId: channelId,
           isCurrentMatch:
               matchedIndices.isNotEmpty &&
               currentMatchIndex >= 0 &&

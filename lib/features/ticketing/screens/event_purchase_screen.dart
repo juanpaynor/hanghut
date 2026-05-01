@@ -335,7 +335,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
     try {
       // We check promo via DB direct select first for optimistic UI updates
-      // The real validation happens in the Edge Function during checkout
+      // The real validation happens in the Edge Function during checkout.
+      // Note: app_only=true codes are valid here — the web team blocks them
+      // on their side. We intentionally do NOT filter by app_only so that
+      // app-exclusive codes work correctly in the app.
       final response = await SupabaseConfig.client
           .from('promo_codes')
           .select()

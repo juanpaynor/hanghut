@@ -143,10 +143,13 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       constraints: BoxConstraints(
@@ -173,11 +176,7 @@ class _ActiveUsersBottomSheetState extends State<ActiveUsersBottomSheet> {
             children: [
               const Text(
                 'Active Now',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
-                ),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(width: 8),
               Container(

@@ -84,6 +84,96 @@ class AblyService {
     }
   }
 
+  Future<void> publishMessageDeleted({
+    required String channelName,
+    required String messageId,
+  }) async {
+    if (_realtime == null) await init();
+    try {
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'message_deleted',
+        data: {'messageId': messageId},
+      );
+      print('✅ ABLY: message_deleted published to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing message_deleted - $e');
+    }
+  }
+
+  Future<void> publishReactionUpdated({
+    required String channelName,
+    required String messageId,
+  }) async {
+    if (_realtime == null) await init();
+    try {
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'reaction_updated',
+        data: {'messageId': messageId},
+      );
+      print('✅ ABLY: reaction_updated published to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing reaction_updated - $e');
+    }
+  }
+
+  Future<void> publishPollVoteUpdated({
+    required String channelName,
+    required String pollId,
+  }) async {
+    if (_realtime == null) await init();
+    try {
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'poll_vote_updated',
+        data: {'pollId': pollId},
+      );
+      print('✅ ABLY: poll_vote_updated published to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing poll_vote_updated - $e');
+    }
+  }
+
+  Future<void> publishMuteUpdated({
+    required String channelName,
+    required String targetUserId,
+    required bool isMuted,
+  }) async {
+    if (_realtime == null) await init();
+    try {
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'mute_updated',
+        data: {'userId': targetUserId, 'isMuted': isMuted},
+      );
+      print('✅ ABLY: mute_updated published to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing mute_updated - $e');
+    }
+  }
+
+  Future<void> publishPinUpdated({
+    required String channelName,
+    required String? pinnedMessageId, // null = unpinned
+    Map<String, dynamic>? pinnedMessage,
+  }) async {
+    if (_realtime == null) await init();
+    try {
+      final channel = _realtime!.channels.get(channelName);
+      await channel.publish(
+        name: 'pin_updated',
+        data: {
+          'pinnedMessageId': pinnedMessageId,
+          if (pinnedMessage != null) 'pinnedMessage': pinnedMessage,
+        },
+      );
+      print('✅ ABLY: pin_updated published to $channelName');
+    } catch (e) {
+      print('❌ ABLY: Error publishing pin_updated - $e');
+    }
+  }
+
   Future<void> leaveChannel(String channelName) async {
     if (_realtime == null) return;
     try {

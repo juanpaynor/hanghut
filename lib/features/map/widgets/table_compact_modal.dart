@@ -1218,39 +1218,77 @@ class _TableCompactModalState extends State<TableCompactModal> {
           await showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               icon: const Icon(
                 Icons.check_circle,
                 color: Colors.green,
-                size: 40,
+                size: 48,
               ),
-              title: const Text("You're in! 🎉"),
-              content: Text(message),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Later'),
+              title: const Text(
+                "You're in! 🎉",
+                style: TextStyle(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.bold,
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      enableDrag: true,
-                      builder: (context) => ChatScreen(
-                        channelId: 'table_${widget.table['id']}',
-                        tableId: widget.table['id'],
-                        tableTitle: venueName,
+              ),
+              content: Text(
+                message,
+                style: const TextStyle(color: Colors.black54),
+                textAlign: TextAlign.center,
+              ),
+              actionsAlignment: MainAxisAlignment.center,
+              actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              actions: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.black54,
+                          side: const BorderSide(color: Colors.black12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text('Later'),
                       ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                  child: const Text('Open Chat'),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            enableDrag: true,
+                            builder: (context) => ChatScreen(
+                              channelId: 'table_${widget.table['id']}',
+                              tableId: widget.table['id'],
+                              tableTitle: venueName,
+                            ),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text('Open Chat'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1266,16 +1304,20 @@ class _TableCompactModalState extends State<TableCompactModal> {
         await showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.white,
             icon: Icon(
               isTooFar ? Icons.location_off_outlined : Icons.error_outline,
               color: isTooFar ? Colors.orange : Colors.red,
               size: 40,
             ),
-            title: Text(isTooFar ? "You're Too Far Away" : 'Could Not Join'),
+            title: Text(
+              isTooFar ? "You're Too Far Away" : 'Could Not Join',
+              style: const TextStyle(color: Colors.black87),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(message),
+                Text(message, style: const TextStyle(color: Colors.black54)),
                 if (isTooFar) ...[
                   const SizedBox(height: 12),
                   Text(

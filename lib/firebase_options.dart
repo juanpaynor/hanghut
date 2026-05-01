@@ -59,10 +59,10 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyAcvzqkAuAtcZybDhI8exrQQqEAWLzavhM',
-    appId: '1:1066997622719:ios:74c498a74695079117a30a',
+    appId: '1:1066997622719:ios:89d5575afe055bf117a30a',
     messagingSenderId: '1066997622719',
     projectId: 'hanghut-28e04',
     storageBucket: 'hanghut-28e04.firebasestorage.app',
-    iosBundleId: 'com.hanghut.hang',
+    iosBundleId: 'com.hang.hanghut',
   );
 }

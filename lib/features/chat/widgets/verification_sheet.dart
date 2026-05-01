@@ -43,6 +43,13 @@ class _VerificationSheetState extends State<VerificationSheet>
   MobileScannerController? _scannerController;
   Position? _currentPosition;
 
+  // Debounce: prevent multiple simultaneous scan RPC calls
+  bool _isProcessing = false;
+
+  // In-sheet feedback banner
+  String? _feedbackMessage;
+  bool _feedbackIsError = true;
+
   // Batch mode state
   final Set<String> _verifiedUserIds = {};
 
@@ -104,10 +111,21 @@ class _VerificationSheetState extends State<VerificationSheet>
     }
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
-      );
+      Position? position;
+      try {
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 10),
+        );
+      } catch (_) {
+        // GPS timed out or failed — use last known as fallback
+        position = await Geolocator.getLastKnownPosition();
+      }
+
+      if (position == null) {
+        _showError('Could not determine your location. Please try again.');
+        return;
+      }
 
       if (!mounted) return;
       setState(() {
@@ -126,16 +144,28 @@ class _VerificationSheetState extends State<VerificationSheet>
 
   void _showError(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.red),
-    );
+    setState(() {
+      _feedbackMessage = msg;
+      _feedbackIsError = true;
+    });
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _feedbackMessage == msg) {
+        setState(() => _feedbackMessage = null);
+      }
+    });
   }
 
   void _showSuccess(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.green),
-    );
+    setState(() {
+      _feedbackMessage = msg;
+      _feedbackIsError = false;
+    });
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _feedbackMessage == msg) {
+        setState(() => _feedbackMessage = null);
+      }
+    });
   }
 
   @override
@@ -146,9 +176,11 @@ class _VerificationSheetState extends State<VerificationSheet>
   }
 
   Future<void> _onQRScanned(BarcodeCapture capture) async {
+    if (_isProcessing) return; // debounce — ignore while RPC is in flight
     for (final barcode in capture.barcodes) {
       final code = barcode.rawValue;
       if (code != null) {
+        _isProcessing = true;
         _scannerController?.stop();
         await _processVerification(code);
         break;
@@ -167,6 +199,7 @@ class _VerificationSheetState extends State<VerificationSheet>
         return;
       }
       _showError('Invalid QR code. Not a valid verification code.');
+      _isProcessing = false;
       _scannerController?.start();
       return;
     }
@@ -174,6 +207,7 @@ class _VerificationSheetState extends State<VerificationSheet>
     // Validate table ID matches
     if (parsed['tableId'] != widget.tableId) {
       _showError('This QR belongs to a different activity.');
+      _isProcessing = false;
       _scannerController?.start();
       return;
     }
@@ -186,6 +220,7 @@ class _VerificationSheetState extends State<VerificationSheet>
     if (!widget.isHost && widget.targetUserId != null) {
       if (userId != widget.targetUserId) {
         _showError('Wrong user! Expected someone else.');
+        _isProcessing = false;
         _scannerController?.start();
         return;
       }
@@ -194,12 +229,14 @@ class _VerificationSheetState extends State<VerificationSheet>
     // Skip if already verified in batch mode
     if (widget.isHost && _verifiedUserIds.contains(userId)) {
       _showError('Already scanned this member!');
+      _isProcessing = false;
       _scannerController?.start();
       return;
     }
 
     if (_currentPosition == null) {
       _showError('Location not found. Cannot verify.');
+      _isProcessing = false;
       return;
     }
 
@@ -228,9 +265,11 @@ class _VerificationSheetState extends State<VerificationSheet>
 
           // Check if all done
           final unverifiedCount = widget.participants
-              .where((p) =>
-                  p['userId'] != widget.currentUserId &&
-                  !_verifiedUserIds.contains(p['userId']))
+              .where(
+                (p) =>
+                    p['userId'] != widget.currentUserId &&
+                    !_verifiedUserIds.contains(p['userId']),
+              )
               .length;
 
           if (unverifiedCount == 0) {
@@ -243,6 +282,7 @@ class _VerificationSheetState extends State<VerificationSheet>
           }
 
           // Resume scanning for next person
+          _isProcessing = false;
           _scannerController?.start();
         } else {
           // Single mode: close sheet
@@ -257,6 +297,7 @@ class _VerificationSheetState extends State<VerificationSheet>
     } catch (e) {
       if (mounted) {
         _showError('Verification Failed: $e');
+        _isProcessing = false;
         _scannerController?.start();
       }
     }
@@ -280,87 +321,153 @@ class _VerificationSheetState extends State<VerificationSheet>
         color: isDark ? const Color(0xFF1A1A2E) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      child: Column(
+      child: Stack(
         children: [
-          const SizedBox(height: 12),
-          // Drag handle
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[400],
-                borderRadius: BorderRadius.circular(2),
+          Column(
+            children: [
+              const SizedBox(height: 12),
+              // Drag handle
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[400],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 8),
+              const SizedBox(height: 8),
 
-          if (widget.isHost) ...[
-            // Host batch mode header
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  const Icon(Icons.qr_code_scanner, size: 24),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              if (widget.isHost) ...[
+                // Host batch mode header
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.qr_code_scanner, size: 24),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Verify Members',
+                              style: GoogleFonts.inter(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              '${_verifiedUserIds.length}/${widget.participants.length - 1} scanned',
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Done'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 16),
+
+                // Member list with scan status
+                _buildMemberList(isDark),
+
+                const Divider(height: 1),
+
+                // Scanner area
+                Expanded(child: _buildScannerView()),
+              ] else ...[
+                // Standard mode with tabs
+                TabBar(
+                  controller: _tabController,
+                  labelColor: isDark ? Colors.white : Colors.black,
+                  unselectedLabelColor: Colors.grey,
+                  indicatorColor: isDark ? Colors.white : Colors.black,
+                  tabs: const [
+                    Tab(text: 'My Code'),
+                    Tab(text: 'Scan Camera'),
+                  ],
+                ),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [_buildMyCodeTab(isDark), _buildScannerView()],
+                  ),
+                ),
+              ],
+            ],
+          ), // Column
+          // Floating feedback banner — always visible over scanner & QR
+          if (_feedbackMessage != null)
+            Positioned(
+              top: 20,
+              left: 16,
+              right: 16,
+              child: SafeArea(
+                child: Material(
+                  color: Colors.transparent,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _feedbackIsError
+                          ? const Color(0xFFD32F2F)
+                          : const Color(0xFF2E7D32),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
                       children: [
-                        Text(
-                          'Verify Members',
-                          style: GoogleFonts.inter(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                        Icon(
+                          _feedbackIsError
+                              ? Icons.error_outline
+                              : Icons.check_circle_outline,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _feedbackMessage!,
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
-                        Text(
-                          '${_verifiedUserIds.length}/${widget.participants.length - 1} scanned',
-                          style: GoogleFonts.inter(
-                            fontSize: 13,
-                            color: Colors.grey[600],
+                        GestureDetector(
+                          onTap: () => setState(() => _feedbackMessage = null),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white70,
+                            size: 18,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Done'),
-                  ),
-                ],
+                ),
               ),
             ),
-            const Divider(height: 16),
-
-            // Member list with scan status
-            _buildMemberList(isDark),
-
-            const Divider(height: 1),
-
-            // Scanner area
-            Expanded(child: _buildScannerView()),
-          ] else ...[
-            // Standard mode with tabs
-            TabBar(
-              controller: _tabController,
-              labelColor: isDark ? Colors.white : Colors.black,
-              unselectedLabelColor: Colors.grey,
-              indicatorColor: isDark ? Colors.white : Colors.black,
-              tabs: const [
-                Tab(text: 'My Code'),
-                Tab(text: 'Scan Camera'),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [_buildMyCodeTab(isDark), _buildScannerView()],
-              ),
-            ),
-          ],
-        ],
+        ], // Stack children
       ),
     );
   }
@@ -399,8 +506,9 @@ class _VerificationSheetState extends State<VerificationSheet>
                       ),
                       child: CircleAvatar(
                         radius: 20,
-                        backgroundColor:
-                            isDark ? Colors.grey[700] : Colors.grey[200],
+                        backgroundColor: isDark
+                            ? Colors.grey[700]
+                            : Colors.grey[200],
                         backgroundImage: p['photoUrl'] != null
                             ? CachedNetworkImageProvider(p['photoUrl'])
                             : null,
@@ -461,10 +569,7 @@ class _VerificationSheetState extends State<VerificationSheet>
         children: [
           Text(
             'Show this to the host for verification',
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
+            style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
           ),
           const SizedBox(height: 32),
           Container(
@@ -544,10 +649,7 @@ class _VerificationSheetState extends State<VerificationSheet>
             const SizedBox(height: 16),
             Text(
               'Getting your location...',
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
+              style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
             ),
           ],
         ),
@@ -556,10 +658,7 @@ class _VerificationSheetState extends State<VerificationSheet>
 
     return Stack(
       children: [
-        MobileScanner(
-          controller: _scannerController,
-          onDetect: _onQRScanned,
-        ),
+        MobileScanner(controller: _scannerController, onDetect: _onQRScanned),
         // Scan frame overlay
         Center(
           child: Container(
@@ -604,8 +703,10 @@ class _VerificationSheetState extends State<VerificationSheet>
             right: 0,
             child: Center(
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF10B981).withValues(alpha: 0.9),
                   borderRadius: BorderRadius.circular(20),

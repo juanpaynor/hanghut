@@ -244,17 +244,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _subscribeToReactions() {
-    SupabaseConfig.client
-        .channel('message_reactions:${widget.tableId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'message_reactions',
-          callback: (payload) {
-            _loadReactions();
-          },
-        )
-        .subscribe();
+    // Reactions are broadcast via Ably (reaction_updated event).
+    // Supabase realtime is not used here — message_reactions is not
+    // in the realtime publication.
   }
 
   Future<void> _loadReactions() async {
@@ -304,64 +296,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _subscribeToParticipants() {
-    if (widget.chatType == 'trip') return;
-
-    if (widget.chatType == 'dm') {
-      SupabaseConfig.client
-          .channel('direct_chat_participants:${widget.tableId}')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'direct_chat_participants',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'chat_id',
-              value: widget.tableId,
-            ),
-            callback: (payload) {
-              _loadParticipants();
-            },
-          )
-          .subscribe();
-      return;
-    }
-
-    if (widget.chatType == 'group') {
-      SupabaseConfig.client
-          .channel('group_members:${widget.tableId}')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'group_members',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'group_id',
-              value: widget.tableId,
-            ),
-            callback: (payload) {
-              _loadParticipants();
-            },
-          )
-          .subscribe();
-      return;
-    }
-
-    SupabaseConfig.client
-        .channel('table_participants:${widget.tableId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'table_members', // Listening to the TABLE we query
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'table_id',
-            value: widget.tableId,
-          ),
-          callback: (payload) {
-            _loadParticipants(); // Reload list on any change
-          },
-        )
-        .subscribe();
+    // Participant and mute changes are broadcast via Ably
+    // (participants_updated / mute_updated events).
+    // Supabase realtime is not used here to keep connection count low.
   }
 
   Future<void> _checkIfMuted() async {
@@ -567,6 +504,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           : Colors.red,
                     ),
                   );
+                  if (result['success'] == true) {
+                    // Broadcast mute change so the affected user updates live
+                    await _ablyService.publishMuteUpdated(
+                      channelName: widget.channelId,
+                      targetUserId: userId,
+                      isMuted: !isMuted,
+                    );
+                    _loadParticipants();
+                  }
                 }
               },
             ),
@@ -805,11 +751,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final table = await SupabaseConfig.client
           .from('tables')
-          .select('scheduled_at')
+          .select('datetime')
           .eq('id', widget.tableId)
           .single();
 
-      final scheduledAt = DateTime.tryParse(table['scheduled_at'] ?? '');
+      final scheduledAt = DateTime.tryParse(table['datetime'] ?? '');
       if (scheduledAt != null && mounted) {
         setState(() {
           _isActivityPast = scheduledAt.isBefore(DateTime.now());
@@ -945,6 +891,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('Message unpinned')));
+          // Broadcast to all clients
+          _ablyService.publishPinUpdated(
+            channelName: widget.channelId,
+            pinnedMessageId: null,
+          );
         }
       } else {
         // Unpin any existing pinned message first, then pin this one
@@ -983,6 +934,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('Message pinned 📌')));
+          // Broadcast to all clients
+          _ablyService.publishPinUpdated(
+            channelName: widget.channelId,
+            pinnedMessageId: messageId,
+            pinnedMessage: {
+              'id': messageId,
+              'content': message['content'],
+              'sender_name': message['senderName'] ?? message['sender_name'],
+              'content_type':
+                  message['contentType'] ?? message['content_type'] ?? 'text',
+            },
+          );
         }
       }
     } catch (e) {
@@ -1476,6 +1439,65 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (message.data != null) {
         final data = Map<String, dynamic>.from(message.data as Map);
 
+        // Handle pin broadcast
+        if (message.name == 'pin_updated') {
+          final pinnedId = data['pinnedMessageId'] as String?;
+          if (mounted) {
+            setState(() {
+              if (pinnedId == null) {
+                // Unpinned
+                _pinnedMessage = null;
+                for (final m in _messages) m['is_pinned'] = false;
+              } else {
+                // Newly pinned
+                final pinData = data['pinnedMessage'] as Map?;
+                _pinnedMessage = pinData != null
+                    ? Map<String, dynamic>.from(pinData)
+                    : {'id': pinnedId};
+                for (final m in _messages) {
+                  m['is_pinned'] = (m['id'] == pinnedId);
+                }
+              }
+            });
+          }
+          return;
+        }
+
+        // Handle mute broadcast
+        if (message.name == 'mute_updated') {
+          final targetId = data['userId'] as String?;
+          if (targetId == _currentUserId) {
+            final nowMuted = data['isMuted'] == true;
+            if (mounted) setState(() => _isMuted = nowMuted);
+          }
+          _loadParticipants();
+          return;
+        }
+
+        // Handle reaction update broadcast
+        if (message.name == 'reaction_updated') {
+          _loadReactions();
+          return;
+        }
+
+        // Handle delete-for-everyone broadcast
+        if (message.name == 'message_deleted') {
+          final deletedId = data['messageId'] as String?;
+          if (deletedId != null && mounted) {
+            setState(() {
+              final idx = _messages.indexWhere((m) => m['id'] == deletedId);
+              if (idx != -1) {
+                _messages[idx] = {
+                  ..._messages[idx],
+                  'deletedAt': DateTime.now().toIso8601String(),
+                  'deletedForEveryone': true,
+                };
+              }
+            });
+          }
+          return;
+        }
+
         // In Telegram mode, skip our own messages (already added locally)
         if (_useTelegramMode && data['senderId'] == _currentUserId) {
           return;
@@ -1720,10 +1742,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _replyingTo = null;
     });
 
+    // Generate a client-side ID so the Ably echo has a stable id
+    // and message['id'] is never null (prevents delete crash)
+    final messageId = const Uuid().v4();
+
     try {
       // 1. Save to Supabase
       if (widget.chatType == 'trip') {
         await SupabaseConfig.client.from('trip_messages').insert({
+          'id': messageId,
           'chat_id': widget.tableId,
           'sender_id': _currentUserId,
           'content': content,
@@ -1732,6 +1759,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       } else if (widget.chatType == 'dm') {
         await SupabaseConfig.client.from('direct_messages').insert({
+          'id': messageId,
           'chat_id': widget.tableId,
           'sender_id': _currentUserId,
           'content': content,
@@ -1740,6 +1768,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       } else if (widget.chatType == 'group') {
         await SupabaseConfig.client.from('messages').insert({
+          'id': messageId,
           'group_id': widget.tableId,
           'sender_id': _currentUserId,
           'content': content,
@@ -1748,6 +1777,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       } else {
         await SupabaseConfig.client.from('messages').insert({
+          'id': messageId,
           'table_id': widget.tableId,
           'sender_id': _currentUserId,
           'content': content,
@@ -1764,6 +1794,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         senderId: _currentUserId!,
         senderName: _currentUserName ?? 'Unknown',
         senderPhotoUrl: _currentUserPhoto,
+        messageId: messageId,
         replyToId: replyToId,
       );
 
@@ -1969,7 +2000,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           }
         }
 
-        // Success!
+        // Success — broadcast so all clients reload reactions
+        await _ablyService.publishReactionUpdated(
+          channelName: widget.channelId,
+          messageId: messageId,
+        );
         return;
       } catch (e) {
         attempts++;
@@ -2025,16 +2060,45 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           );
         }
       } else {
-        // Legacy mode: mark as deleted in Supabase
-        await SupabaseConfig.client
-            .from(messagesTable)
-            .update({
-              'deleted_at': DateTime.now().toIso8601String(),
-              'deleted_for_everyone': deleteForEveryone,
-            })
-            .eq('id', message['id']);
+        // Legacy mode
+        final messageId = message['id'];
 
-        await _loadMessageHistory();
+        if (!deleteForEveryone) {
+          // "Delete for me": hard-delete from DB (sender only, RLS enforces this)
+          if (mounted) {
+            setState(() => _messages.removeWhere((m) => m['id'] == messageId));
+          }
+          await SupabaseConfig.client
+              .from(messagesTable)
+              .delete()
+              .eq('id', messageId);
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('Message deleted')));
+          }
+        } else {
+          // "Delete for everyone": optimistic remove + DB update + Ably broadcast
+          if (mounted) {
+            setState(() => _messages.removeWhere((m) => m['id'] == messageId));
+          }
+          await SupabaseConfig.client
+              .from(messagesTable)
+              .update({
+                'deleted_at': DateTime.now().toIso8601String(),
+                'deleted_for_everyone': true,
+              })
+              .eq('id', messageId);
+          await _ablyService.publishMessageDeleted(
+            channelName: widget.channelId,
+            messageId: messageId,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Message deleted for everyone')),
+            );
+          }
+        }
       }
     } catch (e) {
       print('❌ Error deleting message: $e');
@@ -2832,6 +2896,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           searchQuery: _searchQuery,
           matchedIndices: _matchedIndices,
           currentMatchIndex: _currentMatchIndex,
+          channelId: widget.channelId,
         ),
       ),
 

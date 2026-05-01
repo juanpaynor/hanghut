@@ -50,11 +50,11 @@ BEGIN
         ST_SetSRID(ST_MakePoint(p_verifier_lng, p_verifier_lat), 4326)::geography
     );
 
-    -- 200m Threshold
-    IF v_distance_meters > 200 THEN
+    -- 500m Threshold (GPS indoors can drift 50-300m)
+    IF v_distance_meters > 500 THEN
         RETURN jsonb_build_object(
             'success', false, 
-            'error', format('Too far from venue (%s m). Must be within 200m.', round(v_distance_meters::numeric, 0))
+            'error', format('Too far from venue (%s m away). Must be within 500m.', round(v_distance_meters::numeric, 0))
         );
     END IF;
 

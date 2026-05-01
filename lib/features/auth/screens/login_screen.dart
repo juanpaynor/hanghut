@@ -156,6 +156,37 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     }
   }
 
+  Future<void> _handleAppleLogin(BuildContext context) async {
+    HapticFeedback.mediumImpact();
+    _physicsEngine.explode();
+
+    final authProvider = context.read<AuthProvider>();
+
+    try {
+      final success = await authProvider.signInWithApple();
+      if (success && mounted) {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 600),
+            pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+            transitionsBuilder: (_, animation, __, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        HapticFeedback.heavyImpact();
+        ErrorHandler.showError(
+          context,
+          error: e,
+          fallbackMessage: 'Unable to sign in with Apple. Please try again.',
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
@@ -329,6 +360,43 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
                                             const Icon(Icons.g_mobiledata),
                                   ),
                                   label: const Text('Continue with Google'),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 18,
+                                    ),
+                                    side: BorderSide(
+                                      color: Colors.grey[200]!,
+                                      width: 1.5,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    textStyle: GoogleFonts.inter(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                    foregroundColor: Colors.black87,
+                                  ),
+                                );
+                              },
+                            ),
+
+                            const SizedBox(height: 12),
+
+                            // APPLE SIGN IN
+                            Consumer<AuthProvider>(
+                              builder: (context, auth, _) {
+                                return OutlinedButton.icon(
+                                  onPressed: auth.isLoading
+                                      ? null
+                                      : () => _handleAppleLogin(context),
+                                  icon: const Icon(
+                                    Icons.apple,
+                                    size: 22,
+                                    color: Colors.black87,
+                                  ),
+                                  label: const Text('Continue with Apple'),
                                   style: OutlinedButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 18,

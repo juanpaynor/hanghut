@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/ably_service.dart';
+import 'package:ably_flutter/ably_flutter.dart' as ably;
 
-/// Renders an in-chat poll card. Fetches vote data live from Supabase.
+/// Renders an in-chat poll card. Fetches vote data live via Ably.
 class PollMessageBubble extends StatefulWidget {
   final String pollId;
   final bool isMe;
+  final String channelId;
 
   const PollMessageBubble({
     super.key,
     required this.pollId,
     required this.isMe,
+    this.channelId = '',
   });
 
   @override
@@ -22,14 +26,35 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
   String? _myVoteOptionId;
   bool _isLoading = true;
   bool _isVoting = false;
+  final AblyService _ablyService = AblyService();
+  ably.RealtimeChannel? _ablyChannel;
 
   @override
   void initState() {
     super.initState();
-    _loadPoll();
+    _loadPoll(showLoading: true);
+    _subscribeToVotes();
   }
 
-  Future<void> _loadPoll() async {
+  @override
+  void dispose() {
+    _ablyChannel?.detach();
+    super.dispose();
+  }
+
+  void _subscribeToVotes() {
+    if (widget.channelId.isEmpty) return;
+    _ablyChannel = _ablyService.getChannel(widget.channelId);
+    _ablyChannel?.subscribe(name: 'poll_vote_updated').listen((msg) {
+      final data = msg.data as Map?;
+      if (data != null && data['pollId'] == widget.pollId) {
+        _loadPoll();
+      }
+    });
+  }
+
+  Future<void> _loadPoll({bool showLoading = false}) async {
+    if (showLoading && mounted) setState(() => _isLoading = true);
     try {
       final pollData = await SupabaseConfig.client
           .from('chat_polls')
@@ -38,7 +63,7 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           .maybeSingle();
 
       if (pollData == null) {
-        if (mounted) setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false); // poll deleted
         return;
       }
 
@@ -49,7 +74,9 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
 
       final voteList = List<Map<String, dynamic>>.from(votes);
       final currentUserId = SupabaseConfig.client.auth.currentUser!.id;
-      final myVote = voteList.where((v) => v['user_id'] == currentUserId).firstOrNull;
+      final myVote = voteList
+          .where((v) => v['user_id'] == currentUserId)
+          .firstOrNull;
 
       if (mounted) {
         setState(() {
@@ -106,6 +133,13 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
       _loadPoll();
     } finally {
       if (mounted) setState(() => _isVoting = false);
+      // Broadcast vote change to all other users in the channel
+      if (widget.channelId.isNotEmpty) {
+        await _ablyService.publishPollVoteUpdated(
+          channelName: widget.channelId,
+          pollId: widget.pollId,
+        );
+      }
     }
   }
 
@@ -115,7 +149,9 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
     final bubbleColor = widget.isMe
         ? Theme.of(context).primaryColor
         : (isDark ? Colors.grey[800]! : Colors.grey[100]!);
-    final textColor = widget.isMe ? Colors.white : (isDark ? Colors.white : Colors.black87);
+    final textColor = widget.isMe
+        ? Colors.white
+        : (isDark ? Colors.white : Colors.black87);
 
     if (_isLoading) {
       return Container(
@@ -136,7 +172,10 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           color: bubbleColor,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text('Poll no longer available', style: TextStyle(color: textColor, fontSize: 13)),
+        child: Text(
+          'Poll no longer available',
+          style: TextStyle(color: textColor, fontSize: 13),
+        ),
       );
     }
 
@@ -167,7 +206,11 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           // Header
           Row(
             children: [
-              Icon(Icons.poll_outlined, size: 16, color: textColor.withOpacity(0.7)),
+              Icon(
+                Icons.poll_outlined,
+                size: 16,
+                color: textColor.withOpacity(0.7),
+              ),
               const SizedBox(width: 6),
               Text(
                 isInactive ? 'POLL CLOSED' : 'POLL',
@@ -195,7 +238,9 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           ...options.map((opt) {
             final optId = opt['id'] as String;
             final optText = opt['text'] as String;
-            final voteCount = _votes.where((v) => v['option_id'] == optId).length;
+            final voteCount = _votes
+                .where((v) => v['option_id'] == optId)
+                .length;
             final percent = totalVotes == 0 ? 0.0 : voteCount / totalVotes;
             final isSelected = _myVoteOptionId == optId;
 
@@ -221,16 +266,20 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
                       duration: const Duration(milliseconds: 400),
                       curve: Curves.easeOut,
                       height: 38,
-                      width: 232 * percent,  // 260 - 14 - 14 padding
+                      width: 232 * percent, // 260 - 14 - 14 padding
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(8),
                         color: isSelected
                             ? (widget.isMe
-                                ? Colors.white.withOpacity(0.35)
-                                : Theme.of(context).primaryColor.withOpacity(0.25))
+                                  ? Colors.white.withOpacity(0.35)
+                                  : Theme.of(
+                                      context,
+                                    ).primaryColor.withOpacity(0.25))
                             : (widget.isMe
-                                ? Colors.white.withOpacity(0.15)
-                                : (isDark ? Colors.grey[700] : Colors.grey[200])),
+                                  ? Colors.white.withOpacity(0.15)
+                                  : (isDark
+                                        ? Colors.grey[700]
+                                        : Colors.grey[200])),
                       ),
                     ),
                     // Text and percentage row
@@ -257,12 +306,16 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
                                 style: TextStyle(
                                   color: textColor,
                                   fontSize: 13,
-                                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                                  fontWeight: isSelected
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
                                 ),
                               ),
                             ),
                             Text(
-                              totalVotes > 0 ? '${(percent * 100).round()}%' : '',
+                              totalVotes > 0
+                                  ? '${(percent * 100).round()}%'
+                                  : '',
                               style: TextStyle(
                                 color: textColor.withOpacity(0.7),
                                 fontSize: 12,
@@ -282,10 +335,7 @@ class _PollMessageBubbleState extends State<PollMessageBubble> {
           // Vote count footer
           Text(
             '$totalVotes ${totalVotes == 1 ? 'vote' : 'votes'}${isInactive ? ' • Closed' : ''}',
-            style: TextStyle(
-              color: textColor.withOpacity(0.6),
-              fontSize: 11,
-            ),
+            style: TextStyle(color: textColor.withOpacity(0.6), fontSize: 11),
           ),
         ],
       ),

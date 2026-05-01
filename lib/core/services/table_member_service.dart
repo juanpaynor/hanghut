@@ -136,25 +136,37 @@ class TableMemberService {
             locationPermissionOk = true;
           }
           if (locationPermissionOk) {
-            final pos = await Geolocator.getCurrentPosition(
-              locationSettings: const LocationSettings(
-                accuracy: LocationAccuracy.low,
-              ),
-            );
-            final distanceMeters = Geolocator.distanceBetween(
-              pos.latitude,
-              pos.longitude,
-              tableLat,
-              tableLng,
-            );
-            final distanceKm = distanceMeters / 1000.0;
-            if (distanceKm > maxDistKm) {
-              return {
-                'success': false,
-                'message':
-                    'You are too far away to join this hangout (${distanceKm.toStringAsFixed(0)} km away, max ${maxDistKm.toStringAsFixed(0)} km).',
-              };
+            Position? pos;
+            try {
+              pos = await Geolocator.getCurrentPosition(
+                locationSettings: const LocationSettings(
+                  accuracy: LocationAccuracy.medium,
+                  timeLimit: Duration(seconds: 8),
+                ),
+              );
+            } catch (_) {
+              // Timed out or no fresh fix — use last known as fallback
+              pos = await Geolocator.getLastKnownPosition();
             }
+            if (pos == null) {
+              // Can't determine location — allow join rather than block
+              debugPrint('⚠️ Location unavailable, skipping distance check');
+            } else {
+              final distanceMeters = Geolocator.distanceBetween(
+                pos.latitude,
+                pos.longitude,
+                tableLat,
+                tableLng,
+              );
+              final distanceKm = distanceMeters / 1000.0;
+              if (distanceKm > maxDistKm) {
+                return {
+                  'success': false,
+                  'message':
+                      'You are too far away to join this hangout (${distanceKm.toStringAsFixed(0)} km away, max ${maxDistKm.toStringAsFixed(0)} km).',
+                };
+              }
+            } // end else (pos != null)
           }
         } catch (e) {
           debugPrint('⚠️ Location check skipped: $e');

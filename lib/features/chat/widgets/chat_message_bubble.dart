@@ -28,6 +28,7 @@ class ChatMessageBubble extends StatelessWidget {
   final Function(String userId)? onAvatarTap;
   final List<Map<String, dynamic>> participants;
   final String searchQuery;
+  final String channelId;
   final bool isCurrentMatch;
 
   const ChatMessageBubble({
@@ -48,6 +49,7 @@ class ChatMessageBubble extends StatelessWidget {
     this.onAvatarTap,
     this.participants = const [],
     this.searchQuery = '',
+    this.channelId = '',
     this.isCurrentMatch = false,
   });
 
@@ -275,10 +277,30 @@ class ChatMessageBubble extends StatelessWidget {
                                           ),
 
                                         // Content
-                                        if (msg['contentType'] == 'poll')
+                                        if (msg['deletedAt'] != null &&
+                                            (msg['deletedForEveryone'] ==
+                                                    true ||
+                                                !isMe))
+                                          Text(
+                                            '🚫 Message deleted',
+                                            style: TextStyle(
+                                              color: isMe
+                                                  ? Colors.white70
+                                                  : (Theme.of(
+                                                              context,
+                                                            ).brightness ==
+                                                            Brightness.dark
+                                                        ? Colors.white54
+                                                        : Colors.black45),
+                                              fontSize: 14,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          )
+                                        else if (msg['contentType'] == 'poll')
                                           PollMessageBubble(
                                             pollId: msg['content'],
                                             isMe: isMe,
+                                            channelId: channelId,
                                           )
                                         else if (msg['contentType'] == 'image')
                                           GestureDetector(
@@ -335,24 +357,6 @@ class ChatMessageBubble extends StatelessWidget {
                                               errorWidget:
                                                   (context, url, error) =>
                                                       const Icon(Icons.error),
-                                            ),
-                                          )
-                                        else if (msg['deletedAt'] != null &&
-                                            (msg['deletedForEveryone'] ||
-                                                !isMe))
-                                          Text(
-                                            '[Message deleted]',
-                                            style: TextStyle(
-                                              color: isMe
-                                                  ? Colors.white
-                                                  : Theme.of(
-                                                          context,
-                                                        ).brightness ==
-                                                        Brightness.dark
-                                                  ? Colors.white
-                                                  : Colors.black87,
-                                              fontSize: 15,
-                                              fontStyle: FontStyle.italic,
                                             ),
                                           )
                                         else

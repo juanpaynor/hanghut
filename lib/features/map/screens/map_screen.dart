@@ -59,6 +59,7 @@ class MapScreenState extends State<MapScreen>
   List<Map<String, dynamic>> _stories = [];
   Map<String, dynamic>? _currentUserData;
   Timer? _debounceTimer;
+  Timer? _realtimeRefreshTimer; // Debounces Ably-triggered map refreshes
   CameraState? _lastFetchCameraState;
 
   Timer? _heartbeatTimer;
@@ -116,7 +117,19 @@ class MapScreenState extends State<MapScreen>
     _feedSubscription = AblyService().subscribeToCityFeed('philippines')?.listen((
       message,
     ) {
-      if (message.name == 'post_deleted' && mounted) {
+      if (!mounted) return;
+
+      if (message.name == 'post_created' || message.name == 'table_created') {
+        // New story or activity posted — debounce so rapid posts don't
+        // hammer the DB, and force-bypass the distance/zoom guard.
+        _realtimeRefreshTimer?.cancel();
+        _realtimeRefreshTimer = Timer(const Duration(seconds: 3), () {
+          _fetchTablesInViewport(force: true);
+        });
+        return;
+      }
+
+      if (message.name == 'post_deleted') {
         final data = message.data;
         if (data is Map && data['post_id'] != null) {
           final deletedPostId = data['post_id'];
@@ -125,7 +138,7 @@ class MapScreenState extends State<MapScreen>
             _stories.removeWhere((story) => story['id'] == deletedPostId);
             if (_stories.length < initialLength) {
               // Re-fetch map markers to instantly remove the deleted story marker
-              _fetchTablesInViewport();
+              _fetchTablesInViewport(force: true);
             }
           });
         }
@@ -136,6 +149,7 @@ class MapScreenState extends State<MapScreen>
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _realtimeRefreshTimer?.cancel();
     _popAnimationTimer?.cancel();
     _heartbeatTimer?.cancel();
     _feedSubscription?.cancel();
@@ -593,7 +607,7 @@ class MapScreenState extends State<MapScreen>
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).cardColor,
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
                         BoxShadow(
@@ -607,23 +621,21 @@ class MapScreenState extends State<MapScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (_isFetching)
-                          const SizedBox(
+                          SizedBox(
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Colors.black,
+                              color: Theme.of(context).colorScheme.onSurface,
                             ),
-                          )
-                        else
-                          const Text('👀', style: TextStyle(fontSize: 16)),
-                        const SizedBox(width: 6),
+                          ),
+                        if (_isFetching) const SizedBox(width: 6),
                         Text(
                           _isFetching
                               ? 'Updating map...'
-                              : '$_activeUserCount people active on map',
-                          style: const TextStyle(
-                            color: Colors.black,
+                              : '${_formatActiveCount(_activeUserCount)} active on map',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurface,
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
                           ),
@@ -689,43 +701,40 @@ class MapScreenState extends State<MapScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Refresh Button
-                  FloatingActionButton(
+                  _mapControlButton(
                     heroTag: 'map_refresh_btn',
-                    mini: true,
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black87,
+                    icon: Icons.refresh,
+                    label: 'Refresh',
                     onPressed: _onRefreshTapped,
-                    child: const Icon(Icons.refresh, size: 20),
+                    isDarkMode: isDarkMode,
                   ),
                   const SizedBox(height: 12),
 
                   // Focus Location Button
-                  FloatingActionButton(
+                  _mapControlButton(
                     heroTag: 'map_focus_btn',
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
+                    icon: Icons.my_location,
+                    label: 'Location',
                     onPressed: _onFocusLocationTapped,
-                    child: const Icon(Icons.my_location),
+                    isDarkMode: isDarkMode,
                   ),
                   const SizedBox(height: 12),
 
                   // Isochrone Toggle
-                  FloatingActionButton(
+                  _mapControlButton(
                     heroTag: 'map_isochrone_btn',
-                    mini: true,
+                    icon: Icons.radar,
+                    label: 'Nearby',
+                    onPressed: _showIsochrone
+                        ? _toggleIsochrone
+                        : _showIsochroneExplainer,
+                    isDarkMode: isDarkMode,
                     backgroundColor: _showIsochrone
                         ? Colors.indigo
                         : Colors.white,
                     foregroundColor: _showIsochrone
                         ? Colors.white
                         : Colors.black87,
-                    onPressed: _showIsochrone
-                        ? _toggleIsochrone // already on → just turn off
-                        : _showIsochroneExplainer, // off → explain first
-                    child: Icon(
-                      _showIsochrone ? Icons.radar : Icons.radar,
-                      size: 20,
-                    ),
                   ),
                 ],
               ),
@@ -754,6 +763,61 @@ class MapScreenState extends State<MapScreen>
 
   // --- Map Controls ---
 
+  Widget _mapControlButton({
+    required String heroTag,
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    required bool isDarkMode,
+    Color backgroundColor = Colors.white,
+    Color foregroundColor = const Color(0xFF6C63FF),
+  }) {
+    final isActive = backgroundColor != Colors.white;
+    final btnBg = isActive ? const Color(0xFF6C63FF) : Colors.white;
+    final btnIcon = isActive ? Colors.white : const Color(0xFF6C63FF);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: onPressed,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: btnBg,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(icon, size: 20, color: btnIcon),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: isDarkMode ? Colors.white : Colors.black87,
+            shadows: [
+              Shadow(
+                color: isDarkMode
+                    ? Colors.black54
+                    : Colors.white.withOpacity(0.8),
+                blurRadius: 4,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   void _onRefreshTapped() {
     print('🔄 Manual map refresh triggered');
     ScaffoldMessenger.of(context).showSnackBar(
@@ -770,6 +834,18 @@ class MapScreenState extends State<MapScreen>
   }
 
   // --- Filter Helpers ---
+
+  /// Format active user count: <1k shows exact, ≥1k shows "1.2k 👀", ≥1M shows "1.2M 👀"
+  String _formatActiveCount(int count) {
+    if (count >= 1000000) {
+      final m = count / 1000000;
+      return '${m % 1 == 0 ? m.toInt() : m.toStringAsFixed(1)}M 👀';
+    } else if (count >= 1000) {
+      final k = count / 1000;
+      return '${k % 1 == 0 ? k.toInt() : k.toStringAsFixed(1)}k 👀';
+    }
+    return '$count 👀';
+  }
 
   String _filterLabel(MapFilter filter) {
     switch (filter) {
@@ -1571,7 +1647,7 @@ class MapScreenState extends State<MapScreen>
 
   double _toRadians(double degrees) => degrees * pi / 180;
 
-  Future<void> _fetchTablesInViewport() async {
+  Future<void> _fetchTablesInViewport({bool force = false}) async {
     if (_mapboxMap == null || _currentUserData == null) return;
 
     try {
@@ -1606,8 +1682,8 @@ class MapScreenState extends State<MapScreen>
         return;
       }
 
-      // 2. Check if moved significantly since last fetch
-      if (_lastFetchCameraState != null) {
+      // 2. Check if moved significantly since last fetch (skip when forced)
+      if (!force && _lastFetchCameraState != null) {
         final double dist = geo.Geolocator.distanceBetween(
           cameraState.center.coordinates.lat.toDouble(),
           cameraState.center.coordinates.lng.toDouble(),

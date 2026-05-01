@@ -36,7 +36,12 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(ErrorHandler.getUserMessage(e, fallback: 'Sign up failed. Please try again.'));
+      _setError(
+        ErrorHandler.getUserMessage(
+          e,
+          fallback: 'Sign up failed. Please try again.',
+        ),
+      );
       _setLoading(false);
       return false;
     }
@@ -60,7 +65,12 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(ErrorHandler.getUserMessage(e, fallback: 'Sign in failed. Please try again.'));
+      _setError(
+        ErrorHandler.getUserMessage(
+          e,
+          fallback: 'Sign in failed. Please try again.',
+        ),
+      );
       _setLoading(false);
       return false;
     }
@@ -81,7 +91,38 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _setError(ErrorHandler.getUserMessage(e, fallback: 'Google sign in failed. Please try again.'));
+      _setError(
+        ErrorHandler.getUserMessage(
+          e,
+          fallback: 'Google sign in failed. Please try again.',
+        ),
+      );
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  // Sign in with Apple
+  Future<bool> signInWithApple() async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      final success = await _authService.signInWithApple();
+      if (success) {
+        notifyListeners();
+        return true;
+      } else {
+        _setLoading(false);
+        return false;
+      }
+    } catch (e) {
+      _setError(
+        ErrorHandler.getUserMessage(
+          e,
+          fallback: 'Apple sign in failed. Please try again.',
+        ),
+      );
       _setLoading(false);
       return false;
     }
@@ -110,7 +151,12 @@ class AuthProvider with ChangeNotifier {
       await _authService.resetPasswordForEmail(email);
       _setLoading(false);
     } catch (e) {
-      _setError(ErrorHandler.getUserMessage(e, fallback: 'Could not send reset email. Please try again.'));
+      _setError(
+        ErrorHandler.getUserMessage(
+          e,
+          fallback: 'Could not send reset email. Please try again.',
+        ),
+      );
       _setLoading(false);
       rethrow;
     }

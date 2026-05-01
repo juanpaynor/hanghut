@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/main.dart'; // For navigatorKey
@@ -272,16 +273,38 @@ class PushNotificationService {
 
   Future<void> _saveTokenToSupabase(String token) async {
     try {
-      final user = SupabaseConfig.client.auth.currentUser;
+      User? user = SupabaseConfig.client.auth.currentUser;
+
+      // If no user yet, wait for auth state and retry (handles cold start race condition)
+      if (user == null) {
+        print('⏳ FCM: No user yet, waiting for auth...');
+        await Future.delayed(const Duration(seconds: 3));
+        user = SupabaseConfig.client.auth.currentUser;
+      }
+
       if (user != null) {
         await SupabaseConfig.client
             .from('users')
             .update({'fcm_token': token})
             .eq('id', user.id);
-        print('✅ FCM: Token saved to Supabase');
+        print('✅ FCM: Token saved to Supabase for ${user.email}');
+      } else {
+        print('⚠️ FCM: Still no user after wait — token not saved');
       }
     } catch (e) {
       print('❌ FCM: Error saving token: $e');
+    }
+  }
+
+  /// Call this after login to ensure the FCM token is saved for the new session
+  Future<void> saveTokenOnLogin() async {
+    try {
+      final token = await _fcm.getToken();
+      if (token != null) {
+        await _saveTokenToSupabase(token);
+      }
+    } catch (e) {
+      print('❌ FCM: Error saving token on login: $e');
     }
   }
 }

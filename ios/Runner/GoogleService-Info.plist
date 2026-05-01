@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.hanghut.hang</string>
+	<string>com.hang.hanghut</string>
 	<key>PROJECT_ID</key>
 	<string>hanghut-28e04</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:1066997622719:ios:74c498a74695079117a30a</string>
+	<string>1:1066997622719:ios:89d5575afe055bf117a30a</string>
 </dict>
 </plist>

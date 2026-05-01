@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
 import 'package:bitemates/core/constants/model_registry.dart';
@@ -387,6 +388,21 @@ class TableService {
         print('✅ TABLE SERVICE: Host added as member');
       } catch (e) {
         print('⚠️ TABLE SERVICE: Failed to add host as member: $e');
+      }
+
+      // Broadcast new activity to all map viewers instantly
+      try {
+        await AblyService().publishPostCreated(
+          city: 'philippines',
+          postData: {
+            'type': 'table_created',
+            'table_id': tableId,
+            'latitude': latitude,
+            'longitude': longitude,
+          },
+        );
+      } catch (e) {
+        print('⚠️ TABLE SERVICE: Failed to broadcast table_created: $e');
       }
 
       // Auto-add invited users as pending table members

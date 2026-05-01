@@ -4,6 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 
+import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:flutter/gestures.dart';
@@ -78,6 +79,27 @@ class _SignupScreenState extends State<SignupScreen> {
     final uri = Uri.parse(urlString);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> _handleAppleSignup() async {
+    final authProvider = context.read<AuthProvider>();
+    try {
+      final success = await authProvider.signInWithApple();
+      if (success && mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(authProvider.errorMessage ?? 'Apple sign in failed'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
     }
   }
 
@@ -419,7 +441,7 @@ class _SignupScreenState extends State<SignupScreen> {
                           const SizedBox(width: 16),
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () {},
+                              onPressed: _handleAppleSignup,
                               icon: const Icon(
                                 Icons.apple,
                                 size: 28,

@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
+import 'package:bitemates/core/services/push_notification_service.dart';
 
 class AuthService {
   final SupabaseClient _supabase = SupabaseConfig.client;
@@ -93,6 +97,10 @@ class AuthService {
         idToken: idToken,
       );
 
+      if (response.user != null) {
+        PushNotificationService().saveTokenOnLogin();
+      }
+
       return response.user != null;
     } catch (e) {
       print('Google Sign-In Error: $e');
@@ -100,10 +108,55 @@ class AuthService {
     }
   }
 
-  // Sign in with Apple (for future implementation)
+  // Sign in with Apple
   Future<bool> signInWithApple() async {
-    // TODO: Implement Apple OAuth flow
-    throw UnimplementedError('Apple sign-in not yet implemented');
+    try {
+      final rawNonce = _supabase.auth.generateRawNonce();
+      final hashedNonce = sha256.convert(utf8.encode(rawNonce)).toString();
+
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+        nonce: hashedNonce,
+      );
+
+      final idToken = credential.identityToken;
+      if (idToken == null) throw 'No identity token from Apple';
+
+      final response = await _supabase.auth.signInWithIdToken(
+        provider: OAuthProvider.apple,
+        idToken: idToken,
+        nonce: rawNonce,
+      );
+
+      // Apple only provides full name on first sign-in — save to metadata
+      if (credential.givenName != null || credential.familyName != null) {
+        final nameParts = [
+          if (credential.givenName != null) credential.givenName!,
+          if (credential.familyName != null) credential.familyName!,
+        ];
+        await _supabase.auth.updateUser(
+          UserAttributes(
+            data: {
+              'full_name': nameParts.join(' '),
+              'given_name': credential.givenName,
+              'family_name': credential.familyName,
+            },
+          ),
+        );
+      }
+
+      if (response.user != null) {
+        PushNotificationService().saveTokenOnLogin();
+      }
+
+      return response.user != null;
+    } catch (e) {
+      print('Apple Sign-In Error: $e');
+      rethrow;
+    }
   }
 
   // Reset password via email (Web Flow)
