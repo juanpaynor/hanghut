@@ -143,7 +143,18 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     final authProvider = context.read<AuthProvider>();
 
     try {
-      await authProvider.signInWithGoogle();
+      final success = await authProvider.signInWithGoogle();
+      if (success && mounted) {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 600),
+            pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+            transitionsBuilder: (_, animation, __, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         HapticFeedback.heavyImpact();

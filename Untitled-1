@@ -1,0 +1,106 @@
+[Skip to main content](https://docs.payrex.com/docs/guide/intro#__docusaurus_skipToContent_fallback)
+[Guide](https://docs.payrex.com/docs/guide/intro)
+[API Reference](https://docs.payrex.com/docs/api/core_resources)
+[Create an account](https://dashboard.payrexhq.com/signup)
+- [Introduction](https://docs.payrex.com/docs/guide/intro)
+- [Getting Started](https://docs.payrex.com/docs/guide/getting_started/)
+- [Finance Automation](https://docs.payrex.com/docs/guide/finance_automation/)
+- [Payments](https://docs.payrex.com/docs/guide/payments/)
+- [Payouts](https://docs.payrex.com/docs/guide/payouts/)
+- [Reports](https://docs.payrex.com/docs/guide/reports/)
+- [Developer Handbook](https://docs.payrex.com/docs/guide/developer_handbook/)
+- [Third-Party Plugins](https://docs.payrex.com/docs/guide/third_party_plugins/)
+[Introduction](https://docs.payrex.com/docs/guide/intro)
+[Getting Started](https://docs.payrex.com/docs/guide/getting_started/)
+[Finance Automation](https://docs.payrex.com/docs/guide/finance_automation/)
+[Payments](https://docs.payrex.com/docs/guide/payments/)
+[Payouts](https://docs.payrex.com/docs/guide/payouts/)
+[Reports](https://docs.payrex.com/docs/guide/reports/)
+[Developer Handbook](https://docs.payrex.com/docs/guide/developer_handbook/)
+[Third-Party Plugins](https://docs.payrex.com/docs/guide/third_party_plugins/)
+- https://docs.payrex.com/
+- Introduction
+
+# Introduction
+
+Welcome to PayRex, your trusted partner in simplifying payment processing and revolutionizing online transactions. Our API empowers developers and businesses to integrate secure, efficient, and scalable payment solutions into their applications, websites, and e-commerce platforms.
+At PayRex, we care about and understand that smooth payment experiences are integral to your business's success. That's why we provide a robust set of tools and features through our API, enabling you to accept payments and enhance your customers' overall payment experience.
+If you want to take advantage of our online technical consultation, please email [helloworld@payrex.com](mailto:helloworld@payrex.com). We will schedule a video call based on your availability. The video call is a free consultation on how PayRex can solve your business challenges.
+
+## Why PayRex?[​](https://docs.payrex.com/docs/guide/intro#why-payrex)
+[​](https://docs.payrex.com/docs/guide/intro#why-payrex)
+Secure and Trustworthy: We prioritize the security of your transactions with industry-standard encryption and fraud prevention measures.
+Developer-centric Approach: PayRex offers clear and well-documented APIs for developers and extensive SDKs to make integration a breeze, regardless of your technical expertise.
+Scalable and Reliable: Our infrastructure is built to handle high volumes of transactions, ensuring your payments are processed without a hitch, even during peak times.
+Customer-Centric: Your success is our success. Our dedicated support team is always ready to assist you with your concerns. We would love to hear your feedback on how to improve our service and even our platform.
+This documentation will help you understand PayRex's services and platform. It contains everything you need to get started.
+
+## Our Solutions[​](https://docs.payrex.com/docs/guide/intro#our-solutions)
+[​](https://docs.payrex.com/docs/guide/intro#our-solutions)
+
+### [PayRex Elements](https://docs.payrex.com/docs/guide/developer_handbook/payments/integrations/elements)[​](https://docs.payrex.com/docs/guide/intro#payrex-elements)
+[PayRex Elements](https://docs.payrex.com/docs/guide/developer_handbook/payments/integrations/elements)
+[​](https://docs.payrex.com/docs/guide/intro#payrex-elements)
+Embed our customizable UI components into your website to collect customer payments while maintaining your branding.
+- Meet business-specific needs with modular UI components.
+- Maintain your branding by customizing our UI elements with CSS.
+- Reduce payment friction to acquire more customers while maintaining payment compliance.
+
+### [PayRex Checkout](https://docs.payrex.com/docs/guide/developer_handbook/payments/integrations/checkout)[​](https://docs.payrex.com/docs/guide/intro#payrex-checkout)
+[PayRex Checkout](https://docs.payrex.com/docs/guide/developer_handbook/payments/integrations/checkout)
+[​](https://docs.payrex.com/docs/guide/intro#payrex-checkout)
+PayRex-hosted checkout page to launch quickly with our built-in checkout.
+- Enable online payments with minimal integration effort.
+- Personalize fonts and colors to align with your branding.
+- Optimized across mobile, tablet, and desktop that increase customer conversion.
+
+### [PayRex Billing Statement](https://docs.payrex.com/docs/guide/finance_automation/billing_statements)[​](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)
+[PayRex Billing Statement](https://docs.payrex.com/docs/guide/finance_automation/billing_statements)
+[​](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)
+Create, customize, and send a PayRex-hosted payment page in minutes — either via API or no-code approach.
+- Collect one-time payments, add line items, and set due dates directly to your billing statements.
+- Billing statements optimized across mobile, tablet, and desktop that increase customer conversion.
+- Simplify and automate billing statement workflows via PayRex APIs.
+
+### PayRex Pages[​](https://docs.payrex.com/docs/guide/intro#payrex-pages)
+[​](https://docs.payrex.com/docs/guide/intro#payrex-pages)
+Always-on Payment Page for your business - no coding required
+- Generate always-on payment pages directly from the Dashboard, no coding required.
+- Share across any channel and with multiple customers.
+- Customize with your branding by adding your business logo.
+
+### [Third-party plugins](https://docs.payrex.com/docs/guide/third_party_plugins)[​](https://docs.payrex.com/docs/guide/intro#third-party-plugins)
+[Third-party plugins](https://docs.payrex.com/docs/guide/third_party_plugins)
+[​](https://docs.payrex.com/docs/guide/intro#third-party-plugins)
+PayRex creates third-party plugins for platforms used by businesses such as Shopify.
+
+### Reports[​](https://docs.payrex.com/docs/guide/intro#reports)
+
+[​](https://docs.payrex.com/docs/guide/intro#reports)
+PayRex equips you with tools such as reports to help your business operations outside payment acceptance.
+- View the payout summary of the merchant account: total payments, refunds, fees, taxes, adjustments, and net amount.
+- Export the summary as a CSV file so that you can import your data into your preferred accounting tool.
+- Control which columns will be included or excluded from the exported report.
+[NextGetting Started](https://docs.payrex.com/docs/guide/getting_started/)
+- [Why PayRex?](https://docs.payrex.com/docs/guide/intro#why-payrex)
+- [Our Solutions](https://docs.payrex.com/docs/guide/intro#our-solutions)[PayRex Elements](https://docs.payrex.com/docs/guide/intro#payrex-elements)[PayRex Checkout](https://docs.payrex.com/docs/guide/intro#payrex-checkout)[PayRex Billing Statement](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)[PayRex Pages](https://docs.payrex.com/docs/guide/intro#payrex-pages)[Third-party plugins](https://docs.payrex.com/docs/guide/intro#third-party-plugins)[Reports](https://docs.payrex.com/docs/guide/intro#reports)
+- [PayRex Elements](https://docs.payrex.com/docs/guide/intro#payrex-elements)
+- [PayRex Checkout](https://docs.payrex.com/docs/guide/intro#payrex-checkout)
+- [PayRex Billing Statement](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)
+- [PayRex Pages](https://docs.payrex.com/docs/guide/intro#payrex-pages)
+- [Third-party plugins](https://docs.payrex.com/docs/guide/intro#third-party-plugins)
+- [Reports](https://docs.payrex.com/docs/guide/intro#reports)
+[Why PayRex?](https://docs.payrex.com/docs/guide/intro#why-payrex)
+[Our Solutions](https://docs.payrex.com/docs/guide/intro#our-solutions)
+- [PayRex Elements](https://docs.payrex.com/docs/guide/intro#payrex-elements)
+- [PayRex Checkout](https://docs.payrex.com/docs/guide/intro#payrex-checkout)
+- [PayRex Billing Statement](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)
+- [PayRex Pages](https://docs.payrex.com/docs/guide/intro#payrex-pages)
+- [Third-party plugins](https://docs.payrex.com/docs/guide/intro#third-party-plugins)
+- [Reports](https://docs.payrex.com/docs/guide/intro#reports)
+[PayRex Elements](https://docs.payrex.com/docs/guide/intro#payrex-elements)
+[PayRex Checkout](https://docs.payrex.com/docs/guide/intro#payrex-checkout)
+[PayRex Billing Statement](https://docs.payrex.com/docs/guide/intro#payrex-billing-statement)
+[PayRex Pages](https://docs.payrex.com/docs/guide/intro#payrex-pages)
+[Third-party plugins](https://docs.payrex.com/docs/guide/intro#third-party-plugins)
+[Reports](https://docs.payrex.com/docs/guide/intro#reports)

@@ -50,6 +50,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Map<String, dynamic>? _stats;
   List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
+  List<String> _postImages = [];
+  bool _isAdventureLogExpanded = true;
+  int _postImagesPage = 0;
+  static const int _postImagesPageSize = 30;
+  bool _hasMorePostImages = true;
+  bool _isLoadingMorePostImages = false;
 
   GamificationStats? _gamificationStats;
   List<gm.Badge> _allBadges = [];
@@ -59,6 +65,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isBlocked = false;
   late final bool _isOwnProfile;
   Map<String, dynamic>? _organizerProfile; // null = not an organizer
+  final ScrollController _profileScrollController = ScrollController();
 
   @override
   void initState() {
@@ -66,12 +73,63 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     // Auto-detect own profile: override widget.isOwnProfile if userId matches current user
     final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
     _isOwnProfile = widget.isOwnProfile || widget.userId == currentUserId;
+    _profileScrollController.addListener(() {
+      if (_profileScrollController.position.pixels >=
+          _profileScrollController.position.maxScrollExtent - 400) {
+        _loadMorePostImages();
+      }
+    });
     _loadUserProfile();
     _loadOrganizerProfile();
     _loadBadges();
+    _loadMorePostImages();
     if (!_isOwnProfile) {
       _checkFollowStatus();
       _checkBlockStatus();
+    }
+  }
+
+  @override
+  void dispose() {
+    _profileScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMorePostImages() async {
+    if (_isLoadingMorePostImages || !_hasMorePostImages) return;
+    if (mounted) setState(() => _isLoadingMorePostImages = true);
+    try {
+      final offset = _postImagesPage * _postImagesPageSize;
+      final response = await SupabaseConfig.client
+          .from('posts')
+          .select('image_url, image_urls')
+          .eq('user_id', widget.userId)
+          .eq('is_story', false)
+          .order('created_at', ascending: false)
+          .range(offset, offset + _postImagesPageSize - 1);
+      if (!mounted) return;
+      final List<String> newImages = [];
+      for (final post in response as List<dynamic>) {
+        final urls = post['image_urls'];
+        if (urls != null && urls is List && urls.isNotEmpty) {
+          for (final u in urls) {
+            if (u != null && u.toString().isNotEmpty)
+              newImages.add(u.toString());
+          }
+        } else {
+          final single = post['image_url'];
+          if (single != null && single.toString().isNotEmpty)
+            newImages.add(single.toString());
+        }
+      }
+      setState(() {
+        _postImages.addAll(newImages);
+        _postImagesPage++;
+        if (newImages.length < _postImagesPageSize) _hasMorePostImages = false;
+        _isLoadingMorePostImages = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingMorePostImages = false);
     }
   }
 
@@ -731,6 +789,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         onRefresh: _loadUserProfile,
         color: AppTheme.accentColor,
         child: CustomScrollView(
+          controller: _profileScrollController,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             // 1. RPG Header (Parallax)
@@ -1100,66 +1159,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       ).animate().fadeIn(duration: 600.ms, delay: 600.ms),
                       const SizedBox(height: 32),
                     ],
-
-                    // Photos Gallery
-                    if (_userPhotos.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'GALLERY',
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          letterSpacing: 1.5,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.grey[500] : Colors.grey[600],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        height: 140,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _userPhotos.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(width: 12),
-                          itemBuilder: (context, index) {
-                            final url = _userPhotos[index]['photo_url'] ?? '';
-                            return GestureDetector(
-                              onTap: () {
-                                if (url.isNotEmpty) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          FullScreenImageViewer(imageUrl: url),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(20),
-                                child: Hero(
-                                  tag: url,
-                                  child: CachedNetworkImage(
-                                    imageUrl: url,
-                                    height: 140,
-                                    width: 110,
-                                    fit: BoxFit.cover,
-                                    placeholder: (context, url) => Container(
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? Colors.grey[800]
-                                            : Colors.grey[200],
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                    ],
                   ],
                 ),
               ),
@@ -1174,201 +1173,378 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ).animate().fadeIn(duration: 600.ms, delay: 700.ms),
               ),
 
+            // 6a. Featured Photos (manually curated from user_photos)
+            if (_userPhotos.isNotEmpty) ...[
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                sliver: SliverToBoxAdapter(
+                  child: _buildSectionHeader(context, 'FEATURED'),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: SizedBox(
+                  height: 160,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _userPhotos.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) {
+                      final url = _userPhotos[index]['photo_url'] ?? '';
+                      return GestureDetector(
+                        onTap: () {
+                          if (url.isNotEmpty) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    FullScreenImageViewer(imageUrl: url),
+                              ),
+                            );
+                          }
+                        },
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Hero(
+                            tag: 'featured_$url',
+                            child: CachedNetworkImage(
+                              imageUrl: url,
+                              height: 160,
+                              width: 120,
+                              fit: BoxFit.cover,
+                              placeholder: (_, __) => Container(
+                                width: 120,
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.grey[800]
+                                      : Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              errorWidget: (_, __, ___) => Container(
+                                width: 120,
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.05)
+                                    : Colors.grey[100],
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  color: Colors.grey[400],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            ],
+
+            // 6b. Photos Grid (Instagram-style) — header
+            if (_postImages.isNotEmpty || _isLoadingMorePostImages)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                sliver: SliverToBoxAdapter(
+                  child: _buildSectionHeader(context, 'PHOTOS'),
+                ),
+              ),
+
+            // 6c. Photos SliverGrid (lazy, paginated)
+            if (_postImages.isNotEmpty)
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                sliver: SliverGrid(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 2,
+                    mainAxisSpacing: 2,
+                  ),
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FullScreenImageViewer(
+                              imageUrl: _postImages[index],
+                            ),
+                          ),
+                        );
+                      },
+                      child: CachedNetworkImage(
+                        imageUrl: _postImages[index],
+                        fit: BoxFit.cover,
+                        placeholder: (_, __) => Container(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.grey[100],
+                        ),
+                        errorWidget: (_, __, ___) => Container(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.grey[100],
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: Colors.grey[400],
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    );
+                  }, childCount: _postImages.length),
+                ),
+              ),
+
+            // 6d. Load-more footer for photos
+            if (_postImages.isNotEmpty || _isLoadingMorePostImages)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: _isLoadingMorePostImages
+                      ? const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : _hasMorePostImages
+                      ? Center(
+                          child: TextButton(
+                            onPressed: _loadMorePostImages,
+                            child: Text(
+                              'Load more',
+                              style: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        )
+                      : const SizedBox(height: 8),
+                ),
+              ),
+
             // 7. Adventure Log (History)
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
-                  _buildSectionHeader(context, 'ADVENTURE LOG'),
-                  const SizedBox(height: 16),
-                  if (_hostedTables.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(vertical: 32),
-                      alignment: Alignment.center,
-                      child: Column(
-                        children: [
-                          Icon(
-                            Icons.explore_outlined,
-                            size: 40,
-                            color: Colors.grey[400],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'No adventures yet',
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else
-                    ..._hostedTables.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final table = entry.value;
-                      final isHost = table['role'] == 'host';
-                      final isLast = i == _hostedTables.length - 1;
-                      DateTime? dt;
-                      try {
-                        if (table['datetime'] != null)
-                          dt = DateTime.parse(table['datetime']);
-                      } catch (_) {}
-
-                      return IntrinsicHeight(
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                  GestureDetector(
+                    onTap: () => setState(
+                      () => _isAdventureLogExpanded = !_isAdventureLogExpanded,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildSectionHeader(context, 'ADVENTURE LOG'),
+                        ),
+                        Icon(
+                          _isAdventureLogExpanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.keyboard_arrow_down_rounded,
+                          color: Colors.grey[500],
+                          size: 22,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                    ),
+                  ),
+                  if (_isAdventureLogExpanded) ...[
+                    const SizedBox(height: 16),
+                    if (_hostedTables.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        alignment: Alignment.center,
+                        child: Column(
                           children: [
-                            // Timeline spine
-                            SizedBox(
-                              width: 40,
-                              child: Column(
-                                children: [
-                                  Container(
-                                    width: 28,
-                                    height: 28,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: isHost
-                                          ? AppTheme.accentColor.withOpacity(
-                                              0.15,
-                                            )
-                                          : Colors.blue.withOpacity(0.12),
-                                      border: Border.all(
-                                        color: isHost
-                                            ? AppTheme.accentColor
-                                            : Colors.blue,
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                    child: Icon(
-                                      isHost
-                                          ? Icons.star_rounded
-                                          : Icons.people_rounded,
-                                      size: 14,
-                                      color: isHost
-                                          ? AppTheme.accentColor
-                                          : Colors.blue,
-                                    ),
-                                  ),
-                                  if (!isLast)
-                                    Expanded(
-                                      child: Container(
-                                        width: 1.5,
-                                        color: isDark
-                                            ? Colors.white.withOpacity(0.08)
-                                            : Colors.grey.shade200,
-                                      ),
-                                    ),
-                                ],
-                              ),
+                            Icon(
+                              Icons.explore_outlined,
+                              size: 40,
+                              color: Colors.grey[400],
                             ),
-                            const SizedBox(width: 12),
-                            // Card
-                            Expanded(
-                              child: Container(
-                                margin: EdgeInsets.only(
-                                  bottom: isLast ? 0 : 12,
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? Colors.white.withOpacity(0.04)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? Colors.white.withOpacity(0.06)
-                                        : Colors.grey.shade100,
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            table['title'] ?? 'Unknown Event',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 7,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: isHost
-                                                ? AppTheme.accentColor
-                                                      .withOpacity(0.12)
-                                                : Colors.blue.withOpacity(0.10),
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            isHost ? 'HOST' : 'JOINED',
-                                            style: TextStyle(
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.bold,
-                                              letterSpacing: 0.6,
-                                              color: isHost
-                                                  ? AppTheme.accentColor
-                                                  : Colors.blue,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.calendar_today_outlined,
-                                          size: 11,
-                                          color: Colors.grey[500],
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          dt != null
-                                              ? DateFormat(
-                                                  'MMM d, y',
-                                                ).format(dt)
-                                              : 'Date unknown',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[500],
-                                          ),
-                                        ),
-                                        const Spacer(),
-                                        Text(
-                                          isHost ? '+100 XP' : '+50 XP',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.green[600],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'No adventures yet',
+                              style: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 14,
                               ),
                             ),
                           ],
                         ),
-                      );
-                    }),
+                      )
+                    else
+                      ..._hostedTables.asMap().entries.map((entry) {
+                        final i = entry.key;
+                        final table = entry.value;
+                        final isHost = table['role'] == 'host';
+                        final isLast = i == _hostedTables.length - 1;
+                        DateTime? dt;
+                        try {
+                          if (table['datetime'] != null)
+                            dt = DateTime.parse(table['datetime']);
+                        } catch (_) {}
+
+                        return IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Timeline spine
+                              SizedBox(
+                                width: 40,
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: isHost
+                                            ? AppTheme.accentColor.withOpacity(
+                                                0.15,
+                                              )
+                                            : Colors.blue.withOpacity(0.12),
+                                        border: Border.all(
+                                          color: isHost
+                                              ? AppTheme.accentColor
+                                              : Colors.blue,
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        isHost
+                                            ? Icons.star_rounded
+                                            : Icons.people_rounded,
+                                        size: 14,
+                                        color: isHost
+                                            ? AppTheme.accentColor
+                                            : Colors.blue,
+                                      ),
+                                    ),
+                                    if (!isLast)
+                                      Expanded(
+                                        child: Container(
+                                          width: 1.5,
+                                          color: isDark
+                                              ? Colors.white.withOpacity(0.08)
+                                              : Colors.grey.shade200,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              // Card
+                              Expanded(
+                                child: Container(
+                                  margin: EdgeInsets.only(
+                                    bottom: isLast ? 0 : 12,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isDark
+                                        ? Colors.white.withOpacity(0.04)
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: isDark
+                                          ? Colors.white.withOpacity(0.06)
+                                          : Colors.grey.shade100,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              table['title'] ?? 'Unknown Event',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 14,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 7,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: isHost
+                                                  ? AppTheme.accentColor
+                                                        .withOpacity(0.12)
+                                                  : Colors.blue.withOpacity(
+                                                      0.10,
+                                                    ),
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                            child: Text(
+                                              isHost ? 'HOST' : 'JOINED',
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 0.6,
+                                                color: isHost
+                                                    ? AppTheme.accentColor
+                                                    : Colors.blue,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.calendar_today_outlined,
+                                            size: 11,
+                                            color: Colors.grey[500],
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            dt != null
+                                                ? DateFormat(
+                                                    'MMM d, y',
+                                                  ).format(dt)
+                                                : 'Date unknown',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[500],
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Text(
+                                            isHost ? '+100 XP' : '+50 XP',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                  ], // end if _isAdventureLogExpanded
                   SizedBox(height: MediaQuery.of(context).padding.bottom + 80),
                 ]),
               ),

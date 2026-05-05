@@ -7,15 +7,12 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/create_post_modal.dart';
-import 'package:bitemates/features/home/widgets/trending_carousel.dart';
-import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/home/widgets/friends_moments_tray.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
-import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
 import 'package:geolocator/geolocator.dart';
@@ -24,12 +21,7 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/notifications/screens/notifications_screen.dart';
 import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
 
-import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
-import 'package:bitemates/features/ticketing/models/event.dart';
-import 'package:bitemates/core/services/event_service.dart';
-import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 import 'package:bitemates/features/search/screens/discover_search_screen.dart';
-import 'package:bitemates/features/home/screens/discover_list_screen.dart';
 
 class FeedScreen extends StatefulWidget {
   final Function(String)? onJoinTable;
@@ -52,14 +44,9 @@ class FeedScreenState extends State<FeedScreen>
   late TabController _tabController;
   final ScrollController _scrollController = ScrollController();
   final SocialService _socialService = SocialService();
-  final TableService _tableService = TableService();
   final StoryService _storyService = StoryService();
 
   List<Map<String, dynamic>> _socialPosts = [];
-  List<Map<String, dynamic>> _trendingTables = []; // New: Trending Tables
-  List<Map<String, dynamic>> _trendingExperiences =
-      []; // New: Trending Experiences
-  List<Event> _trendingEvents = []; // New: Trending Events
   List<Map<String, dynamic>> _friendsStories = [];
   bool _isLoadingStories = false;
   bool _hasMoreStories = false;
@@ -138,9 +125,6 @@ class FeedScreenState extends State<FeedScreen>
           _userPosition = position;
         });
         _loadSocialPosts();
-        _loadTrendingTables();
-        _loadTrendingExperiences();
-        _loadTrendingEvents();
         _loadFriendsStories();
         _subscribeToAblyFeed();
       }
@@ -148,9 +132,6 @@ class FeedScreenState extends State<FeedScreen>
       print('❌ Error getting user location: $e');
       if (mounted) {
         _loadSocialPosts();
-        _loadTrendingTables();
-        _loadTrendingExperiences();
-        _loadTrendingEvents();
         _loadFriendsStories();
         _subscribeToAblyFeed(); // ✅ Still need real-time even without location
       }
@@ -231,61 +212,6 @@ class FeedScreenState extends State<FeedScreen>
         }
       });
       _ablySubscriptions.add(sub);
-    }
-  }
-
-  Future<void> _loadTrendingTables() async {
-    try {
-      final tables = await _tableService.getMapReadyTables(
-        userLat: _userPosition?.latitude,
-        userLng: _userPosition?.longitude,
-        limit: 10, // Fetch top 10 closest/soonest
-      );
-      // Filter out mystery tables and experiences (experiences have their own carousel)
-      final filtered = tables
-          .where(
-            (t) => t['visibility'] != 'mystery' && t['is_experience'] != true,
-          )
-          .toList();
-      // Enrich with member avatars + friends data for Open Hangout cards
-      final enriched = await _tableService.enrichTablesWithMembers(filtered);
-      if (mounted) {
-        setState(() {
-          _trendingTables = enriched;
-        });
-      }
-    } catch (e) {
-      print('❌ Error loading trending tables: $e');
-    }
-  }
-
-  Future<void> _loadTrendingExperiences() async {
-    try {
-      final experiences = await _tableService.getExperiences(
-        userLat: _userPosition?.latitude,
-        userLng: _userPosition?.longitude,
-        limit: 10,
-      );
-      if (mounted) {
-        setState(() {
-          _trendingExperiences = experiences;
-        });
-      }
-    } catch (e) {
-      print('❌ Error loading trending experiences: $e');
-    }
-  }
-
-  Future<void> _loadTrendingEvents() async {
-    try {
-      final events = await EventService().getUpcomingEvents(limit: 10);
-      if (mounted) {
-        setState(() {
-          _trendingEvents = events;
-        });
-      }
-    } catch (e) {
-      print('❌ Error loading trending events: $e');
     }
   }
 
@@ -528,9 +454,6 @@ class FeedScreenState extends State<FeedScreen>
               onRefresh: () async {
                 await Future.wait([
                   _loadSocialPosts(force: true),
-                  _loadTrendingTables(),
-                  _loadTrendingExperiences(),
-                  _loadTrendingEvents(),
                   _loadFriendsStories(),
                 ]);
               },
@@ -772,127 +695,7 @@ class FeedScreenState extends State<FeedScreen>
                     ),
 
                   // ═══════════════════════════════════════════
-                  // 4. EVENTS & EXPERIENCES SECTION (Merged Experiences + Events)
-                  // ═══════════════════════════════════════════
-                  if (_tabController.index == 0 &&
-                      (_trendingExperiences.isNotEmpty ||
-                          _trendingEvents.isNotEmpty) &&
-                      _selectedCategory != 'Discussions')
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildSectionHeader(
-                            'Events & Experiences',
-                            onSeeAll: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => DiscoverListScreen(
-                                    items: [
-                                      ..._trendingExperiences,
-                                      ..._trendingEvents,
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 20),
-                            child: TrendingCarousel(
-                              items: [
-                                ..._trendingExperiences,
-                                ..._trendingEvents,
-                              ],
-                              onItemTap: (item) {
-                                if (item is Event) {
-                                  showModalBottomSheet(
-                                    context: context,
-                                    isScrollControlled: true,
-                                    backgroundColor: Colors.transparent,
-                                    builder: (context) =>
-                                        EventDetailModal(event: item),
-                                  );
-                                } else {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          ExperienceDetailModal(
-                                            experience: item,
-                                            matchData: const {},
-                                          ),
-                                    ),
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // ═══════════════════════════════════════════
-                  // 5. OPEN HANGOUTS (Was unlabelled Trending Tables)
-                  // ═══════════════════════════════════════════
-                  if (_tabController.index == 0 &&
-                      _trendingTables.isNotEmpty &&
-                      _selectedCategory != 'Discussions')
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildSectionHeader(
-                            'Open Hangouts',
-                            onSeeAll: () {
-                              if (widget.onSeeAllHangouts != null) {
-                                widget.onSeeAllHangouts!();
-                              }
-                            },
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 20),
-                            child: SizedBox(
-                              height: 220,
-                              child: ListView.builder(
-                                scrollDirection: Axis.horizontal,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                ),
-                                physics: const BouncingScrollPhysics(),
-                                itemCount: _trendingTables.length,
-                                itemBuilder: (context, index) {
-                                  final table = _trendingTables[index];
-                                  return OpenHangoutCard(
-                                    table: table,
-                                    onTap: () {
-                                      if (widget.onJoinTable != null) {
-                                        widget.onJoinTable!(table['id']);
-                                      } else {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) =>
-                                                TableCompactModal(
-                                                  table: table,
-                                                  matchData: const {},
-                                                ),
-                                          ),
-                                        );
-                                      }
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // ═══════════════════════════════════════════
-                  // 5. CATEGORY FILTER CHIPS (Before threads)
+                  // 4. CATEGORY FILTER CHIPS (Before threads)
                   // ═══════════════════════════════════════════
                   if (_tabController.index == 0)
                     SliverToBoxAdapter(
@@ -1203,38 +1006,6 @@ class FeedScreenState extends State<FeedScreen>
     } else {
       if (mounted) setState(() {});
     }
-  }
-
-  /// Reusable section header with Google Fonts and optional "See All" link
-  Widget _buildSectionHeader(String title, {VoidCallback? onSeeAll}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: Theme.of(context).primaryColor,
-            ),
-          ),
-          const Spacer(),
-          if (onSeeAll != null)
-            GestureDetector(
-              onTap: onSeeAll,
-              child: Text(
-                'See all',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(context).primaryColor,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   Widget _buildThreadCreationBar() {

@@ -31,7 +31,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   static const Color _secondaryTextColor = Color(0xFF757575);
 
   int _currentStep = 0;
-  final int _totalSteps = 5; // Added photo step
+  final int _totalSteps = 3;
   bool _isLoading = false;
 
   // Step 1: Photos
@@ -50,139 +50,21 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   final List<String> _genderOptions = [
     'Male',
     'Female',
+    'Transgender Man',
+    'Transgender Woman',
     'Non-binary',
+    'Genderqueer',
+    'Genderfluid',
+    'Agender',
+    'Two-Spirit',
+    'Intersex',
     'Prefer not to say',
     'Other',
   ];
 
-  // Step 3: Personality Questions
-  final Map<int, int?> _personalityAnswers = {}; // questionIndex -> score (1-5)
-
-  // Personality questions with answer options
-  final List<Map<String, dynamic>> _personalityQuestions = [
-    {
-      'question': 'Friday Night Plans?',
-      'trait': 'extraversion',
-      'options': [
-        {'text': '🎉 Hit the town, meet new people', 'score': 5},
-        {'text': '🍷 Small gathering with close friends', 'score': 3},
-        {'text': '📚 Cozy night in, just me', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Your Ideal Dinner Spot?',
-      'trait': 'openness',
-      'options': [
-        {'text': '🌮 Hole-in-the-wall place I\'ve never tried', 'score': 5},
-        {'text': '🍝 Trendy spot my friend recommended', 'score': 3},
-        {'text': '🍔 My favorite restaurant, every time', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Planning a Trip?',
-      'trait': 'conscientiousness',
-      'options': [
-        {'text': '📋 Itinerary planned weeks ahead', 'score': 5},
-        {'text': '🗺️ Rough plan, room for spontaneity', 'score': 3},
-        {'text': '✈️ Book the flight, figure it out later', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Someone disagrees with you at dinner?',
-      'trait': 'agreeableness',
-      'options': [
-        {'text': '🤝 Listen, find common ground', 'score': 5},
-        {'text': '💬 Healthy debate, no hard feelings', 'score': 3},
-        {'text': '🔥 Stand my ground, I\'m right', 'score': 1},
-      ],
-    },
-    {
-      'question': 'When things go wrong?',
-      'trait': 'neuroticism',
-      'options': [
-        {'text': '😰 I stress until it\'s fixed', 'score': 5},
-        {'text': '😅 Frustrated but move on quickly', 'score': 3},
-        {'text': '😎 Roll with it, no big deal', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Group chat vibe?',
-      'trait': 'extraversion',
-      'options': [
-        {'text': '💬 Always replying, starting convos', 'score': 5},
-        {'text': '👀 I read everything, chime in sometimes', 'score': 3},
-        {'text': '🔕 Notifications off, check weekly', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Trying new food?',
-      'trait': 'openness',
-      'options': [
-        {'text': '🦗 Bring on the weird stuff', 'score': 5},
-        {'text': '🍜 Adventurous within reason', 'score': 3},
-        {'text': '🍕 Stick to what I know', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Your workspace?',
-      'trait': 'conscientiousness',
-      'options': [
-        {'text': '🧹 Spotless, color-coded', 'score': 5},
-        {'text': '📂 Organized chaos', 'score': 3},
-        {'text': '🌪️ Creative mess', 'score': 1},
-      ],
-    },
-    {
-      'question': 'Meeting new people?',
-      'trait': 'extraversion',
-      'options': [
-        {'text': '😊 Energizing, love it!', 'score': 5},
-        {'text': '🙂 Fine, but draining', 'score': 3},
-        {'text': '😬 Prefer to avoid', 'score': 1},
-      ],
-    },
-    {
-      'question': 'After a bad day?',
-      'trait': 'neuroticism',
-      'options': [
-        {'text': '😢 I need to vent/cry', 'score': 5},
-        {'text': '😕 Process it, then I\'m good', 'score': 3},
-        {'text': '🤷 Bad days don\'t phase me', 'score': 1},
-      ],
-    },
-  ];
-
-  Map<String, int> _calculatePersonalityScores() {
-    final traitScores = <String, List<int>>{
-      'openness': [],
-      'conscientiousness': [],
-      'extraversion': [],
-      'agreeableness': [],
-      'neuroticism': [],
-    };
-
-    _personalityAnswers.forEach((questionIndex, score) {
-      if (score != null) {
-        final trait = _personalityQuestions[questionIndex]['trait'] as String;
-        traitScores[trait]!.add(score);
-      }
-    });
-
-    return traitScores.map((trait, scores) {
-      final avg = scores.isEmpty
-          ? 3
-          : (scores.reduce((a, b) => a + b) / scores.length).round();
-      return MapEntry(trait, avg);
-    });
-  }
-
-  // Step 4: Interests
+  // Step 3: Interests
   final Set<String> _selectedInterestIds = {};
   List<Map<String, dynamic>> _availableInterests = [];
-
-  // Step 5: Preferences
-
-  String _primaryGoal = 'friends'; // friends, romance, casual
 
   @override
   void initState() {
@@ -385,8 +267,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       final userId = SupabaseConfig.client.auth.currentUser?.id;
       if (userId == null) throw Exception('User not logged in');
 
-      final personalityScores = _calculatePersonalityScores();
-
       await _profileService.createProfile(
         userId: userId,
         displayName: _nameController.text.trim().isNotEmpty
@@ -398,13 +278,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         bio: _bioController.text.trim(),
         dob: _dateOfBirth ?? DateTime(2000),
         gender: _genderIdentity ?? 'Prefer not to say',
-        personality: personalityScores,
+        personality: const {},
         interestTagIds: _selectedInterestIds.toList(),
-        preferences: {
-          'primary_goal': _primaryGoal,
-          'budget_min': 0,
-          'budget_max': 1000,
-        },
+        preferences: const {},
         photoUrl: _uploadedPhotoUrl,
         nationality: _selectedCountry != null
             ? '${_selectedCountry!.flagEmoji} ${_selectedCountry!.name}'
@@ -524,9 +400,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                       children: [
                         _buildPhotoStep(),
                         _buildBasicsStep(),
-                        _buildPersonalityStep(),
                         _buildInterestsStep(),
-                        _buildPreferencesStep(),
                       ],
                     ),
                   ),
@@ -995,142 +869,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     );
   }
 
-  Widget _buildPersonalityStep() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 24),
-          Text(
-            'Vibe Check',
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: _textColor,
-            ),
-          ).animate().fadeIn().moveY(begin: 20, end: 0),
-
-          const SizedBox(height: 8),
-
-          Text(
-            'Answer these quick questions so we can find your crowd.',
-            style: const TextStyle(
-              fontSize: 16,
-              color: _secondaryTextColor,
-              height: 1.5,
-            ),
-          ).animate().fadeIn(delay: 100.ms).moveY(begin: 20, end: 0),
-
-          const SizedBox(height: 32),
-
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _personalityQuestions.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 32),
-            itemBuilder: (context, index) {
-              return _buildQuestionCard(index, _personalityQuestions[index])
-                  .animate()
-                  .fadeIn(delay: (200 + (index * 50)).ms)
-                  .moveY(begin: 20, end: 0);
-            },
-          ),
-
-          const SizedBox(height: 32),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuestionCard(int index, Map<String, dynamic> question) {
-    final selectedAnswer = _personalityAnswers[index];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          question['question'] as String,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-            color: _textColor,
-          ),
-        ),
-        const SizedBox(height: 16),
-        ...List.generate((question['options'] as List).length, (optionIndex) {
-          final option = question['options'][optionIndex];
-          final hasSelection = selectedAnswer != null;
-          final isSelected = selectedAnswer == option['score'];
-
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _personalityAnswers[index] = option['score'] as int;
-                });
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: isSelected ? _primaryColor : Colors.white,
-                  border: Border.all(
-                    color: isSelected
-                        ? _primaryColor
-                        : (hasSelection
-                              ? Colors.grey[200]!
-                              : Colors.grey[300]!),
-                    width: isSelected ? 2 : 1.5,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: _primaryColor.withValues(alpha: 0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ]
-                      : [],
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        option['text'] as String,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : _textColor,
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.w500,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    if (isSelected)
-                      const Icon(
-                        Icons.check_circle,
-                        color: Colors.white,
-                        size: 20,
-                      )
-                    else
-                      Icon(
-                        Icons.circle_outlined,
-                        color: Colors.grey[400],
-                        size: 20,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
   Widget _buildInterestsStep() {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1192,84 +930,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
             }).toList(),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildPreferencesStep() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Preferences',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: Colors.black,
-            ),
-          ).animate().fadeIn().moveY(begin: 20, end: 0),
-
-          const SizedBox(height: 8),
-
-          Text(
-            'Set your boundaries and goals.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
-          ).animate().fadeIn(delay: 200.ms).moveY(begin: 20, end: 0),
-
-          const SizedBox(height: 32),
-
-          // Primary Goal
-          const Text(
-            'What are you looking for?',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-          ),
-          const SizedBox(height: 16),
-          _buildGoalOption('friends', 'Friends', Icons.people_outline),
-          const SizedBox(height: 12),
-          _buildGoalOption('romance', 'Romance', Icons.favorite_border),
-          const SizedBox(height: 12),
-          _buildGoalOption('casual', 'Casual Hangout', Icons.coffee_outlined),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGoalOption(String value, String label, IconData icon) {
-    final isSelected = _primaryGoal == value;
-    return InkWell(
-      onTap: () => setState(() => _primaryGoal = value),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.black : Colors.white,
-          border: Border.all(
-            color: isSelected ? Colors.black : Colors.grey[300]!,
-            width: 2,
-          ),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: isSelected ? Colors.white : Colors.black),
-            const SizedBox(width: 16),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.black,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-            const Spacer(),
-            if (isSelected)
-              const Icon(Icons.check_circle, color: Colors.white)
-            else
-              Icon(Icons.circle_outlined, color: Colors.grey[400]),
-          ],
-        ),
       ),
     );
   }
