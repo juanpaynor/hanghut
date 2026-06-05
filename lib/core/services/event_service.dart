@@ -45,6 +45,7 @@ class EventService {
             capacity, tickets_sold, event_type, organizer_id, status, created_at,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
+            subscriber_early_access_hours, is_subscriber_only,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,
@@ -80,6 +81,7 @@ class EventService {
             capacity, tickets_sold, event_type, organizer_id, status, created_at,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
+            subscriber_early_access_hours, is_subscriber_only,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,
@@ -112,6 +114,7 @@ class EventService {
             capacity, tickets_sold, event_type, organizer_id, status, created_at,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
+            subscriber_early_access_hours, is_subscriber_only,
             partners:organizer_id (
               pass_fees_to_customer,
               fixed_fee_per_ticket,

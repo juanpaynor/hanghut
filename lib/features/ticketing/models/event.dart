@@ -30,6 +30,10 @@ class Event {
   final bool requireApproval;
   final bool hideVenueUntilRegistered;
 
+  // Subscriptions
+  final int? subscriberEarlyAccessHours;
+  final bool isSubscriberOnly;
+
   Event({
     required this.id,
     required this.title,
@@ -60,6 +64,8 @@ class Event {
     this.externalProviderName,
     this.requireApproval = false,
     this.hideVenueUntilRegistered = false,
+    this.subscriberEarlyAccessHours,
+    this.isSubscriberOnly = false,
   });
 
   final bool? passFeesToCustomer;
@@ -110,6 +116,8 @@ class Event {
       externalProviderName: json['external_provider_name'] as String?,
       requireApproval: json['require_approval'] as bool? ?? false,
       hideVenueUntilRegistered: json['hide_venue_until_registered'] as bool? ?? false,
+      subscriberEarlyAccessHours: json['subscriber_early_access_hours'] as int?,
+      isSubscriberOnly: json['is_subscriber_only'] as bool? ?? false,
     );
   }
 

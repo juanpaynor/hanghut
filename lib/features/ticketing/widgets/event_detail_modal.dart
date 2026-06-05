@@ -36,6 +36,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
   String? _organizerAvatarUrl;
   bool _userHasTicket = false;
   List<Event> _moreEvents = [];
+  Map<String, dynamic>? _subscriberDiscount;
 
   @override
   void initState() {
@@ -43,7 +44,25 @@ class _EventDetailModalState extends State<EventDetailModal> {
     _fetchAvailability();
     _fetchOrganizerInfo();
     _loadMoreEvents();
+    _loadSubscriberDiscount();
     if (widget.event.hideVenueUntilRegistered) _checkUserTicket();
+  }
+
+  Future<void> _loadSubscriberDiscount() async {
+    if (SupabaseConfig.client.auth.currentUser == null) return;
+    try {
+      final result = await SupabaseConfig.client.rpc(
+        'get_subscriber_event_discount',
+        params: {'p_event_id': widget.event.id},
+      );
+      if (mounted && result != null) {
+        setState(() {
+          _subscriberDiscount = Map<String, dynamic>.from(result as Map);
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Subscriber discount load failed: $e');
+    }
   }
 
   Future<void> _loadMoreEvents() async {
@@ -636,10 +655,17 @@ class _EventDetailModalState extends State<EventDetailModal> {
 
   Widget _buildPriceRow() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasDiscount = _subscriberDiscount?['has_discount'] == true;
+    final discountedPrice = hasDiscount
+        ? (_subscriberDiscount!['discounted_price'] as num).toDouble()
+        : null;
+    final originalPrice = widget.event.ticketPrice;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Icon(
               Icons.confirmation_number,
@@ -647,16 +673,41 @@ class _EventDetailModalState extends State<EventDetailModal> {
               color: isDark ? Colors.grey[400] : Colors.grey[800],
             ),
             const SizedBox(width: 8),
-            Text(
-              widget.event.isExternal
-                  ? 'From ₱${widget.event.ticketPrice.toStringAsFixed(0)}'
-                  : '₱${widget.event.ticketPrice.toStringAsFixed(0)}',
-              style: TextStyle(
-                color: isDark ? Colors.white : Colors.black87,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
+            if (hasDiscount) ...[
+              Text(
+                '₱${discountedPrice!.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black87,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
-            ),
+              const SizedBox(width: 6),
+              Text(
+                '₱${originalPrice.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 14,
+                  decoration: TextDecoration.lineThrough,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(
+                Icons.workspace_premium_rounded,
+                size: 16,
+                color: Color(0xFFFFD700),
+              ),
+            ] else
+              Text(
+                widget.event.isExternal
+                    ? 'From ₱${originalPrice.toStringAsFixed(0)}'
+                    : '₱${originalPrice.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black87,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
           ],
         ),
         if (!widget.event.isExternal)

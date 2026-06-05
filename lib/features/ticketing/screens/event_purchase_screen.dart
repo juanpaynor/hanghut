@@ -61,6 +61,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   double _promoDiscountAmount = 0;
   String? _promoError;
 
+  // Subscriber discount + early access
+  Map<String, dynamic>? _subscriberDiscount;
+  bool _isActiveSubscriber = false;
+
   // Contact Details Controllers
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
@@ -83,6 +87,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     _fetchTicketTiers();
     _checkEventDetails();
     _fetchRealAvailability();
+    _loadSubscriberData();
     // Skip loading questions when paying for an already-approved registration —
     // the answers were submitted in the original request.
     if (_registrationId == null) {
@@ -108,6 +113,35 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       print('⚠️ Could not load registration questions: $e');
     } finally {
       if (mounted) setState(() => _isLoadingQuestions = false);
+    }
+  }
+
+  Future<void> _loadSubscriberData() async {
+    if (SupabaseConfig.client.auth.currentUser == null) return;
+    try {
+      final needsSubCheck = widget.event.subscriberEarlyAccessHours != null ||
+          widget.event.isSubscriberOnly;
+      final Future<dynamic> discountFuture = SupabaseConfig.client.rpc(
+        'get_subscriber_event_discount',
+        params: {'p_event_id': widget.event.id},
+      );
+      final Future<dynamic> subFuture = needsSubCheck
+          ? SupabaseConfig.client.rpc(
+              'is_active_subscriber',
+              params: {'p_partner_id': widget.event.organizerId},
+            )
+          : Future.value(false);
+      final results = await Future.wait([discountFuture, subFuture]);
+      if (!mounted) return;
+      setState(() {
+        final discount = results[0];
+        if (discount != null) {
+          _subscriberDiscount = Map<String, dynamic>.from(discount as Map);
+        }
+        _isActiveSubscriber = results[1] == true;
+      });
+    } catch (e) {
+      debugPrint('⚠️ Subscriber data load failed: $e');
     }
   }
 
@@ -563,6 +597,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       if (_appliedPromoCode != null) 'promo_code': _appliedPromoCode,
       'subscribed_to_newsletter': _subscribedToNewsletter,
       if (_registrationId != null) 'registration_id': _registrationId,
+      if (_subscriberDiscount?['has_discount'] == true)
+        'has_subscriber_discount': true,
     };
 
     final response = await SupabaseConfig.client.functions.invoke(
@@ -780,17 +816,31 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     }
     double displayUnitPrice = baseUnitPrice + feeAmount;
     double displaySubtotal = displayUnitPrice * _quantity;
-    double displayDiscount =
-        _promoDiscountAmount; // Discount is usually calculated on base price but subtracted from total
 
-    // If promo is percentage, it should apply to SUBTOTAL (excluding fees?) or Total?
-    // Backend logic: Platform fee is calculated on subtotal. Promo is deducted from subtotal?
-    // Let's assume promo applies to base price for now.
-    // Actually, `_promoDiscountAmount` is calculated in `_applyPromoCode`. I need to review that too.
+    // Subscriber discount (server-verified — flag sent to edge function)
+    double subscriberDiscountAmount = 0;
+    final hasSubscriberDiscount = _subscriberDiscount?['has_discount'] == true;
+    if (hasSubscriberDiscount && !isFree) {
+      final discountedBase =
+          (_subscriberDiscount!['discounted_price'] as num).toDouble();
+      subscriberDiscountAmount = (baseUnitPrice - discountedBase) * _quantity;
+    }
 
-    // For now, simple subtraction.
+    double displayDiscount = _promoDiscountAmount + subscriberDiscountAmount;
     double total = displaySubtotal - displayDiscount;
     if (total < 0) total = 0;
+
+    // Early access + subscriber-only gate
+    final earlyAccessHours = event.subscriberEarlyAccessHours;
+    DateTime? publicSaleOpens;
+    bool isEarlyAccessBlocked = false;
+    if (earlyAccessHours != null) {
+      publicSaleOpens =
+          event.startDatetime.subtract(Duration(hours: earlyAccessHours));
+      isEarlyAccessBlocked =
+          DateTime.now().isBefore(publicSaleOpens) && !_isActiveSubscriber;
+    }
+    final isSubOnlyBlocked = event.isSubscriberOnly && !_isActiveSubscriber;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Buy Tickets'), centerTitle: true),
@@ -806,6 +856,28 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                   children: [
                     // Event summary card
                     _EventSummaryCard(event: widget.event),
+
+                    // --- SUBSCRIBER-ONLY GATE ---
+                    if (isSubOnlyBlocked) ...[
+                      const SizedBox(height: 24),
+                      _SubscriberGateBanner(
+                        message: 'This event is for members only.',
+                        subMessage: 'Subscribe to get access.',
+                        icon: Icons.lock_rounded,
+                      ),
+                    ] else if (isEarlyAccessBlocked &&
+                        publicSaleOpens != null) ...[
+                      const SizedBox(height: 24),
+                      _SubscriberGateBanner(
+                        message: 'Members get early access',
+                        subMessage:
+                            'Public sale opens ${DateFormat('MMM d \'at\' h:mm a').format(publicSaleOpens)}',
+                        icon: Icons.bolt_rounded,
+                      ),
+                    ],
+
+                    // Show purchase form only when not gated
+                    if (!isSubOnlyBlocked && !isEarlyAccessBlocked) ...[
 
                     const SizedBox(height: 32),
 
@@ -1052,9 +1124,12 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                       unitPrice: displayUnitPrice,
                       quantity: _quantity,
                       subtotal: displaySubtotal,
-                      discount: displayDiscount,
+                      promoDiscount: _promoDiscountAmount,
+                      subscriberDiscount: subscriberDiscountAmount,
                       total: total,
                     ),
+
+                    ], // end of !gated block
                   ],
                 ),
               ),
@@ -1079,7 +1154,11 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _proceedToPayment,
+                    onPressed: (_isLoading ||
+                            isSubOnlyBlocked ||
+                            isEarlyAccessBlocked)
+                        ? null
+                        : _proceedToPayment,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepPurple,
                       foregroundColor: Colors.white,
@@ -1344,14 +1423,16 @@ class _PriceBreakdown extends StatelessWidget {
   final double unitPrice;
   final int quantity;
   final double subtotal;
-  final double discount;
+  final double promoDiscount;
+  final double subscriberDiscount;
   final double total;
 
   const _PriceBreakdown({
     required this.unitPrice,
     required this.quantity,
     required this.subtotal,
-    required this.discount,
+    this.promoDiscount = 0,
+    this.subscriberDiscount = 0,
     required this.total,
   });
 
@@ -1376,11 +1457,19 @@ class _PriceBreakdown extends StatelessWidget {
             label: 'Subtotal',
             value: '₱${subtotal.toStringAsFixed(2)}',
           ),
-          if (discount > 0) ...[
+          if (subscriberDiscount > 0) ...[
             const SizedBox(height: 8),
             _PriceRow(
-              label: 'Discount',
-              value: '-₱${discount.toStringAsFixed(2)}',
+              label: '👑 Member discount',
+              value: '-₱${subscriberDiscount.toStringAsFixed(2)}',
+              color: Colors.green,
+            ),
+          ],
+          if (promoDiscount > 0) ...[
+            const SizedBox(height: 8),
+            _PriceRow(
+              label: 'Promo code',
+              value: '-₱${promoDiscount.toStringAsFixed(2)}',
               color: Colors.green,
             ),
           ],
@@ -1692,6 +1781,48 @@ class _FullscreenGalleryState extends State<_FullscreenGallery> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SubscriberGateBanner extends StatelessWidget {
+  final String message;
+  final String subMessage;
+  final IconData icon;
+
+  const _SubscriberGateBanner({
+    required this.message,
+    required this.subMessage,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFD700).withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.4)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 36, color: const Color(0xFFFFD700)),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subMessage,
+            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }
