@@ -29,6 +29,7 @@ import 'package:bitemates/features/gamification/models/badge.dart' as gm;
 import 'package:bitemates/features/gamification/models/user_badge.dart';
 import 'package:bitemates/features/gamification/services/badge_service.dart';
 import 'package:bitemates/features/profile/widgets/badges_showcase.dart';
+import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -66,6 +67,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isBlocked = false;
   late final bool _isOwnProfile;
   Map<String, dynamic>? _organizerProfile; // null = not an organizer
+  Map<String, dynamic>? _viewerSubscription; // viewer's active sub for this organizer
+  List<Map<String, dynamic>> _myMemberships = []; // own profile: all active subs
   final ScrollController _profileScrollController = ScrollController();
 
   @override
@@ -84,6 +87,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     _loadOrganizerProfile();
     _loadBadges();
     _loadMorePostImages();
+    if (_isOwnProfile) _loadMyMemberships();
     if (!_isOwnProfile) {
       _checkFollowStatus();
       _checkBlockStatus();
@@ -144,9 +148,62 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         setState(() {
           _organizerProfile = Map<String, dynamic>.from(result as Map);
         });
+        if (!_isOwnProfile) {
+          _loadViewerSubscription(result['partner_id'] as String);
+        }
       }
     } catch (e) {
       // Not an organizer or RPC failed — silently ignore
+    }
+  }
+
+  Future<void> _loadViewerSubscription(String partnerId) async {
+    final userId = SupabaseConfig.client.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final rows = await SupabaseConfig.client
+          .from('fan_subscriptions')
+          .select(
+            'id, tier_id, status, current_period_end, subscription_tiers(name, price_monthly, perks)',
+          )
+          .eq('fan_id', userId)
+          .eq('partner_id', partnerId)
+          .inFilter('status', ['active', 'grace_period'])
+          .limit(1);
+      if (mounted) {
+        setState(() {
+          _viewerSubscription =
+              (rows as List).isNotEmpty
+                  ? Map<String, dynamic>.from(rows.first as Map)
+                  : null;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error loading viewer subscription: $e');
+    }
+  }
+
+  Future<void> _loadMyMemberships() async {
+    final userId = SupabaseConfig.client.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final rows = await SupabaseConfig.client
+          .from('fan_subscriptions')
+          .select(
+            'id, tier_id, partner_id, status, current_period_end, '
+            'subscription_tiers(name, price_monthly, perks), '
+            'partners(business_name, profile_photo_url, slug)',
+          )
+          .eq('fan_id', userId)
+          .inFilter('status', ['active', 'grace_period'])
+          .order('created_at', ascending: false);
+      if (mounted) {
+        setState(() {
+          _myMemberships = List<Map<String, dynamic>>.from(rows as List);
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error loading memberships: $e');
     }
   }
 
@@ -1192,6 +1249,41 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ).animate().fadeIn(duration: 600.ms, delay: 700.ms),
               ),
 
+            // 5b. Membership Section (organizer has show_membership_tab=true, viewed by others)
+            if (!_isOwnProfile &&
+                _organizerProfile != null &&
+                _organizerProfile!['show_membership_tab'] == true)
+              SliverToBoxAdapter(
+                child: _MembershipSection(
+                  tiers: (_organizerProfile!['tiers'] as List? ?? [])
+                      .cast<Map<String, dynamic>>(),
+                  viewerSubscription: _viewerSubscription,
+                  slug: _organizerProfile!['slug'] as String? ?? '',
+                  isDark: isDark,
+                  onManage: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const MyMembershipsScreen(),
+                    ),
+                  ),
+                ).animate().fadeIn(duration: 600.ms, delay: 750.ms),
+              ),
+
+            // 5c. My Memberships (own profile, has active subscriptions)
+            if (_isOwnProfile && _myMemberships.isNotEmpty)
+              SliverToBoxAdapter(
+                child: _MyMembershipsCompact(
+                  memberships: _myMemberships,
+                  isDark: isDark,
+                  onViewAll: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const MyMembershipsScreen(),
+                    ),
+                  ),
+                ).animate().fadeIn(duration: 600.ms, delay: 720.ms),
+              ),
+
             // 6a. Featured Photos (manually curated from user_photos)
             if (_userPhotos.isNotEmpty) ...[
               SliverPadding(
@@ -1594,6 +1686,527 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─── Membership Section ───────────────────────────────────────────────────────
+
+class _MembershipSection extends StatelessWidget {
+  final List<Map<String, dynamic>> tiers;
+  final Map<String, dynamic>? viewerSubscription;
+  final String slug;
+  final bool isDark;
+  final VoidCallback onManage;
+
+  const _MembershipSection({
+    required this.tiers,
+    required this.viewerSubscription,
+    required this.slug,
+    required this.isDark,
+    required this.onManage,
+  });
+
+  IconData _perkIcon(String type) {
+    switch (type) {
+      case 'digital_download':
+        return Icons.download_rounded;
+      case 'community_link':
+        return Icons.group_rounded;
+      case 'merch':
+        return Icons.redeem_rounded;
+      case 'shoutout':
+        return Icons.campaign_rounded;
+      case 'early_access':
+        return Icons.bolt_rounded;
+      case 'gated_posts':
+        return Icons.lock_open_rounded;
+      default:
+        return Icons.star_rounded;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cardColor = isDark ? Colors.white.withOpacity(0.05) : Colors.white;
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.08)
+        : Colors.grey.shade200;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 4,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD700),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'MEMBERSHIP',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              if (viewerSubscription != null)
+                GestureDetector(
+                  onTap: onManage,
+                  child: Text(
+                    'Manage →',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.primaryColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Active subscriber view
+          if (viewerSubscription != null) ...[
+            _ActiveSubCard(
+              subscription: viewerSubscription!,
+              cardColor: cardColor,
+              borderColor: borderColor,
+              isDark: isDark,
+              perkIcon: _perkIcon,
+              onManage: onManage,
+            ),
+          ] else if (tiers.isEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                'No membership tiers available yet.',
+                style: TextStyle(color: Colors.grey[500], fontSize: 13),
+              ),
+            ),
+          ] else ...[
+            ...tiers.map((tier) => _TierCard(
+              tier: tier,
+              slug: slug,
+              cardColor: cardColor,
+              borderColor: borderColor,
+              isDark: isDark,
+              perkIcon: _perkIcon,
+            )),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ActiveSubCard extends StatelessWidget {
+  final Map<String, dynamic> subscription;
+  final Color cardColor;
+  final Color borderColor;
+  final bool isDark;
+  final IconData Function(String) perkIcon;
+  final VoidCallback onManage;
+
+  const _ActiveSubCard({
+    required this.subscription,
+    required this.cardColor,
+    required this.borderColor,
+    required this.isDark,
+    required this.perkIcon,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tier = subscription['subscription_tiers'] as Map<String, dynamic>?;
+    final tierName = tier?['name'] as String? ?? 'Member';
+    final price = tier?['price_monthly'];
+    final priceStr = price != null ? '₱${price.toString()}/mo' : '';
+    final periodEnd = subscription['current_period_end'] as String?;
+    DateTime? renewDate;
+    if (periodEnd != null) renewDate = DateTime.tryParse(periodEnd);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFD700).withOpacity(0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.workspace_premium_rounded,
+                  color: Color(0xFFFFD700), size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  tierName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  'Active',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.green[600],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            [
+              if (priceStr.isNotEmpty) priceStr,
+              if (renewDate != null)
+                'Renews ${DateFormat('MMM d, y').format(renewDate)}',
+            ].join(' · '),
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onManage,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primaryColor,
+                side: const BorderSide(color: AppTheme.primaryColor),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              icon: const Icon(Icons.star_outline_rounded, size: 16),
+              label: const Text('View perks',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TierCard extends StatelessWidget {
+  final Map<String, dynamic> tier;
+  final String slug;
+  final Color cardColor;
+  final Color borderColor;
+  final bool isDark;
+  final IconData Function(String) perkIcon;
+
+  const _TierCard({
+    required this.tier,
+    required this.slug,
+    required this.cardColor,
+    required this.borderColor,
+    required this.isDark,
+    required this.perkIcon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = tier['name'] as String? ?? '';
+    final price = tier['price_monthly'];
+    final rawPerks = tier['perks'] as List? ?? [];
+    final perks = rawPerks.cast<Map<String, dynamic>>().take(3).toList();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  name,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              Text(
+                price != null ? '₱$price/mo' : '',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppTheme.primaryColor,
+                ),
+              ),
+            ],
+          ),
+          if (perks.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: perks.map((p) {
+                final label = p['label'] as String? ?? '';
+                final type = p['type'] as String? ?? 'custom';
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(perkIcon(type), size: 12, color: Colors.grey[500]),
+                    const SizedBox(width: 3),
+                    Text(
+                      label,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () async {
+                final uri = Uri.parse(
+                  'https://hanghut.com/$slug/membership/${tier['id']}',
+                );
+                if (!await launchUrl(uri,
+                    mode: LaunchMode.externalApplication)) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Could not open browser')),
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryColor,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              child: const Text(
+                'Join now',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── My Memberships Compact (own profile) ────────────────────────────────────
+
+class _MyMembershipsCompact extends StatelessWidget {
+  final List<Map<String, dynamic>> memberships;
+  final bool isDark;
+  final VoidCallback onViewAll;
+
+  const _MyMembershipsCompact({
+    required this.memberships,
+    required this.isDark,
+    required this.onViewAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final preview = memberships.take(2).toList();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 4,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD700),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'MY MEMBERSHIPS',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: onViewAll,
+                child: Text(
+                  'All →',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.primaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...preview.map((sub) {
+            final partner = sub['partners'] as Map<String, dynamic>?;
+            final tier = sub['subscription_tiers'] as Map<String, dynamic>?;
+            final name = partner?['business_name'] as String? ?? 'Organizer';
+            final photoUrl = partner?['profile_photo_url'] as String?;
+            final tierName = tier?['name'] as String? ?? '';
+            final price = tier?['price_monthly'];
+            final periodEnd = sub['current_period_end'] as String?;
+            DateTime? renewDate;
+            if (periodEnd != null) renewDate = DateTime.tryParse(periodEnd);
+
+            return GestureDetector(
+              onTap: onViewAll,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.08)
+                        : Colors.grey.shade200,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isDark
+                            ? Colors.white10
+                            : Colors.grey.shade100,
+                        border: Border.all(
+                          color:
+                              const Color(0xFFFFD700).withOpacity(0.5),
+                          width: 1.5,
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: photoUrl != null && photoUrl.isNotEmpty
+                          ? CachedNetworkImage(
+                              imageUrl: photoUrl,
+                              fit: BoxFit.cover,
+                              errorWidget: (_, __, ___) => const Icon(
+                                Icons.storefront_rounded,
+                                size: 20,
+                                color: AppTheme.primaryColor,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.storefront_rounded,
+                              size: 20,
+                              color: AppTheme.primaryColor,
+                            ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            [
+                              if (tierName.isNotEmpty) tierName,
+                              if (price != null) '₱$price/mo',
+                            ].join(' · '),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Icon(Icons.workspace_premium_rounded,
+                            color: Color(0xFFFFD700), size: 16),
+                        if (renewDate != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            DateFormat('MMM d').format(renewDate),
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+          if (memberships.length > 2)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: GestureDetector(
+                onTap: onViewAll,
+                child: Text(
+                  '+${memberships.length - 2} more',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
