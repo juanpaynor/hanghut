@@ -53,17 +53,21 @@ class ProfileService {
       }
       await SupabaseConfig.client.from('users').upsert(userData);
 
-      // 2. Insert Personality
-      await SupabaseConfig.client.from('user_personality').upsert({
-        'user_id': userId,
-        ...personality,
-      });
+      // 2. Insert Personality (skipped if no data — step removed from signup)
+      if (personality.isNotEmpty) {
+        await SupabaseConfig.client.from('user_personality').upsert({
+          'user_id': userId,
+          ...personality,
+        });
+      }
 
-      // 3. Insert Preferences
-      await SupabaseConfig.client.from('user_preferences').upsert({
-        'user_id': userId,
-        ...preferences,
-      });
+      // 3. Insert Preferences (skipped if no data — step removed from signup)
+      if (preferences.isNotEmpty) {
+        await SupabaseConfig.client.from('user_preferences').upsert({
+          'user_id': userId,
+          ...preferences,
+        });
+      }
 
       // 4. Insert Interests
       if (interestTagIds.isNotEmpty) {

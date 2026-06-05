@@ -21,12 +21,45 @@ interface EmailRequest {
     event_title: string
     event_venue: string
     event_date: string // Expected ISO string
+    event_end_date?: string
     event_cover_image?: string
     ticket_quantity: number
     total_amount: number
     transaction_ref: string
-    payment_method?: string // New field
+    payment_method?: string
     tickets: TicketData[]
+}
+
+// Helper: Generate .ics calendar attachment
+function buildIcs(data: EmailRequest): { filename: string; content: string } | null {
+    try {
+        const start = new Date(data.event_date)
+        if (isNaN(start.getTime())) return null
+
+        const end = data.event_end_date ? new Date(data.event_end_date) : new Date(start.getTime() + 2 * 60 * 60 * 1000)
+
+        const pad = (n: number) => String(n).padStart(2, '0')
+        const fmt = (d: Date) =>
+            `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`
+
+        const ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//HangHut//Tickets//EN',
+            'BEGIN:VEVENT',
+            `DTSTART:${fmt(start)}`,
+            `DTEND:${fmt(end)}`,
+            `SUMMARY:${data.event_title}`,
+            `LOCATION:${data.event_venue}`,
+            'END:VEVENT',
+            'END:VCALENDAR',
+        ].join('\r\n')
+
+        const content = btoa(unescape(encodeURIComponent(ics)))
+        return { filename: 'Add-to-Calendar.ics', content }
+    } catch {
+        return null
+    }
 }
 
 // FORMATTER: Date
@@ -423,16 +456,17 @@ serve(async (req) => {
                         to: [requestData.email],
                         subject: `Your Tickets for ${requestData.event_title} 🎟️`,
                         html: html,
-                        attachments: [
-                            {
-                                filename: 'Invoice.pdf',
-                                content: invoiceBase64
-                            },
-                            {
-                                filename: 'Tickets.pdf',
-                                content: ticketsBase64
-                            }
-                        ]
+                        attachments: (() => {
+                            const a = [
+                                { filename: 'Invoice.pdf', content: invoiceBase64 },
+                                { filename: 'Tickets.pdf', content: ticketsBase64 },
+                            ]
+                            try {
+                                const ics = buildIcs(requestData)
+                                if (ics) a.push(ics)
+                            } catch { /* non-fatal */ }
+                            return a
+                        })()
                     })
                 })
 

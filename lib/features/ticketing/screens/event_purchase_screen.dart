@@ -11,13 +11,23 @@ import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
 import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:bitemates/features/ticketing/widgets/registration_questions_form.dart';
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
 // import 'package:workmanager/workmanager.dart';
 
 class EventPurchaseScreen extends StatefulWidget {
   final Event event;
 
-  const EventPurchaseScreen({super.key, required this.event});
+  /// When provided, the user has already submitted (and been approved for) a
+  /// registration request. Skip the form/RPC and go straight to payment using
+  /// this id so the ticket is linked to it.
+  final String? existingRegistrationId;
+
+  const EventPurchaseScreen({
+    super.key,
+    required this.event,
+    this.existingRegistrationId,
+  });
 
   @override
   State<EventPurchaseScreen> createState() => _EventPurchaseScreenState();
@@ -58,14 +68,47 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   String _completePhoneNumber = '';
   final _formKey = GlobalKey<FormState>();
 
+  // Registration questions
+  List<Map<String, dynamic>> _registrationQuestions = [];
+  Map<String, dynamic> _registrationAnswers = {};
+  bool _isLoadingQuestions = false;
+  String? _registrationId;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _registrationId = widget.existingRegistrationId;
     _fetchUserProfile(); // Pre-fill if logged in
     _fetchTicketTiers();
     _checkEventDetails();
     _fetchRealAvailability();
+    // Skip loading questions when paying for an already-approved registration —
+    // the answers were submitted in the original request.
+    if (_registrationId == null) {
+      _loadRegistrationQuestions();
+    }
+  }
+
+  Future<void> _loadRegistrationQuestions() async {
+    setState(() => _isLoadingQuestions = true);
+    try {
+      final response = await SupabaseConfig.client
+          .from('registration_questions')
+          .select()
+          .eq('event_id', widget.event.id)
+          .order('display_order', ascending: true);
+      if (mounted) {
+        setState(() {
+          _registrationQuestions =
+              List<Map<String, dynamic>>.from(response as List);
+        });
+      }
+    } catch (e) {
+      print('⚠️ Could not load registration questions: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingQuestions = false);
+    }
   }
 
   @override
@@ -422,6 +465,81 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     }
   }
 
+  /// Submit a registration request (RPC). Returns the status string:
+  /// 'pending' (organizer must approve) or 'auto_approved' (continue to payment).
+  /// Throws on failure with a user-friendly message.
+  Future<String> _submitRegistrationRequest() async {
+    final isGuest = SupabaseConfig.client.auth.currentUser == null;
+    try {
+      final response = await SupabaseConfig.client.rpc(
+        'submit_event_request',
+        params: {
+          'p_event_id': widget.event.id,
+          'p_answers': _registrationAnswers.entries
+              .map((e) => {'question_id': e.key, 'answer': e.value})
+              .toList(),
+          if (_selectedTier != null) 'p_tier_id': _selectedTier!.id,
+          if (isGuest) ...{
+            'p_guest_email': _emailController.text.trim(),
+            'p_guest_name': _nameController.text.trim(),
+          },
+        },
+      );
+
+      final result = Map<String, dynamic>.from(response as Map);
+      _registrationId = result['registration_id'] as String?;
+      return (result['status'] as String?) ?? '';
+    } catch (e) {
+      final msg = e.toString();
+      String userMsg;
+      if (msg.contains('already registered')) {
+        userMsg = 'You have already registered for this event.';
+      } else if (msg.contains('Event not found')) {
+        userMsg = 'Event not found.';
+      } else if (msg.contains('not accepting')) {
+        userMsg = 'This event is no longer accepting registrations.';
+      } else if (msg.contains('Required questions')) {
+        userMsg = 'Please answer all required questions.';
+      } else if (msg.contains('guest_email')) {
+        userMsg = 'Please enter your email address.';
+      } else {
+        userMsg = 'Could not submit your request. Please try again.';
+      }
+      throw Exception(userMsg);
+    }
+  }
+
+  void _showRequestSubmittedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.check_circle, color: Colors.green, size: 28),
+            SizedBox(width: 8),
+            Text('Request submitted'),
+          ],
+        ),
+        content: const Text(
+          'Your registration request has been sent to the organizer. '
+          'You\'ll be notified by email and in-app when they review it.',
+          style: TextStyle(fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Create purchase intent via Edge Function
   Future<Map<String, dynamic>> _createInvoice({required int quantity}) async {
     // Collect Guest/User Details
@@ -444,6 +562,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       if (_selectedTier != null) 'tier_id': _selectedTier!.id,
       if (_appliedPromoCode != null) 'promo_code': _appliedPromoCode,
       'subscribed_to_newsletter': _subscribedToNewsletter,
+      if (_registrationId != null) 'registration_id': _registrationId,
     };
 
     final response = await SupabaseConfig.client.functions.invoke(
@@ -473,6 +592,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       return;
     }
 
+    // Validate registration questions
+    final questionError = RegistrationQuestionsForm.validate(
+      _registrationQuestions,
+      _registrationAnswers,
+    );
+    if (questionError != null) {
+      _showErrorDialog('Registration Required', questionError);
+      return;
+    }
+
     // Validate Tier
     if (_tiers.isNotEmpty && _selectedTier == null) {
       _showErrorDialog('Select Ticket', 'Please select a ticket type.');
@@ -482,6 +611,23 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     setState(() => _isLoading = true);
 
     try {
+      // If event has registration questions OR requires approval, submit the
+      // request first. This creates the event_registrations row + answers,
+      // and gates payment behind organizer approval when required.
+      final needsRegistration =
+          _registrationQuestions.isNotEmpty || widget.event.requireApproval;
+      if (needsRegistration && _registrationId == null) {
+        final status = await _submitRegistrationRequest();
+        if (status == 'pending') {
+          if (mounted) {
+            setState(() => _isLoading = false);
+            _showRequestSubmittedDialog();
+          }
+          return;
+        }
+        // auto_approved → fall through to payment
+      }
+
       // Create new invoice with current form data
       final invoice = await _createInvoice(quantity: _quantity);
 
@@ -625,12 +771,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     final event = _fullEvent ?? widget.event;
 
     // Fee Logic (Match Backend)
+    double baseUnitPrice = _selectedTier?.price ?? event.ticketPrice;
+    final bool isFree = baseUnitPrice == 0;
+
     double feeAmount = 0;
-    if (event.passFeesToCustomer == true) {
+    if (event.passFeesToCustomer == true && !isFree) {
       feeAmount = event.fixedFeePerTicket ?? 15.00;
     }
-
-    double baseUnitPrice = _selectedTier?.price ?? event.ticketPrice;
     double displayUnitPrice = baseUnitPrice + feeAmount;
     double displaySubtotal = displayUnitPrice * _quantity;
     double displayDiscount =
@@ -862,6 +1009,19 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                         ),
                       ),
 
+                    // --- REGISTRATION QUESTIONS ---
+                    if (_registrationQuestions.isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      const Divider(),
+                      const SizedBox(height: 16),
+                      RegistrationQuestionsForm(
+                        questions: _registrationQuestions,
+                        answers: _registrationAnswers,
+                        onChanged: (updated) =>
+                            setState(() => _registrationAnswers = updated),
+                      ),
+                    ],
+
                     const SizedBox(height: 16),
 
                     // --- NEWSLETTER OPT-IN ---
@@ -937,9 +1097,12 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                             ),
                           )
                         : Text(
-                            total <= 0
-                                ? 'Get Free Tickets'
-                                : 'Pay Now • ₱${total.toStringAsFixed(2)}',
+                            (widget.event.requireApproval &&
+                                    widget.existingRegistrationId == null)
+                                ? 'Submit Request'
+                                : (total <= 0
+                                    ? 'Get Free Tickets'
+                                    : 'Pay Now • ₱${total.toStringAsFixed(2)}'),
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,

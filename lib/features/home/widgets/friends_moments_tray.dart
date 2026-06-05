@@ -52,7 +52,9 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.isLoading && widget.stories.isEmpty && widget.onAddStory == null) {
+    if (!widget.isLoading &&
+        widget.stories.isEmpty &&
+        widget.onAddStory == null) {
       return const SizedBox.shrink();
     }
 
@@ -63,7 +65,7 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
           child: Text(
-            "Moments",
+            "Stories",
             style: GoogleFonts.inter(
               fontSize: 20,
               fontWeight: FontWeight.w700,
@@ -257,7 +259,10 @@ class _YourStoryCardState extends State<_YourStoryCard> {
                                     placeholder: (context, url) => Container(
                                       color: Colors.grey[200],
                                       child: const Center(
-                                        child: Icon(Icons.person, color: Colors.grey),
+                                        child: Icon(
+                                          Icons.person,
+                                          color: Colors.grey,
+                                        ),
                                       ),
                                     ),
                                     errorWidget: (context, url, err) =>
@@ -278,7 +283,9 @@ class _YourStoryCardState extends State<_YourStoryCard> {
                                   color: const Color(0xFF6366F1),
                                   borderRadius: BorderRadius.circular(7),
                                   border: Border.all(
-                                    color: Theme.of(context).scaffoldBackgroundColor,
+                                    color: Theme.of(
+                                      context,
+                                    ).scaffoldBackgroundColor,
                                     width: 2,
                                   ),
                                 ),

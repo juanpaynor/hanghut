@@ -5,7 +5,8 @@ import 'package:bitemates/features/activity/widgets/my_experiences_list.dart';
 import 'package:bitemates/features/activity/widgets/discover_tab.dart';
 
 class ActivityScreen extends StatefulWidget {
-  const ActivityScreen({super.key});
+  final void Function(String tableId)? onHangoutTap;
+  const ActivityScreen({super.key, this.onHangoutTap});
 
   @override
   State<ActivityScreen> createState() => _ActivityScreenState();
@@ -23,7 +24,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
           surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
           elevation: 0,
           title: Text(
-            'Activity',
+            'Explore',
             style: TextStyle(
               color: Theme.of(context).textTheme.bodyLarge?.color,
               fontSize: 28,
@@ -46,12 +47,12 @@ class _ActivityScreenState extends State<ActivityScreen> {
             ],
           ),
         ),
-        body: const TabBarView(
+        body: TabBarView(
           children: [
-            DiscoverTab(),
-            MyTicketsScreen(),
-            MyHangoutsList(),
-            MyExperiencesList(),
+            DiscoverTab(onHangoutTap: widget.onHangoutTap),
+            const MyTicketsScreen(),
+            const MyHangoutsList(),
+            const MyExperiencesList(),
           ],
         ),
       ),

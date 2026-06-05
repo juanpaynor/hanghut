@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
+import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/models/ticket.dart';
+import 'package:bitemates/features/ticketing/models/event_registration.dart';
+import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:bitemates/features/ticketing/widgets/ticket_card.dart';
+import 'package:bitemates/features/ticketing/widgets/pending_registration_card.dart';
 
 /// Page size for paginated ticket loading from RPC
 const int _kPageSize = 15;
@@ -16,6 +20,7 @@ class MyTicketsScreen extends StatefulWidget {
 class _MyTicketsScreenState extends State<MyTicketsScreen> {
   final _ticketService = TicketService();
   List<Ticket> _tickets = [];
+  List<EventRegistration> _registrations = [];
   bool _isLoading = true;
   bool _isLoadingMore = false;
   bool _hasMore = true;
@@ -27,6 +32,43 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
   void initState() {
     super.initState();
     _loadTickets();
+    _loadRegistrations();
+  }
+
+  Future<void> _loadRegistrations() async {
+    try {
+      final registrations = await EventRegistrationService.getUserRegistrations();
+      if (mounted) setState(() => _registrations = registrations);
+    } catch (e) {
+      debugPrint('⚠️ Error loading registrations: $e');
+    }
+  }
+
+  Future<void> _onPayNowForRegistration(EventRegistration r) async {
+    try {
+      final event = await EventService().getEvent(r.eventId);
+      if (event == null || !mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => EventPurchaseScreen(
+            event: event,
+            existingRegistrationId: r.id,
+          ),
+        ),
+      );
+      // Refresh on return — they may have paid (ticket appears) or backed out.
+      if (mounted) {
+        _loadTickets(refresh: true);
+        _loadRegistrations();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open event: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _loadTickets({bool refresh = false}) async {
@@ -191,7 +233,14 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
       );
     }
 
-    if (_tickets.isEmpty) {
+    // Visible registrations: pending, approved-awaiting-payment, or rejected
+    final visibleRegistrations = _registrations.where((r) {
+      if (r.isPending || r.isRejected) return true;
+      if (r.isApproved && r.awaitingPayment) return true;
+      return false;
+    }).toList();
+
+    if (_tickets.isEmpty && visibleRegistrations.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -256,7 +305,7 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
     }
 
     // Build a flat list of widgets for the ListView.builder
-    final items = _buildListItems(filteredTickets);
+    final items = _buildListItems(filteredTickets, visibleRegistrations);
 
     return RefreshIndicator(
       onRefresh: () => _loadTickets(refresh: true),
@@ -316,8 +365,32 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
     }
   }
 
-  List<Widget> _buildListItems(List<Ticket> filteredTickets) {
+  List<Widget> _buildListItems(
+    List<Ticket> filteredTickets,
+    List<EventRegistration> registrations,
+  ) {
     final items = <Widget>[];
+
+    // Show registration requests only in All and Upcoming filters
+    final showRegistrations =
+        _selectedFilter == 'All' || _selectedFilter == 'Upcoming';
+    if (showRegistrations && registrations.isNotEmpty) {
+      items.add(_SectionHeader(
+        title: 'Registration Requests',
+        count: registrations.length,
+      ));
+      items.add(const SizedBox(height: 12));
+      for (final r in registrations) {
+        items.add(Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: PendingRegistrationCard(
+            registration: r,
+            onPayNow: r.awaitingPayment ? () => _onPayNowForRegistration(r) : null,
+          ),
+        ));
+      }
+      items.add(const SizedBox(height: 8));
+    }
 
     if (_selectedFilter == 'All') {
       // Group by section

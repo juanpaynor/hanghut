@@ -1030,12 +1030,7 @@ class _EventCard extends StatelessWidget {
         organizerId: '',
         createdAt: DateTime.now(),
       );
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => EventDetailModal(event: e),
-      );
+      EventDetailModal.show(context, e);
     } catch (_) {}
   }
 
@@ -1257,12 +1252,7 @@ class _EventRow extends StatelessWidget {
         organizerId: '',
         createdAt: DateTime.now(),
       );
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => EventDetailModal(event: e),
-      );
+      EventDetailModal.show(context, e);
     } catch (_) {}
   }
 

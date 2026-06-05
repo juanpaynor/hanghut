@@ -453,10 +453,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
                           if (event.isExternal) {
                             // External events: show detail modal (which has the redirect CTA)
-                            showDialog(
-                              context: context,
-                              builder: (_) => EventDetailModal(event: event),
-                            );
+                            EventDetailModal.show(context, event);
                           } else {
                             Navigator.push(
                               context,

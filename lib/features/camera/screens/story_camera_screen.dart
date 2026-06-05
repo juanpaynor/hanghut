@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 import '../services/location_inference_service.dart';
 import '../widgets/story_overlay_widget.dart';
 import 'story_preview_screen.dart';
+import 'package:bitemates/features/shared/widgets/place_search_sheet.dart';
 
 class StoryCameraScreen extends StatefulWidget {
   const StoryCameraScreen({Key? key}) : super(key: key);
@@ -46,6 +47,27 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   String _visibility = 'public'; // 'public' or 'followers'
   final Set<String> _selectedVibes = {};
   bool _includeLocation = true; // Privacy: user can opt out of geotagging
+
+  // Manual location override (set when user picks via map)
+  double? _customLat;
+  double? _customLng;
+
+  Future<void> _editLocation() async {
+    final result = await PlaceSearchSheet.show(
+      context,
+      currentLat: _customLat ?? _inferredContext?.latitude,
+      currentLng: _customLng ?? _inferredContext?.longitude,
+    );
+
+    if (result != null && mounted) {
+      setState(() {
+        _currentLocationName = result.name;
+        _customLat = result.latitude;
+        _customLng = result.longitude;
+        _includeLocation = true;
+      });
+    }
+  }
 
   // Available vibe tags
   static const List<String> _vibeTags = [
@@ -347,10 +369,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
             vibeTag: _selectedVibes.isEmpty ? null : _selectedVibes.join(' · '),
             includeLocation: _includeLocation,
             latitude: _includeLocation
-                ? (_inferredContext?.latitude ?? 14.5547)
+                ? (_customLat ?? _inferredContext?.latitude ?? 14.5547)
                 : null,
             longitude: _includeLocation
-                ? (_inferredContext?.longitude ?? 121.0244)
+                ? (_customLng ?? _inferredContext?.longitude ?? 121.0244)
                 : null,
             city: _includeLocation
                 ? (_inferredContext?.city ?? 'Metro Manila')
@@ -684,14 +706,36 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
           // 3. The Auto-Overlay Sticker (Bottom Left)
           Positioned(
             left: 16,
-            bottom: 120, // Keep it above the camera shutter
-            child: StoryOverlayWidget(
-              locationName: _currentLocationName,
-              timeString: currentTime,
-              vibeTag: _selectedVibes.isEmpty
-                  ? null
-                  : _selectedVibes.join(' · '),
-              onTap: _showEditOverlayBottomSheet,
+            bottom: 120,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                StoryOverlayWidget(
+                  locationName: _currentLocationName,
+                  timeString: currentTime,
+                  vibeTag: _selectedVibes.isEmpty
+                      ? null
+                      : _selectedVibes.join(' · '),
+                  onTap: _showEditOverlayBottomSheet,
+                ),
+                const SizedBox(width: 8),
+                if (_includeLocation)
+                  GestureDetector(
+                    onTap: _editLocation,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: const BoxDecoration(
+                        color: Colors.black54,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.edit_location_alt_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
 

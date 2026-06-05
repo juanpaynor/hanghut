@@ -66,8 +66,9 @@ class SocialService {
 
       print('🔍 Calling RPC: $rpcName with params: $params');
       final response = await _client.rpc(rpcName, params: params);
+      final responseStr = response?.toString() ?? 'null';
       print(
-        '📦 Response received: ${response?.toString().substring(0, 100)}...',
+        '📦 Response received: ${responseStr.length > 100 ? '${responseStr.substring(0, 100)}...' : responseStr}',
       );
 
       // Handle response - it might be null or empty

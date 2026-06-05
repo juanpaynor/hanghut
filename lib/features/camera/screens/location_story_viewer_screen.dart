@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
@@ -54,6 +55,14 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   bool _videoInitialized = false;
   bool _videoError = false;
 
+  // Image loading gate — timer only starts after image is fully painted
+  bool _imageLoaded = false;
+
+  // Pinch-to-zoom
+  final TransformationController _transformationController =
+      TransformationController();
+  bool _isZoomed = false;
+
   // Story viewers tracking
   final Map<String, int> _viewerCounts = {}; // postId -> count
 
@@ -81,6 +90,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     _progressController.dispose();
     _videoController?.dispose();
     _nextVideoController?.dispose();
+    _transformationController.dispose();
     super.dispose();
   }
 
@@ -355,6 +365,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
     _videoError = false;
     _videoInitialized = false;
+    _imageLoaded = false;
 
     final story = _stories[_currentIndex];
     final storyId = story['id']?.toString();
@@ -440,8 +451,8 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     final videoUrl = nextStory['video_url'] as String?;
 
     if (imageUrl != null && mounted) {
-      // Warm Flutter's image cache
-      precacheImage(NetworkImage(imageUrl), context);
+      // Warm Flutter's image cache using the same provider as CachedNetworkImage
+      precacheImage(CachedNetworkImageProvider(imageUrl), context);
     } else if (videoUrl != null) {
       // Pre-initialize the video controller in the background
       _prefetchedVideoUrl = videoUrl;
@@ -468,9 +479,18 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     _progressController.stop();
     _progressController.reset();
     _progressController.duration = _imageDuration;
+    // Do NOT forward yet — the progress bar stays frozen at 0 until
+    // _onImageFullyLoaded() is called once CachedNetworkImage finishes.
+    _prefetchNextStory();
+  }
+
+  /// Called by CachedNetworkImage's imageBuilder once the image is painted.
+  void _onImageFullyLoaded() {
+    if (_imageLoaded) return; // guard against double-call
+    _imageLoaded = true;
+    if (!mounted || _isPaused) return;
     _progressController.addStatusListener(_onProgressComplete);
     _progressController.forward();
-    _prefetchNextStory();
   }
 
   void _startVideoStory() async {
@@ -566,7 +586,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       _currentIndex++;
       _videoInitialized = false;
       _videoError = false;
+      _imageLoaded = false;
+      _isZoomed = false;
     });
+    _transformationController.value = Matrix4.identity();
     _startCurrentStory();
   }
 
@@ -598,7 +621,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       _currentIndex--;
       _videoInitialized = false;
       _videoError = false;
+      _imageLoaded = false;
+      _isZoomed = false;
     });
+    _transformationController.value = Matrix4.identity();
     _startCurrentStory();
   }
 
@@ -787,27 +813,28 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
             // Media content
             _buildMediaContent(),
 
-            // Left/Right tap zones
-            Row(
-              children: [
-                Expanded(
-                  flex: 1,
-                  child: GestureDetector(
-                    onTap: _goPrevious,
-                    behavior: HitTestBehavior.translucent,
-                    child: const SizedBox.expand(),
+            // Left/Right tap zones — disabled while pinch-zoomed
+            if (!_isZoomed)
+              Row(
+                children: [
+                  Expanded(
+                    flex: 1,
+                    child: GestureDetector(
+                      onTap: _goPrevious,
+                      behavior: HitTestBehavior.translucent,
+                      child: const SizedBox.expand(),
+                    ),
                   ),
-                ),
-                Expanded(
-                  flex: 1,
-                  child: GestureDetector(
-                    onTap: _goNext,
-                    behavior: HitTestBehavior.translucent,
-                    child: const SizedBox.expand(),
+                  Expanded(
+                    flex: 1,
+                    child: GestureDetector(
+                      onTap: _goNext,
+                      behavior: HitTestBehavior.translucent,
+                      child: const SizedBox.expand(),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
 
             // Progress indicators
             Positioned(
@@ -894,19 +921,49 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
           ),
         );
       }
-      return Image.network(
-        imageUrl,
-        fit: BoxFit.contain,
-        width: double.infinity,
-        height: double.infinity,
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          return const Center(
-            child: CircularProgressIndicator(color: Colors.white),
-          );
+      return InteractiveViewer(
+        transformationController: _transformationController,
+        minScale: 1.0,
+        maxScale: 4.0,
+        panEnabled: _isZoomed,
+        onInteractionStart: (_) => _pause(),
+        onInteractionUpdate: (details) {
+          final scale = _transformationController.value.getMaxScaleOnAxis();
+          final nowZoomed = scale > 1.05;
+          if (nowZoomed != _isZoomed) setState(() => _isZoomed = nowZoomed);
         },
-        errorBuilder: (_, __, ___) => const Center(
-          child: Icon(Icons.broken_image, color: Colors.white54, size: 48),
+        onInteractionEnd: (_) {
+          final scale = _transformationController.value.getMaxScaleOnAxis();
+          if (scale <= 1.05) {
+            _transformationController.value = Matrix4.identity();
+            setState(() => _isZoomed = false);
+            _resume();
+          }
+          // Still zoomed — stay paused so user can pan freely
+        },
+        child: CachedNetworkImage(
+          imageUrl: imageUrl,
+          fit: BoxFit.contain,
+          width: double.infinity,
+          height: double.infinity,
+          imageBuilder: (context, imageProvider) {
+            // Image fully loaded — start the progress timer now
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _onImageFullyLoaded(),
+            );
+            return Image(
+              image: imageProvider,
+              fit: BoxFit.contain,
+              width: double.infinity,
+              height: double.infinity,
+            );
+          },
+          placeholder: (_, __) => const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+          errorWidget: (_, __, ___) => const Center(
+            child: Icon(Icons.broken_image, color: Colors.white54, size: 48),
+          ),
         ),
       );
     }

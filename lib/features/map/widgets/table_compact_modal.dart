@@ -360,6 +360,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
         widget.table['image_url'] ??
         widget.table['marker_image_url'] ??
         _autoGifUrl;
+    final bool heroIsGif =
+        heroImageUrl != null &&
+        (heroImageUrl.toLowerCase().contains('.gif') ||
+            heroImageUrl.toLowerCase().contains('tenor.com') ||
+            heroImageUrl.toLowerCase().contains('giphy.com'));
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -388,8 +393,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
                   // ═══════════════════════════════════════
                   // 1. EDGE-TO-EDGE HERO IMAGE
                   // ═══════════════════════════════════════
-                  SizedBox(
-                    height: 210,
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: 210,
+                      maxHeight: heroIsGif ? 300 : 210,
+                    ),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -401,7 +409,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
                           child: heroImageUrl != null
                               ? CachedNetworkImage(
                                   imageUrl: heroImageUrl,
-                                  fit: BoxFit.cover,
+                                  fit: heroIsGif
+                                      ? BoxFit.contain
+                                      : BoxFit.cover,
+                                  width: double.infinity,
                                   placeholder: (context, url) => Container(
                                     color: isDark
                                         ? Colors.grey[800]
@@ -511,7 +522,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                   isScrollControlled: true,
                                   backgroundColor: Colors.transparent,
                                   builder: (context) => ReportModal(
-                                    entityType: 'table',
+                                    entityType: 'hangout',
                                     entityId: widget.table['id'],
                                   ),
                                 );
@@ -1111,7 +1122,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
         onPressed: _joinTable,
         style: buttonStyle,
         child: Text(
-          'Join Table',
+          'Join Hangout',
           style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
         ),
       ),

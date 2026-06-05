@@ -28,6 +28,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
+import 'package:bitemates/core/services/connectivity_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -71,6 +72,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _ablyConnected = false; // Track Ably connection state
   bool _showConnectionBanner = false; // Show disconnected banner
   Timer? _reconnectTimer; // Automatic reconnection timer
+  bool _isOffline = false;
+  StreamSubscription<bool>? _connectivitySub;
 
   // Pagination
   int _messageLimit = 50; // Load 50 messages at a time
@@ -110,8 +113,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _initializeChat();
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll);
-    // Track screen view with chat type
     AnalyticsService().logScreenView('chat_${widget.chatType}');
+
+    _isOffline = !ConnectivityService().isOnline;
+    _connectivitySub = ConnectivityService().onConnectivityChanged.listen((
+      online,
+    ) {
+      if (!mounted) return;
+      setState(() => _isOffline = !online);
+    });
   }
 
   Future<void> _initializeChat() async {
@@ -184,6 +194,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _searchController.dispose();
     _reconnectTimer?.cancel();
     _typingTimer?.cancel();
+    _connectivitySub?.cancel();
     _ablyService.leaveChannel(widget.channelId);
     super.dispose();
   }
@@ -1694,7 +1705,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       }
 
-      // Send mention push notifications (non-blocking)
+      // Send push notifications (non-blocking)
+      _sendNewMessagePushNotifications(content, contentType);
       if (contentType == 'text') {
         _sendMentionPushNotifications(content);
       }
@@ -1801,7 +1813,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       // No optimistic insert needed — in legacy mode the Ably listener
       // echoes back our own message and handles display for all types.
 
-      // Send mention notifications only for text
+      // Send push notifications
+      _sendNewMessagePushNotifications(content, contentType);
       if (contentType == 'text') {
         _sendMentionPushNotifications(content);
       }
@@ -1811,6 +1824,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Failed to send message')));
+      }
+    }
+  }
+
+  /// Send push notification to all chat participants (new message)
+  Future<void> _sendNewMessagePushNotifications(
+    String content,
+    String contentType,
+  ) async {
+    if (_currentUserId == null || _participants.isEmpty) return;
+
+    final senderName = _currentUserName ?? 'Someone';
+    final chatName = widget.tableTitle.isNotEmpty
+        ? widget.tableTitle
+        : senderName;
+
+    // Build a preview body
+    final String body;
+    if (contentType == 'image') {
+      body = '📷 sent a photo';
+    } else if (contentType == 'gif') {
+      body = '🎞️ sent a GIF';
+    } else if (contentType == 'poll') {
+      body = '📊 created a poll';
+    } else {
+      body = content.length > 100 ? '${content.substring(0, 100)}...' : content;
+    }
+
+    for (final participant in _participants) {
+      final userId = participant['userId'] as String?;
+      if (userId == null || userId == _currentUserId) continue;
+
+      try {
+        await SupabaseConfig.client.functions.invoke(
+          'send-push',
+          body: {
+            'user_id': userId,
+            'title': '$senderName in $chatName',
+            'body': body,
+            'data': {
+              'type': 'chat',
+              'chat_type': widget.chatType,
+              'table_id': widget.tableId,
+              'sender_name': senderName,
+            },
+          },
+        );
+      } catch (e) {
+        debugPrint('⚠️ Failed to send new-message push to $userId: $e');
       }
     }
   }
@@ -2212,55 +2274,65 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Image picker: compress → upload → send as image message
+  /// Image picker: multi-select → compress → upload → send as image messages
   Future<void> _sendImageMessage() async {
     final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85, // Pre-compress via picker
-    );
-    if (picked == null || _currentUserId == null) return;
+    final pickedFiles = await picker.pickMultiImage(imageQuality: 85);
+    if (pickedFiles.isEmpty || _currentUserId == null) return;
 
-    try {
-      // Compress further with flutter_image_compress
-      final tempDir = await getTemporaryDirectory();
-      final targetPath = '${tempDir.path}/${const Uuid().v4()}.jpg';
-      final compressed = await FlutterImageCompress.compressAndGetFile(
-        picked.path,
-        targetPath,
-        quality: 70,
-        minWidth: 800,
-        minHeight: 1,
-        format: CompressFormat.jpeg,
+    if (mounted && pickedFiles.length > 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sending ${pickedFiles.length} photos...'),
+          duration: const Duration(seconds: 2),
+        ),
       );
-      if (compressed == null) return;
+    }
 
-      final bytes = await File(compressed.path).readAsBytes();
-      final fileName = '${_currentUserId}/${const Uuid().v4()}.jpg';
-
-      // Upload to Supabase storage
-      await SupabaseConfig.client.storage
-          .from('chat-images')
-          .uploadBinary(
-            fileName,
-            bytes,
-            fileOptions: const FileOptions(contentType: 'image/jpeg'),
-          );
-
-      final imageUrl = SupabaseConfig.client.storage
-          .from('chat-images')
-          .getPublicUrl(fileName);
-
-      // Send as image message
-      await _sendMessage_Legacy(gifUrl: null, imageUrl: imageUrl);
-    } catch (e) {
-      debugPrint('❌ CHAT: Image upload failed - $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to send image. Please try again.'),
-          ),
+    for (final picked in pickedFiles) {
+      try {
+        // Compress with flutter_image_compress
+        final tempDir = await getTemporaryDirectory();
+        final targetPath = '${tempDir.path}/${const Uuid().v4()}.jpg';
+        final compressed = await FlutterImageCompress.compressAndGetFile(
+          picked.path,
+          targetPath,
+          quality: 70,
+          minWidth: 800,
+          minHeight: 1,
+          format: CompressFormat.jpeg,
         );
+        if (compressed == null) continue;
+
+        final bytes = await File(compressed.path).readAsBytes();
+        final fileName = '${_currentUserId}/${const Uuid().v4()}.jpg';
+
+        // Upload to Supabase storage
+        await SupabaseConfig.client.storage
+            .from('chat-images')
+            .uploadBinary(
+              fileName,
+              bytes,
+              fileOptions: const FileOptions(contentType: 'image/jpeg'),
+            );
+
+        final imageUrl = SupabaseConfig.client.storage
+            .from('chat-images')
+            .getPublicUrl(fileName);
+
+        // Send each as its own image message
+        await _sendMessage_Legacy(gifUrl: null, imageUrl: imageUrl);
+      } catch (e) {
+        debugPrint('❌ CHAT: Image upload failed - $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Failed to send one or more images. Please try again.',
+              ),
+            ),
+          );
+        }
       }
     }
   }
@@ -2948,18 +3020,48 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
         ),
 
-      // Input Area
-      ChatInputBar(
-        controller: _messageController,
-        replyingTo: _replyingTo,
-        onCancelReply: _cancelReply,
-        onShowGifPicker: _showGifPicker,
-        onSendMessage: _sendMessage,
-        onSendImage: _sendImageMessage,
-        onCreatePoll: (widget.chatType == 'dm' || widget.chatType == 'direct')
-            ? null
-            : _showCreatePoll,
-        participants: _participants,
+      // Offline strip + disabled input
+      if (_isOffline)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
+          color: Colors.grey.shade100,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.wifi_off_rounded, size: 13, color: Colors.grey[500]),
+              const SizedBox(width: 6),
+              Text(
+                'You\'re offline — messages can\'t be sent',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[500],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+      IgnorePointer(
+        ignoring: _isOffline,
+        child: AnimatedOpacity(
+          opacity: _isOffline ? 0.4 : 1.0,
+          duration: const Duration(milliseconds: 200),
+          child: ChatInputBar(
+            controller: _messageController,
+            replyingTo: _replyingTo,
+            onCancelReply: _cancelReply,
+            onShowGifPicker: _showGifPicker,
+            onSendMessage: _sendMessage,
+            onSendImage: _sendImageMessage,
+            onCreatePoll:
+                (widget.chatType == 'dm' || widget.chatType == 'direct')
+                ? null
+                : _showCreatePoll,
+            participants: _participants,
+          ),
+        ),
       ),
     ];
   }

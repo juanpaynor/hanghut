@@ -36,6 +36,8 @@ class _ReportModalState extends State<ReportModal> {
           'Other',
         ];
       case 'table':
+      case 'hangout':
+      case 'activity':
         return [
           'Misleading / Fake Event',
           'Dangerous / Illegal Activity',
@@ -53,6 +55,23 @@ class _ReportModalState extends State<ReportModal> {
         ];
       default:
         return ['Other'];
+    }
+  }
+
+  String _getTitle() {
+    switch (widget.entityType) {
+      case 'hangout':
+        return 'Report Hangout';
+      case 'activity':
+        return 'Report Activity';
+      case 'table':
+        return 'Report Hangout';
+      case 'user':
+        return 'Report User';
+      case 'message':
+        return 'Report Message';
+      default:
+        return 'Report ${widget.entityType[0].toUpperCase()}${widget.entityType.substring(1)}';
     }
   }
 
@@ -124,7 +143,7 @@ class _ReportModalState extends State<ReportModal> {
                 ),
               ),
               Text(
-                'Report ${widget.entityType[0].toUpperCase()}${widget.entityType.substring(1)}',
+                _getTitle(),
                 style: Theme.of(
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),

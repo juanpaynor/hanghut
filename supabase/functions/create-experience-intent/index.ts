@@ -122,10 +122,13 @@ serve(async (req) => {
             currency: 'PHP',
             country: 'PH',
             // Only include payment channels activated in Xendit Dashboard
-            // Excludes: QR_PH, OTC, BILLEASE
             allowed_payment_channels: [
-                'CARDS',
-                'GCASH',
+                'QRPH',
+                'PAYMAYA',
+                'GRABPAY',
+                'BPI_DIRECT_DEBIT',
+                'UBP_DIRECT_DEBIT',
+                'RCBC_DIRECT_DEBIT',
             ],
             customer: {
                 reference_id: `${user.id}_${Date.now()}`,
@@ -138,8 +141,8 @@ serve(async (req) => {
                 }
             },
             description: `${quantity}x ${intent.table.title}`,
-            success_return_url: success_url || undefined,
-            cancel_return_url: failure_url || undefined,
+            success_return_url: success_url || 'https://hanghut.com/checkout/success',
+            cancel_return_url: failure_url || 'https://hanghut.com/experiences',
             metadata: {
                 table_id: table_id,
                 schedule_id: schedule_id,

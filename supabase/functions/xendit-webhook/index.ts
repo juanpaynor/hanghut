@@ -190,7 +190,7 @@ serve(async (req) => {
             // Find purchase intent
             let { data: intent, error: intentError } = await supabaseClient
                 .from('purchase_intents')
-                .select('*, event:events(id, title, organizer_id, tickets_sold, venue_name, start_datetime, cover_image_url), user:users(id, email, full_name)')
+                .select('*, event:events(id, title, organizer_id, tickets_sold, venue_name, start_datetime, end_datetime, cover_image_url), user:users(id, email, full_name)')
                 .eq('xendit_external_id', lookupId)
                 .single()
 
@@ -213,7 +213,7 @@ serve(async (req) => {
                     // Fetch related data separately (service role bypasses RLS better for direct queries)
                     const { data: event } = await supabaseClient
                         .from('events')
-                        .select('id, title, organizer_id, tickets_sold, venue_name, start_datetime, cover_image_url')
+                        .select('id, title, organizer_id, tickets_sold, venue_name, start_datetime, end_datetime, cover_image_url')
                         .eq('id', fallbackIntent.event_id)
                         .single()
 
@@ -364,40 +364,39 @@ serve(async (req) => {
             }
 
             // ==========================================
-            // 🛡️ IDEMPOTENCY GUARD (v30: NEW)
+            // 🛡️ ATOMIC IDEMPOTENCY CLAIM
             // ==========================================
-            // Xendit retries webhooks up to 5x. Without this guard, retries
-            // would create duplicate tickets, transactions, emails, and pushes.
-            if (intent.status === 'completed' || intent.status === 'refunded') {
-                console.log(`⚡ Intent ${intent.id} already ${intent.status}, skipping duplicate webhook`)
-                return new Response(
-                    JSON.stringify({ success: true, message: `Already ${intent.status}` }),
-                    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-                )
-            }
-
-            console.log('Payment successful for intent:', intent.id)
-
-            // ==========================================
-            // 💳 EXTRACT PAYMENT METHOD (v30: ROBUST)
-            // ==========================================
+            // Xendit retries webhooks up to 5x AND can fire concurrent executions.
+            // A read-then-check guard has a race window — two executions both read
+            // status='pending' before either writes. Fix: claim atomically by only
+            // updating WHERE status NOT IN ('completed','refunded'). If 0 rows are
+            // updated, another execution already claimed it → bail immediately.
             const capturedMethod = extractPaymentMethod(data);
             console.log(`💳 Extracted Payment Method: ${capturedMethod}`);
             console.log(`💳 Raw payment_method field:`, JSON.stringify(data.payment_method));
             console.log(`💳 Raw payments array:`, JSON.stringify(data.payments));
             console.log(`💳 Raw payment_channel:`, data.payment_channel);
 
-            // Update purchase intent
-            await supabaseClient
+            const { data: claimedRows, error: claimError } = await supabaseAdmin
                 .from('purchase_intents')
                 .update({
                     status: 'completed',
-                    // NOTE: Do NOT use `created` — for Sessions API, it's session creation time, not payment time.
-                    // Use `data.updated` (Xendit completion timestamp) or webhook receive time as fallback.
                     paid_at: data.updated || data.payments?.[0]?.created || new Date().toISOString(),
                     payment_method: capturedMethod,
                 })
                 .eq('id', intent.id)
+                .not('status', 'in', '("completed","refunded")')
+                .select('id')
+
+            if (claimError || !claimedRows || claimedRows.length === 0) {
+                console.log(`⚡ Intent ${intent.id} already claimed by another execution — skipping`)
+                return new Response(
+                    JSON.stringify({ success: true, message: 'Already processed' }),
+                    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            console.log('Payment claimed and marked completed for intent:', intent.id)
 
             // Record transaction (Create transaction BEFORE tickets to ensure accounting)
             const { data: partner } = await supabaseClient
@@ -412,9 +411,15 @@ serve(async (req) => {
             const processingFee = intent.payment_processing_fee || 0
             const fixedFeePerTicket = partner?.fixed_fee_per_ticket ?? 15.0
             const totalFixedFee = fixedFeePerTicket * (intent.quantity || 1)
-            const organizerPayout = intent.subtotal - platformFee - totalFixedFee
+            // When pass_fees_to_customer is true, the customer already paid the fixed
+            // booking fee on top of the ticket — so it must NOT be deducted from the
+            // organizer again. Only deduct it when the organizer absorbs the fees.
+            const passFees = partner?.pass_fees_to_customer === true
+            const organizerPayout = passFees
+                ? intent.subtotal - platformFee
+                : intent.subtotal - platformFee - totalFixedFee
 
-            console.log(`💰 Fee calc: subtotal=${intent.subtotal}, pct=${platformFeePercentage}%, platformFee=${platformFee}, fixedFee=${totalFixedFee} (${fixedFeePerTicket}×${intent.quantity}), organizerPayout=${organizerPayout}`)
+            console.log(`💰 Fee calc: subtotal=${intent.subtotal}, pct=${platformFeePercentage}%, platformFee=${platformFee}, fixedFee=${totalFixedFee} (${fixedFeePerTicket}×${intent.quantity}), passFees=${passFees}, organizerPayout=${organizerPayout}`)
 
             const { error: txError } = await supabaseClient
                 .from('transactions')
@@ -443,7 +448,8 @@ serve(async (req) => {
             // Issue tickets using the RPC function (Single Source of Truth)
             console.log(`🎟️ Issuing tickets for intent ${intent.id} via RPC...`)
             const { data: generatedTickets, error: issueError } = await supabaseClient.rpc('issue_tickets', {
-                p_intent_id: intent.id
+                p_intent_id: intent.id,
+                p_registration_id: intent.metadata?.registration_id ?? null,
             })
 
             if (issueError) {
@@ -515,6 +521,7 @@ serve(async (req) => {
                             event_title: intent.event?.title || 'Event',
                             event_venue: intent.event?.venue_name || 'Venue',
                             event_date: intent.event?.start_datetime,
+                            event_end_date: intent.event?.end_datetime,
                             event_cover_image: intent.event?.cover_image_url,
                             ticket_quantity: intent.quantity,
                             total_amount: intent.total_amount,
@@ -546,7 +553,12 @@ serve(async (req) => {
         }
 
         // Handle payment failure
-        if (eventType === 'payment.failed' || eventType === 'payment_request.expired') {
+        if (
+            eventType === 'payment.failed' ||
+            eventType === 'payment_request.expired' ||
+            eventType === 'payment_session.expired' ||
+            eventType === 'payment_session.cancelled'
+        ) {
             const external_id = payload.external_id || payload.data?.reference_id || payload.reference_id
 
             const { data: intent } = await supabaseClient
@@ -571,6 +583,7 @@ serve(async (req) => {
                 await supabaseClient
                     .from('purchase_intents')
                     .update({ status: eventType === 'payment.failed' ? 'failed' : 'expired' })
+                    // payment_session.expired / payment_session.cancelled → expired
                     .eq('id', intent.id)
 
                 // Release reserved capacity (atomic decrement to avoid race conditions)

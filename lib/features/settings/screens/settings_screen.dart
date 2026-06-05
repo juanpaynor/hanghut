@@ -347,12 +347,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
               final shouldLogout = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
+                  backgroundColor: Colors.white,
+                  titleTextStyle: const TextStyle(
+                    color: Colors.black87,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  contentTextStyle: const TextStyle(color: Colors.black54),
                   title: const Text('Log Out'),
                   content: const Text('Are you sure you want to log out?'),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(color: Colors.black54),
+                      ),
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, true),

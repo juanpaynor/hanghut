@@ -24,6 +24,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const QUEUE_NAME = 'payment_side_effects'
 const BATCH_SIZE = 20
 const VISIBILITY_TIMEOUT = 60 // seconds — message hidden from other readers while processing
+const MAX_RETRIES = 5 // archive poison messages after this many failed attempts
 
 serve(async (req) => {
   const supabase = createClient(
@@ -60,16 +61,33 @@ serve(async (req) => {
   let failCount = 0
 
   for (const msg of messages) {
+    // Dead-letter cap: archive messages that have failed too many times.
+    // Permanent failures (missing FCM token, deleted user) would otherwise
+    // retry forever — we saw a message hit 199,000 retries over 3 weeks.
+    if (msg.read_ct > MAX_RETRIES) {
+      console.warn(`🪣 Dead-lettering msg ${msg.msg_id} after ${msg.read_ct} attempts (type: ${msg.message?.type})`)
+      await supabase.rpc('pgmq_archive', { queue_name: QUEUE_NAME, msg_id: msg.msg_id })
+      failCount++
+      continue
+    }
+
     try {
       const payload = msg.message
       const type = payload?.type
 
       switch (type) {
         case 'send_push': {
-          const { error } = await supabase.functions.invoke('send-push', {
+          const resp = await supabase.functions.invoke('send-push', {
             body: payload.data,
           })
-          if (error) throw new Error(`send-push failed: ${error.message}`)
+          // 404 = no FCM token / unregistered device — permanent, don't retry
+          if (resp.error?.status === 404 || (resp.data as any)?.status === 404) {
+            console.warn(`🪣 Dead-lettering push msg ${msg.msg_id} — 404 (no FCM token)`)
+            await supabase.rpc('pgmq_archive', { queue_name: QUEUE_NAME, msg_id: msg.msg_id })
+            failCount++
+            continue
+          }
+          if (resp.error) throw new Error(`send-push failed: ${resp.error.message}`)
           console.log(`✅ Push sent to user ${payload.data?.user_id}`)
           break
         }

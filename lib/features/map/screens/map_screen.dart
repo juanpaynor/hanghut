@@ -1202,12 +1202,7 @@ class MapScreenState extends State<MapScreen>
             // Event marker tapped
             final event = _events[index];
             if (mounted) {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => EventDetailModal(event: event),
-              );
+              EventDetailModal.show(context, event);
             }
           } else if (markerType == 'story' &&
               index != null &&
@@ -3484,12 +3479,7 @@ class MapScreenState extends State<MapScreen>
             print('🎟️ Opening event: ${event.title}');
 
             if (mounted) {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => EventDetailModal(event: event),
-              );
+              EventDetailModal.show(context, event);
             }
           } else if (markerType == 'story' &&
               index != null &&

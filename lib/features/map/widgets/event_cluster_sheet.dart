@@ -135,12 +135,7 @@ class EventClusterSheet extends StatelessWidget {
         // Assuming 'original_object' is passed and is of type Event
         if (event['original_object'] != null &&
             event['original_object'] is Event) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => EventDetailModal(event: event['original_object']),
-            ),
-          );
+          EventDetailModal.show(context, event['original_object'] as Event);
         }
       },
       child: Container(

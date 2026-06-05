@@ -4,6 +4,7 @@ import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/image_crop_service.dart';
+import 'package:bitemates/core/services/profile_service.dart';
 import 'package:country_picker/country_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -31,25 +32,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _isLoading = false;
   String? _usernameError;
   Country? _selectedCountry;
-  List<String> _selectedTags = [];
+  List<Map<String, dynamic>> _availableInterests = [];
+  Set<String> _selectedInterestIds = {};
   List<Map<String, dynamic>> _localPhotos = [];
   final ImagePicker _picker = ImagePicker();
-
-  // Suggest some default tags
-  final List<String> _availableTags = [
-    'Coffee Lover',
-    'Foodie',
-    'Techie',
-    'Gym Rat',
-    'Traveler',
-    'Gamer',
-    'Artist',
-    'Night Owl',
-    'Early Bird',
-    'Bookworm',
-    'Music Lover',
-    'Chill',
-  ];
+  final _profileService = ProfileService();
 
   @override
   void initState() {
@@ -68,10 +55,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       text: widget.userProfile['social_instagram'],
     );
 
-    if (widget.userProfile['tags'] != null) {
-      _selectedTags = List<String>.from(widget.userProfile['tags']);
-    }
-
     // Pre-select country if nationality was previously saved
     final savedNationality = widget.userProfile['nationality'] as String?;
     if (savedNationality != null && savedNationality.isNotEmpty) {
@@ -87,6 +70,29 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
 
     _localPhotos = List<Map<String, dynamic>>.from(widget.userPhotos);
+    _loadInterests();
+  }
+
+  Future<void> _loadInterests() async {
+    try {
+      final userId = widget.userProfile['id'];
+      final tags = await _profileService.getInterestTags();
+      final current = await SupabaseConfig.client
+          .from('user_interests')
+          .select('interest_tag_id')
+          .eq('user_id', userId);
+      final selectedIds = (current as List)
+          .map((r) => r['interest_tag_id'].toString())
+          .toSet();
+      if (mounted) {
+        setState(() {
+          _availableInterests = tags;
+          _selectedInterestIds = selectedIds;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading interests: $e');
+    }
   }
 
   @override
@@ -205,12 +211,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               '@',
               '',
             ),
-            'tags': _selectedTags,
             if (_selectedCountry != null)
               'nationality':
                   '${_selectedCountry!.flagEmoji} ${_selectedCountry!.name}',
           })
           .eq('id', userId);
+
+      // 1b. Save interests — delete existing then re-insert
+      await SupabaseConfig.client
+          .from('user_interests')
+          .delete()
+          .eq('user_id', userId);
+      if (_selectedInterestIds.isNotEmpty) {
+        await SupabaseConfig.client
+            .from('user_interests')
+            .insert(
+              _selectedInterestIds
+                  .map((id) => {'user_id': userId, 'interest_tag_id': id})
+                  .toList(),
+            );
+      }
 
       // 2. Update Photos
       // First, reset all photos to non-primary to avoid unique constraint violations
@@ -553,8 +573,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // --- Vibe Check ---
-                  _buildLabel('Bio (The Story)', icon: Icons.format_quote),
+                  // --- About You ---
+                  _buildLabel('Bio', icon: Icons.format_quote),
                   _buildTextField(
                     _bioController,
                     'Tell us about yourself...',
@@ -562,63 +582,67 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
 
                   const SizedBox(height: 24),
-                  _buildLabel(
-                    'Your Vibe (Select Tags)',
-                    icon: Icons.local_offer_outlined,
-                  ),
+                  // --- Interests ---
+                  _buildLabel('Interests', icon: Icons.local_offer_outlined),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _availableTags.map((tag) {
-                      final isSelected = _selectedTags.contains(tag);
-                      return ChoiceChip(
-                        label: Text(tag),
-                        labelStyle: TextStyle(
-                          color: isSelected
-                              ? Colors.white
-                              : (isDark
-                                    ? AppTheme.darkTextPrimary
-                                    : AppTheme.textPrimary),
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                        selected: isSelected,
-                        selectedColor: AppTheme.primaryColor,
-                        backgroundColor: isDark
-                            ? AppTheme.darkSurface
-                            : AppTheme.surfaceColor,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color: isSelected
-                                ? AppTheme.primaryColor
-                                : (isDark
-                                      ? Colors.grey.shade700
-                                      : Colors.grey.shade300),
-                          ),
-                        ),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              if (_selectedTags.length < 5) {
-                                _selectedTags.add(tag);
+                  if (_availableInterests.isEmpty)
+                    const Center(child: CircularProgressIndicator())
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _availableInterests.map((interest) {
+                        final id = interest['id'].toString();
+                        final name = interest['name'] as String;
+                        final isSelected = _selectedInterestIds.contains(id);
+                        return FilterChip(
+                          label: Text(name),
+                          selected: isSelected,
+                          showCheckmark: false,
+                          onSelected: (selected) {
+                            setState(() {
+                              if (selected) {
+                                if (_selectedInterestIds.length < 8) {
+                                  _selectedInterestIds.add(id);
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Max 8 interests allowed'),
+                                    ),
+                                  );
+                                }
                               } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Max 5 tags allowed'),
-                                  ),
-                                );
+                                _selectedInterestIds.remove(id);
                               }
-                            } else {
-                              _selectedTags.remove(tag);
-                            }
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
+                            });
+                          },
+                          selectedColor: AppTheme.primaryColor,
+                          backgroundColor: isDark
+                              ? AppTheme.darkSurface
+                              : AppTheme.surfaceColor,
+                          labelStyle: TextStyle(
+                            color: isSelected
+                                ? Colors.white
+                                : (isDark
+                                      ? AppTheme.darkTextPrimary
+                                      : AppTheme.textPrimary),
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide(
+                              color: isSelected
+                                  ? AppTheme.primaryColor
+                                  : (isDark
+                                        ? Colors.grey.shade700
+                                        : Colors.grey.shade300),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
                   const SizedBox(height: 40),
                 ],
               ),

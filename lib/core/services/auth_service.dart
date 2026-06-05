@@ -34,6 +34,9 @@ class AuthService {
         data: displayName != null ? {'display_name': displayName} : null,
         emailRedirectTo: null, // Disable email confirmation redirect
       );
+      if (response.user != null) {
+        PushNotificationService().saveTokenOnLogin();
+      }
       return response;
     } catch (e) {
       rethrow;
@@ -50,6 +53,9 @@ class AuthService {
         email: email,
         password: password,
       );
+      if (response.user != null) {
+        PushNotificationService().saveTokenOnLogin();
+      }
       return response;
     } catch (e) {
       rethrow;
@@ -79,22 +85,27 @@ class AuthService {
       // Trigger Google Sign-In flow
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
+        print('🔴 Google Sign-In: returned null (cancelled or DEVELOPER_ERROR)');
         return false; // User canceled
       }
+      print('✅ Google Sign-In: got account ${googleUser.email}');
 
       // Get authentication details
       final GoogleSignInAuthentication googleAuth =
           await googleUser.authentication;
       final String? idToken = googleAuth.idToken;
+      final String? accessToken = googleAuth.accessToken;
 
       if (idToken == null) {
         throw 'No ID Token found';
       }
 
-      // Sign in to Supabase using the ID token
+      // Sign in to Supabase using the ID token + accessToken
+      // accessToken suppresses the at_hash Supabase warning
       final AuthResponse response = await _supabase.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
+        accessToken: accessToken,
       );
 
       if (response.user != null) {

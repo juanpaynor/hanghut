@@ -9,6 +9,7 @@ import 'package:bitemates/main.dart'; // For navigatorKey
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
+import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -196,6 +197,21 @@ class PushNotificationService {
           );
         }
       }
+    } else if (data['type'] == 'follower_event' || data['type'] == 'new_event') {
+      // new_event: fired by notify_followers_new_event + notify_past_buyers_new_event
+      final eventId =
+          data['event_id']?.toString() ?? data['entity_id']?.toString();
+      if (eventId != null) {
+        navigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) => MainNavigationScreen(
+              initialIndex: 0,
+              initialEventId: eventId,
+            ),
+          ),
+          (route) => false,
+        );
+      }
     } else if (data['type'] == 'table_join' ||
         data['type'] == 'join_request' ||
         data['type'] == 'approved' ||
@@ -232,13 +248,33 @@ class PushNotificationService {
           );
         }
       }
+    } else if (data['type'] == 'ticket_approved') {
+      // Registration approved — open My Tickets so they can see and pay/view
+      final navContext = navigatorKey.currentContext;
+      if (navContext != null) {
+        Navigator.of(navContext).push(
+          MaterialPageRoute(builder: (_) => const MyTicketsScreen()),
+        );
+      }
+    } else if (data['type'] == 'ticket_rejected') {
+      // Registration rejected — open My Tickets to see rejection reason
+      final navContext = navigatorKey.currentContext;
+      if (navContext != null) {
+        Navigator.of(navContext).push(
+          MaterialPageRoute(builder: (_) => const MyTicketsScreen()),
+        );
+      }
     } else if (data['type'] == 'broadcast') {
-      // Admin broadcast notification — route to target screen or default to Feed
+      // Admin broadcast — route to target tab
+      // Tab indices: Map=0, Feed=1, Explore=2, Profile=3
       final target = data['target']?.toString();
-      int tabIndex = 0; // Default: Feed
+      int tabIndex = 1; // Default: Feed
 
       switch (target) {
         case 'map':
+          tabIndex = 0;
+          break;
+        case 'feed':
           tabIndex = 1;
           break;
         case 'tickets':
@@ -247,9 +283,8 @@ class PushNotificationService {
         case 'profile':
           tabIndex = 3;
           break;
-        case 'feed':
         default:
-          tabIndex = 0;
+          tabIndex = 1;
           break;
       }
 
@@ -260,11 +295,11 @@ class PushNotificationService {
         (route) => false,
       );
     } else {
-      // Unknown type — fallback to home feed
+      // Unknown type — fallback to Feed tab
       print('⚠️ Unknown notification type: ${data['type']}, opening feed');
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => const MainNavigationScreen(initialIndex: 0),
+          builder: (_) => const MainNavigationScreen(initialIndex: 1),
         ),
         (route) => false,
       );

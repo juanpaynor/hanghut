@@ -2,20 +2,27 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
+import 'package:bitemates/features/ticketing/screens/partner_storefront_screen.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
-import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
 
   const EventDetailModal({super.key, required this.event});
+
+  static void show(BuildContext context, Event event) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => EventDetailModal(event: event)),
+    );
+  }
 
   @override
   State<EventDetailModal> createState() => _EventDetailModalState();
@@ -27,13 +34,47 @@ class _EventDetailModalState extends State<EventDetailModal> {
   bool _isLoadingTiers = true;
   String? _organizerDisplayName;
   String? _organizerAvatarUrl;
-  String? _organizerUserId;
+  bool _userHasTicket = false;
+  List<Event> _moreEvents = [];
 
   @override
   void initState() {
     super.initState();
     _fetchAvailability();
     _fetchOrganizerInfo();
+    _loadMoreEvents();
+    if (widget.event.hideVenueUntilRegistered) _checkUserTicket();
+  }
+
+  Future<void> _loadMoreEvents() async {
+    try {
+      final events = await EventService().getEventsByOrganizer(
+        widget.event.organizerId,
+        excludeEventId: widget.event.id,
+        limit: 5,
+      );
+      if (mounted) setState(() => _moreEvents = events);
+    } catch (e) {
+      debugPrint('⚠️ Could not load more events: $e');
+    }
+  }
+
+  Future<void> _checkUserTicket() async {
+    try {
+      final userId = SupabaseConfig.client.auth.currentUser?.id;
+      if (userId == null) return;
+      final result = await SupabaseConfig.client
+          .from('tickets')
+          .select('id')
+          .eq('event_id', widget.event.id)
+          .eq('user_id', userId)
+          .inFilter('status', ['valid', 'approved', 'used'])
+          .limit(1)
+          .maybeSingle();
+      if (mounted) setState(() => _userHasTicket = result != null);
+    } catch (e) {
+      print('⚠️ Could not check ticket status: $e');
+    }
   }
 
   Future<void> _fetchOrganizerInfo() async {
@@ -56,7 +97,6 @@ class _EventDetailModalState extends State<EventDetailModal> {
           _organizerAvatarUrl =
               response['profile_photo_url'] as String? ??
               userData?['avatar_url'] as String?;
-          _organizerUserId = response['user_id'] as String?;
         });
       }
     } catch (e) {
@@ -140,176 +180,199 @@ class _EventDetailModalState extends State<EventDetailModal> {
   Widget build(BuildContext context) {
     final categoryConfig =
         categoryDesigns[widget.event.category] ?? categoryDesigns['concert']!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).brightness == Brightness.dark
-              ? const Color(0xFF1E1E1E)
-              : Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 30,
-              offset: const Offset(0, 15),
-            ),
-          ],
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+          child: _buildBuyButton(),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 1. Hero Image (160px)
-            _buildHeroImage(categoryConfig),
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Hero Image (full-width, taller on full-screen)
+          _buildHeroImage(categoryConfig),
 
-            // 2. Content (scrollable to prevent overflow)
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Invite Only badge for hidden events
-                    if (widget.event.isHidden) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
+          // Scrollable content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Invite Only badge for hidden events
+                  if (widget.event.isHidden) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.deepPurple.withOpacity(0.3),
                         ),
-                        decoration: BoxDecoration(
-                          color: Colors.deepPurple.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Colors.deepPurple.withOpacity(0.3),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.lock_outline,
+                            size: 14,
+                            color: Colors.deepPurple,
                           ),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.lock_outline,
-                              size: 14,
+                          SizedBox(width: 4),
+                          Text(
+                            'Invite Only',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                               color: Colors.deepPurple,
                             ),
-                            SizedBox(width: 4),
-                            Text(
-                              'Invite Only',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.deepPurple,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    // Title
-                    Text(
-                      widget.event.title,
-                      style: TextStyle(
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : Colors.black87,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
-                        height: 1.2,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-
-                    // Venue
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on,
-                          size: 14,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            widget.event.venueName,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+
+                  // Title
+                  Text(
+                    widget.event.title,
+                    style: TextStyle(
+                      color: isDark ? Colors.white : Colors.black87,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                      height: 1.2,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+
+                  // Venue
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.location_on,
+                        size: 14,
+                        color: widget.event.hideVenueUntilRegistered &&
+                                !_userHasTicket
+                            ? Colors.grey[400]
+                            : Colors.grey,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: widget.event.hideVenueUntilRegistered &&
+                                !_userHasTicket
+                            ? Row(
+                                children: [
+                                  Text(
+                                    'Register to see venue',
+                                    style: TextStyle(
+                                      color: Colors.grey[400],
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.lock_outline_rounded,
+                                    size: 12,
+                                    color: Colors.grey[400],
+                                  ),
+                                ],
+                              )
+                            : Text(
+                                widget.event.venueName,
+                                style: const TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Date & Time
+                  _buildDateTimeBox(),
+
+                  const SizedBox(height: 12),
+
+                  // Price & Availability
+                  _buildPriceRow(),
+
+                  // Friends Going
+                  if (!widget.event.isExternal)
+                    FriendsGoingRow(
+                      entityType: 'event',
+                      entityId: widget.event.id,
                     ),
 
-                    const SizedBox(height: 12),
+                  const SizedBox(height: 12),
 
-                    // Date & Time
-                    _buildDateTimeBox(),
+                  // Organizer Card
+                  _buildOrganizerCard(),
 
-                    const SizedBox(height: 12),
+                  // More from this organizer carousel
+                  _buildMoreFromOrganizer(),
 
-                    // Price & Availability
-                    _buildPriceRow(),
+                  const SizedBox(height: 16),
 
-                    // Friends Going (hidden for external events — no attendee data)
-                    if (!widget.event.isExternal)
-                      FriendsGoingRow(
-                        entityType: 'event',
-                        entityId: widget.event.id,
-                      ),
+                  // Description
+                  _buildDescription(),
 
-                    const SizedBox(height: 12),
+                  // Additional Images
+                  _buildImageGallery(),
 
-                    // Organizer Card
-                    _buildOrganizerCard(),
-
-                    const SizedBox(height: 16),
-
-                    // Description
-                    _buildDescription(),
-
-                    const SizedBox(height: 24),
-
-                    // Buy Tickets Button
-                    _buildBuyButton(),
-                  ],
-                ),
+                  const SizedBox(height: 16),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildHeroImage(Map<String, dynamic> categoryConfig) {
-    return SizedBox(
-      height: 160,
+    final allImages = [
+      if (widget.event.coverImageUrl != null) widget.event.coverImageUrl!,
+      ...widget.event.imageUrls,
+    ];
+
+    return GestureDetector(
+      onTap: allImages.isNotEmpty ? () => _openImageViewer(allImages, 0) : null,
       child: Stack(
-        fit: StackFit.expand,
         children: [
-          // Image or Gradient
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          // Image at natural aspect ratio — no cropping
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 200, maxHeight: 460),
             child: widget.event.coverImageUrl != null
                 ? CachedNetworkImage(
                     imageUrl: widget.event.coverImageUrl!,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => Container(
-                      color: Colors.grey[200],
-                      child: const Center(
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.black26,
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
+                    placeholder: (context, url) => AspectRatio(
+                      aspectRatio: 1.5,
+                      child: Container(
+                        color: Colors.grey[200],
+                        child: const Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.black26,
+                          ),
                         ),
                       ),
                     ),
@@ -319,127 +382,190 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 : _buildFallbackGradient(categoryConfig),
           ),
 
-          // Dark gradient overlay for button visibility
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(24),
-                ),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.black.withOpacity(0.4), Colors.transparent],
-                  stops: const [0.0, 0.5],
-                ),
-              ),
-            ),
-          ),
-
-          // Share Button (top-left)
-          Positioned(
-            top: 12,
-            left: 12,
-            child: Material(
-              color: Colors.white,
-              elevation: 2,
-              shape: const CircleBorder(),
-              child: InkWell(
-                onTap: _onShare,
-                customBorder: const CircleBorder(),
-                child: const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Icon(Icons.share, color: Colors.black87, size: 20),
-                ),
-              ),
-            ),
-          ),
-
-          // Report Button (next to share)
-          Positioned(
-            top: 12,
-            left: 56,
-            child: Material(
-              color: Colors.white,
-              elevation: 2,
-              shape: const CircleBorder(),
-              child: InkWell(
-                onTap: () {
-                  ReportModal.show(
-                    context,
-                    targetType: 'post',
-                    targetId: widget.event.id,
-                    targetName: widget.event.title,
-                  );
-                },
-                customBorder: const CircleBorder(),
-                child: const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Icon(
-                    Icons.flag_outlined,
-                    color: Colors.grey,
-                    size: 20,
+            // Dark gradient overlay for button visibility
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black.withOpacity(0.45), Colors.transparent],
+                    stops: const [0.0, 0.6],
                   ),
                 ),
               ),
             ),
-          ),
 
-          // Close Button (top-right)
-          Positioned(
-            top: 12,
-            right: 12,
-            child: Material(
-              color: Colors.white,
-              elevation: 2,
-              shape: const CircleBorder(),
-              child: InkWell(
-                onTap: () => Navigator.pop(context),
-                customBorder: const CircleBorder(),
-                child: const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Icon(Icons.close, color: Colors.black87, size: 20),
-                ),
-              ),
-            ),
-          ),
-
-          // Category Badge
-          Positioned(
-            top: 56,
-            left: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
+            // Back Button (top-left, status-bar aware)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 12,
+              child: Material(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black12, blurRadius: 4),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    categoryConfig['emoji'] as String,
-                    style: const TextStyle(fontSize: 14),
+                elevation: 2,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  onTap: () => Navigator.pop(context),
+                  customBorder: const CircleBorder(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: Icon(Icons.arrow_back, color: Colors.black87, size: 20),
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    widget.event.category.toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.black87,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
+                ),
+              ),
+            ),
+
+            // Share Button
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              right: 56,
+              child: Material(
+                color: Colors.white,
+                elevation: 2,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  onTap: _onShare,
+                  customBorder: const CircleBorder(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: Icon(Icons.share, color: Colors.black87, size: 20),
+                  ),
+                ),
+              ),
+            ),
+
+            // Report Button (top-right)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              right: 12,
+              child: Material(
+                color: Colors.white,
+                elevation: 2,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  onTap: () {
+                    ReportModal.show(
+                      context,
+                      targetType: 'post',
+                      targetId: widget.event.id,
+                      targetName: widget.event.title,
+                    );
+                  },
+                  customBorder: const CircleBorder(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: Icon(
+                      Icons.flag_outlined,
+                      color: Colors.grey,
+                      size: 20,
                     ),
                   ),
-                ],
+                ),
               ),
             ),
+
+            // Category Badge
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 52,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black12, blurRadius: 4),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      categoryConfig['emoji'] as String,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      widget.event.category.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+  }
+
+  void _openImageViewer(List<String> images, int startIndex) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) =>
+          _ImageViewerDialog(images: images, initialIndex: startIndex),
+    );
+  }
+
+  Widget _buildImageGallery() {
+    final extras = widget.event.imageUrls;
+    if (extras.isEmpty) return const SizedBox.shrink();
+
+    final allImages = [
+      if (widget.event.coverImageUrl != null) widget.event.coverImageUrl!,
+      ...extras,
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        const Text(
+          'Photos',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 90,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: extras.length,
+            itemBuilder: (context, i) {
+              final imgUrl = extras[i];
+              final viewerIndex = widget.event.coverImageUrl != null
+                  ? i + 1
+                  : i;
+              return GestureDetector(
+                onTap: () => _openImageViewer(allImages, viewerIndex),
+                child: Container(
+                  width: 90,
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    color: Colors.grey[200],
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: CachedNetworkImage(
+                    imageUrl: imgUrl,
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => Container(color: Colors.grey[200]),
+                    errorWidget: (_, __, ___) =>
+                        const Icon(Icons.broken_image, color: Colors.grey),
+                  ),
+                ),
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -569,6 +695,39 @@ class _EventDetailModalState extends State<EventDetailModal> {
     );
   }
 
+  Widget _buildMoreFromOrganizer() {
+    if (_moreEvents.isEmpty) return const SizedBox.shrink();
+
+    final displayName =
+        widget.event.organizerName ?? _organizerDisplayName ?? 'organizer';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        Text(
+          'More from $displayName',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 160,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: _moreEvents.length,
+            itemBuilder: (ctx, i) {
+              final e = _moreEvents[i];
+              return _OrganizerEventCard(
+                event: e,
+                onTap: () => EventDetailModal.show(context, e),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildOrganizerCard() {
     final displayName =
         widget.event.organizerName ??
@@ -576,13 +735,13 @@ class _EventDetailModalState extends State<EventDetailModal> {
         'Event Organizer';
     final photoUrl = widget.event.organizerPhotoUrl ?? _organizerAvatarUrl;
 
-    final organizerUserId = _organizerUserId ?? widget.event.organizerId;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => UserProfileScreen(userId: organizerUserId),
+          builder: (_) =>
+              PartnerStorefrontScreen(partnerId: widget.event.organizerId),
         ),
       ),
       child: Container(
@@ -763,8 +922,12 @@ class _EventDetailModalState extends State<EventDetailModal> {
     if (widget.event.isExternal && widget.event.externalTicketUrl != null) {
       // External event: redirect through our tracking endpoint
       final currentUserId = SupabaseConfig.client.auth.currentUser?.id ?? '';
-      final supabaseUrl = SupabaseConfig.client.rest.url.replaceAll('/rest/v1', '');
-      final redirectUrl = '$supabaseUrl/functions/v1/redirect-to-external'
+      final supabaseUrl = SupabaseConfig.client.rest.url.replaceAll(
+        '/rest/v1',
+        '',
+      );
+      final redirectUrl =
+          '$supabaseUrl/functions/v1/redirect-to-external'
           '?event_id=${widget.event.id}'
           '&user_id=$currentUserId';
       launchUrl(Uri.parse(redirectUrl), mode: LaunchMode.externalApplication);
@@ -777,6 +940,180 @@ class _EventDetailModalState extends State<EventDetailModal> {
       context,
       MaterialPageRoute(
         builder: (context) => EventPurchaseScreen(event: widget.event),
+      ),
+    );
+  }
+}
+
+class _OrganizerEventCard extends StatelessWidget {
+  final Event event;
+  final VoidCallback onTap;
+
+  const _OrganizerEventCard({required this.event, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 140,
+        margin: const EdgeInsets.only(right: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.grey[100],
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Thumbnail
+            SizedBox(
+              height: 82,
+              width: double.infinity,
+              child: event.coverImageUrl != null
+                  ? CachedNetworkImage(
+                      imageUrl: event.coverImageUrl!,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => Container(
+                        color: Colors.deepPurple[50],
+                        child: const Icon(Icons.event, color: Colors.deepPurple),
+                      ),
+                    )
+                  : Container(
+                      color: Colors.deepPurple[50],
+                      child: const Icon(Icons.event, color: Colors.deepPurple),
+                    ),
+            ),
+            // Info
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      event.title,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      DateFormat('MMM d').format(event.startDatetime),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ImageViewerDialog extends StatefulWidget {
+  final List<String> images;
+  final int initialIndex;
+
+  const _ImageViewerDialog({required this.images, required this.initialIndex});
+
+  @override
+  State<_ImageViewerDialog> createState() => _ImageViewerDialogState();
+}
+
+class _ImageViewerDialogState extends State<_ImageViewerDialog> {
+  late PageController _pageController;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          // Paged image viewer
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.images.length,
+            onPageChanged: (i) => setState(() => _currentIndex = i),
+            itemBuilder: (context, i) {
+              return InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.0,
+                child: Center(
+                  child: CachedNetworkImage(
+                    imageUrl: widget.images[i],
+                    fit: BoxFit.contain,
+                    placeholder: (_, __) => const Center(
+                      child: CircularProgressIndicator(color: Colors.white54),
+                    ),
+                    errorWidget: (_, __, ___) => const Icon(
+                      Icons.broken_image,
+                      color: Colors.white38,
+                      size: 64,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // Close button
+          Positioned(
+            top: 48,
+            right: 16,
+            child: IconButton(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+              style: IconButton.styleFrom(backgroundColor: Colors.black38),
+            ),
+          ),
+
+          // Page indicator
+          if (widget.images.length > 1)
+            Positioned(
+              bottom: 32,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(widget.images.length, (i) {
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: _currentIndex == i ? 16 : 6,
+                    height: 6,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: _currentIndex == i ? Colors.white : Colors.white38,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  );
+                }),
+              ),
+            ),
+        ],
       ),
     );
   }

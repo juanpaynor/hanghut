@@ -35,14 +35,13 @@ serve(async (req) => {
             Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
         )
 
-        // Handle PAIF/SUCCESS events
-        if (['invoice.paid', 'payment.succeeded'].includes(eventType)) {
+        // Handle SUCCESS events
+        if (['invoice.paid', 'payment.succeeded', 'payment_session.completed'].includes(eventType)) {
             const external_id = data.external_id || data.reference_id
 
             console.log(`Processing Payment for External ID: ${external_id}`)
 
-            // 1. Look up Experience Intent
-            const { data: intent, error: intentError } = await supabaseClient
+            const { data: intent } = await supabaseClient
                 .from('experience_purchase_intents')
                 .select('id')
                 .eq('xendit_external_id', external_id)
@@ -53,7 +52,6 @@ serve(async (req) => {
                 return new Response(JSON.stringify({ message: 'Not an experience payment' }), { status: 200, headers: corsHeaders })
             }
 
-            // 2. Confirm Booking via RPC
             const { data: result, error: rpcError } = await supabaseClient.rpc('confirm_experience_booking', {
                 p_intent_id: intent.id,
                 p_payment_method: data.payment_method || 'UNKNOWN',
@@ -66,6 +64,40 @@ serve(async (req) => {
             }
 
             console.log('Booking Confirmed:', result)
+        }
+
+        // Handle CANCELLATION / EXPIRY — release the reserved slot
+        if ([
+            'payment.failed',
+            'payment_request.expired',
+            'payment_session.expired',
+            'payment_session.cancelled',
+        ].includes(eventType)) {
+            const external_id = data.external_id || data.reference_id
+            console.log(`Experience payment failed/expired for ${external_id}`)
+
+            const { data: intent } = await supabaseClient
+                .from('experience_purchase_intents')
+                .select('id, schedule_id, quantity, status')
+                .eq('xendit_external_id', external_id)
+                .single()
+
+            if (intent && intent.status === 'pending') {
+                // Mark intent as failed/expired
+                await supabaseClient
+                    .from('experience_purchase_intents')
+                    .update({ status: eventType === 'payment.failed' ? 'failed' : 'expired' })
+                    .eq('id', intent.id)
+
+                // Release reserved slot on the schedule
+                if (intent.schedule_id) {
+                    await supabaseClient.rpc('decrement_experience_guests', {
+                        p_schedule_id: intent.schedule_id,
+                        p_quantity: intent.quantity,
+                    })
+                    console.log(`✅ Released ${intent.quantity} slot(s) for schedule ${intent.schedule_id}`)
+                }
+            }
         }
 
         return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })

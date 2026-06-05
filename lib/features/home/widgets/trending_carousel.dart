@@ -25,10 +25,13 @@ class TrendingCarousel extends StatelessWidget {
     if (item is Event) return item.coverImageUrl;
     if (item is Map) {
       String? img = item['marker_image_url'] ?? item['image_url'];
-      if (img == null && item['images'] != null && (item['images'] as List).isNotEmpty) {
+      if (img == null &&
+          item['images'] != null &&
+          (item['images'] as List).isNotEmpty) {
         img = (item['images'] as List).first as String?;
       }
-      return img ?? 'https://images.unsplash.com/photo-1543007630-9710e4a00a20?auto=format&fit=crop&q=80';
+      return img ??
+          'https://images.unsplash.com/photo-1543007630-9710e4a00a20?auto=format&fit=crop&q=80';
     }
     return '';
   }
@@ -42,7 +45,7 @@ class TrendingCarousel extends StatelessWidget {
         return expType?.replaceAll('_', ' ').toUpperCase() ?? 'EXPERIENCE';
       }
       final type = item['cuisine_type']; // Activity type
-      return type?.toUpperCase() ?? 'PENDING';
+      return type?.toUpperCase() ?? 'ACTIVITY';
     }
     return 'HAPPENING';
   }

@@ -314,74 +314,49 @@ serve(async (req: Request) => {
         }
 
         // ============================================================
-        // 4. Call Xendit Refund API — XenPlatform Flow
+        // 4. Pre-check: Sub-wallet has enough to refund the customer
         // ============================================================
+        // Organizer shoulders the full refund cost. Hanghut keeps its take.
+        // The sub-wallet must already hold the full refund amount.
         const refundAmount = amount || intent.total_amount;
-
-        // Determine if this is a XenPlatform refund (partner has sub-account)
         const hasSubAccount = partnerData?.xendit_account_id;
-        const platformPercentage = partnerData?.custom_percentage || 4; // Default 4%
-        const platformFee = Math.round(refundAmount * (platformPercentage / 100));
-        let transferId: string | null = null;
 
         if (hasSubAccount) {
-            // XenPlatform Refund Flow:
-            // 1. Transfer platform fee from MASTER → sub-wallet (so sub-wallet has enough)
-            // 2. Issue refund from sub-wallet (for-user-id header)
-            // 3. Track platform_fee_receivable (organizer owes HangHut)
-            // 4. Rollback transfer if refund fails
-
-            console.log(`🔄 XenPlatform refund: transferring ₱${platformFee} from MASTER → sub-wallet ${partnerData.xendit_account_id}`);
-
-            // Step 1: Transfer platform fee from MASTER to sub-wallet
             try {
-                const transferResponse = await fetch('https://api.xendit.co/transfers', {
-                    method: 'POST',
+                const balanceRes = await fetch('https://api.xendit.co/balance', {
                     headers: {
                         'Authorization': authHeader,
-                        'Content-Type': 'application/json',
+                        'for-user-id': partnerData.xendit_account_id,
                     },
-                    body: JSON.stringify({
-                        reference: `refund-transfer-${intent_id}-${Date.now()}`,
-                        amount: platformFee,
-                        source_user_id: masterAccountId,
-                        destination_user_id: partnerData.xendit_account_id,
-                    }),
                 });
+                const balanceData = await balanceRes.json();
+                const subWalletBalance = Number(balanceData.balance ?? 0);
 
-                if (!transferResponse.ok) {
-                    const transferErr = await transferResponse.text();
-                    console.error('❌ MASTER → sub-wallet transfer failed:', transferErr);
+                if (subWalletBalance < refundAmount) {
+                    const shortfall = refundAmount - subWalletBalance;
+                    console.log(`❌ Sub-wallet ${partnerData.xendit_account_id} short by ₱${shortfall} for refund`);
                     return new Response(JSON.stringify({
-                        error: 'Failed to transfer platform fee for refund',
-                        details: transferErr,
-                        code: 'TRANSFER_FAILED'
+                        error: `Insufficient sub-wallet balance to refund this customer.`,
+                        code: 'INSUFFICIENT_SUBWALLET_BALANCE',
+                        available_balance: subWalletBalance,
+                        required: refundAmount,
+                        shortfall,
+                        message: `Your Xendit sub-wallet has ₱${subWalletBalance.toFixed(2)} available. You need ₱${refundAmount.toFixed(2)} to refund this customer. Please top up your account or wait for more ticket sales.`
                     }), {
                         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                        status: 500,
+                        status: 402,
                     });
                 }
-
-                const transferData = await transferResponse.json();
-                transferId = transferData.id || transferData.transfer_id;
-                console.log(`✅ Transfer successful: ${transferId}`);
-            } catch (transferErr) {
-                console.error('❌ Transfer exception:', transferErr);
-                return new Response(JSON.stringify({
-                    error: 'Transfer failed unexpectedly',
-                    code: 'TRANSFER_EXCEPTION'
-                }), {
-                    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                    status: 500,
-                });
+            } catch (e) {
+                console.warn('Failed to check sub-wallet balance, proceeding anyway...', e);
             }
         } else {
-            // Legacy flow: balance check on master wallet
+            // Legacy non-XenPlatform flow: balance check on master wallet
             try {
                 const balanceRes = await fetch('https://api.xendit.co/balance', {
                     headers: { 'Authorization': authHeader }
-                })
-                const balanceData = await balanceRes.json()
+                });
+                const balanceData = await balanceRes.json();
 
                 if (balanceData.balance < refundAmount) {
                     return new Response(JSON.stringify({
@@ -391,10 +366,10 @@ serve(async (req: Request) => {
                     }), {
                         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                         status: 402,
-                    })
+                    });
                 }
             } catch (e) {
-                console.warn('Failed to check Xendit balance, proceeding anyway...', e)
+                console.warn('Failed to check Xendit balance, proceeding anyway...', e);
             }
         }
 
@@ -449,53 +424,10 @@ serve(async (req: Request) => {
 
         if (!xenditResponse.ok) {
             console.error('Xendit Refund Error:', xenditData)
-
-            // ROLLBACK: If transfer succeeded but refund failed, reverse the transfer
-            if (hasSubAccount && transferId) {
-                console.log(`⚠️ ROLLBACK: Reversing transfer ${transferId}...`);
-                try {
-                    await fetch('https://api.xendit.co/transfers', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': authHeader,
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            reference: `rollback-${intent_id}-${Date.now()}`,
-                            amount: platformFee,
-                            source_user_id: partnerData.xendit_account_id,
-                            destination_user_id: masterAccountId,
-                        }),
-                    });
-                    console.log('✅ Rollback transfer successful');
-                } catch (rollbackErr) {
-                    console.error('❌ CRITICAL: Rollback transfer FAILED:', rollbackErr);
-                    // Log for manual reconciliation
-                }
-            }
-
             return new Response(JSON.stringify({ error: xenditData.message || 'Failed to request refund from Xendit', details: xenditData }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
                 status: xenditResponse.status,
             })
-        }
-
-        // Track platform_fee_receivable if XenPlatform refund
-        if (hasSubAccount) {
-            const partnerId = isExperience ? intent.experience?.partner_id : intent.event?.organizer_id;
-            if (partnerId) {
-                const currentReceivable = partnerData.platform_fee_receivable || 0;
-                const { error: recvError } = await supabaseAdmin
-                    .from('partners')
-                    .update({ platform_fee_receivable: currentReceivable + platformFee })
-                    .eq('id', partnerId);
-
-                if (recvError) {
-                    console.error('⚠️ Failed to update platform_fee_receivable:', recvError);
-                } else {
-                    console.log(`💰 Updated platform_fee_receivable: ₱${currentReceivable} → ₱${currentReceivable + platformFee}`);
-                }
-            }
         }
 
         // 5. Success - Update Refund Tracking

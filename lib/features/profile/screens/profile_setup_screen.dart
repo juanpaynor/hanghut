@@ -488,7 +488,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           const SizedBox(height: 8),
 
           Text(
-            'Show your smile! This helps others recognize you.',
+            'Add your profile photo. Pick a shot that represents you best — people are more likely to say "hi" to a friendly face.',
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 16,
@@ -569,7 +569,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'You can skip this and add a photo later from your profile',
+                    'No rush — you can always add one later from your profile.',
                     style: TextStyle(color: Colors.blue[900], fontSize: 13),
                   ),
                 ),
@@ -886,7 +886,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
           const SizedBox(height: 8),
 
           Text(
-            'Select at least 3 things you love.',
+            'Select up to 8 things you love.',
             style: Theme.of(
               context,
             ).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),

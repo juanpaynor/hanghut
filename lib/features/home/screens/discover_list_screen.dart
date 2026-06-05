@@ -213,12 +213,7 @@ class _EventCard extends StatelessWidget {
 
     return GestureDetector(
       onTap: () {
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => EventDetailModal(event: event),
-        );
+        EventDetailModal.show(context, event);
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),

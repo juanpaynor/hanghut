@@ -51,6 +51,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
   List<String> _postImages = [];
+  List<String> _userInterests = [];
   bool _isAdventureLogExpanded = true;
   int _postImagesPage = 0;
   static const int _postImagesPageSize = 30;
@@ -215,6 +216,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             .select()
             .eq('user_id', widget.userId)
             .maybeSingle(),
+        // Interests
+        supabase
+            .from('user_interests')
+            .select('interest_tag:interest_tags(name)')
+            .eq('user_id', widget.userId),
       ]);
 
       final hostedCount = results[0] as int;
@@ -225,6 +231,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final joinedTables = results[5] as List<dynamic>;
       final photosResponse = results[6] as List<dynamic>;
       final gamificationResult = results[7] as Map<String, dynamic>?;
+      final interestsResponse = results[8] as List<dynamic>;
 
       // PHASE 1 FIX: Combine hosted and joined tables for complete history
       final List<Map<String, dynamic>> allTables = [];
@@ -282,6 +289,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           };
           _hostedTables = allTables.take(10).toList();
           _userPhotos = photos;
+          _userInterests = interestsResponse
+              .map((r) {
+                final tag = r['interest_tag'];
+                return tag != null ? tag['name'].toString() : null;
+              })
+              .whereType<String>()
+              .toList();
+
+          // Fallback: old accounts stored interests in users.tags (text array)
+          if (_userInterests.isEmpty) {
+            final legacyTags = userResponse['tags'];
+            if (legacyTags is List && legacyTags.isNotEmpty) {
+              _userInterests = legacyTags.map((t) => t.toString()).toList();
+            }
+          }
           _gamificationStats = gamificationResult != null
               ? GamificationStats.fromJson(gamificationResult)
               : null;
@@ -1125,15 +1147,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       const SizedBox(height: 16),
                     ],
 
-                    // Tags
-                    if (_userData?['tags'] != null &&
-                        (_userData!['tags'] as List).isNotEmpty) ...[
+                    // Interests
+                    if (_userInterests.isNotEmpty) ...[
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
-                        children: (_userData!['tags'] as List).map<Widget>((
-                          tag,
-                        ) {
+                        children: _userInterests.map<Widget>((tag) {
                           return Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -1147,7 +1166,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                               ),
                             ),
                             child: Text(
-                              tag.toString(),
+                              tag,
                               style: TextStyle(
                                 fontSize: 12,
                                 color: AppTheme.accentColor,
@@ -2033,12 +2052,7 @@ class _OrganizerEventCard extends StatelessWidget {
             organizerId: event['organizer_id'] as String? ?? '',
             createdAt: DateTime.now(),
           );
-          showModalBottomSheet(
-            context: context,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            builder: (_) => EventDetailModal(event: eventObj),
-          );
+          EventDetailModal.show(context, eventObj);
         } catch (_) {}
       },
       child: Container(

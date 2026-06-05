@@ -20,10 +20,15 @@ import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
 import 'package:bitemates/features/home/widgets/create_post_modal.dart';
+import 'package:bitemates/core/services/connectivity_service.dart';
+import 'package:bitemates/core/widgets/offline_banner.dart';
+import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
   final String? initialTableId;
+  final String? initialEventId;
   final double? flyToLat;
   final double? flyToLng;
 
@@ -31,6 +36,7 @@ class MainNavigationScreen extends StatefulWidget {
     super.key,
     this.initialIndex = 0,
     this.initialTableId,
+    this.initialEventId,
     this.flyToLat,
     this.flyToLng,
   });
@@ -53,6 +59,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   late final AnimationController _dialController;
   late final Animation<double> _dialAnimation;
 
+  // Nav tab animations
+  late final List<AnimationController> _navControllers;
+  late final List<Animation<double>> _navAnimations;
+
   @override
   void initState() {
     super.initState();
@@ -71,6 +81,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       reverseCurve: Curves.easeInCubic,
     );
 
+    // Nav tab pop animations
+    _navControllers = List.generate(
+      4,
+      (_) => AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 280),
+      ),
+    );
+    _navAnimations = _navControllers.map((c) {
+      return TweenSequence<double>([
+        TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.32), weight: 38),
+        TweenSequenceItem(tween: Tween(begin: 1.32, end: 1.0), weight: 62),
+      ]).animate(CurvedAnimation(parent: c, curve: Curves.easeOut));
+    }).toList();
+
     // Handle Deep Link for Table
     if (widget.initialTableId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -78,8 +103,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       });
     }
 
+    // Handle Deep Link for Event (from follower_event notification)
+    if (widget.initialEventId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openEventFromNotification(widget.initialEventId!);
+      });
+    }
+
     // Handle Fly-To from story location tap — coordinates are passed
     // directly to MapScreen via constructor to bypass intro animation.
+
+    ConnectivityService().start();
+
+    // Ensure FCM token is saved for already-logged-in users on app re-launch.
+    // Auth is guaranteed to be restored by the time MainNavigationScreen mounts.
+    PushNotificationService().saveTokenOnLogin();
 
     // Check for Admin Popups on Startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -103,10 +141,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     }
   }
 
+  Future<void> _openEventFromNotification(String eventId) async {
+    try {
+      final event = await EventService().getEvent(eventId);
+      if (event != null && mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => EventDetailModal(event: event)),
+        );
+      }
+    } catch (e) {
+      print('⚠️ Could not open event from notification: $e');
+    }
+  }
+
   @override
   void dispose() {
     _dialController.dispose();
+    for (final c in _navControllers) {
+      c.dispose();
+    }
     _geofenceSubscription?.cancel();
+    ConnectivityService().stop();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -208,7 +263,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           });
         },
       ),
-      const ActivityScreen(),
+      ActivityScreen(
+        onHangoutTap: (tableId) {
+          setState(() {
+            _selectedIndex = 0;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _mapScreenKey.currentState?.showTableDetails(tableId);
+          });
+        },
+      ),
       currentUserId != null
           ? UserProfileScreen(userId: currentUserId, isOwnProfile: true)
           : const Center(child: Text("Please log in")),
@@ -221,6 +285,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       _feedScreenKey.currentState?.scrollToTop();
       return;
     }
+    _navControllers[index].forward(from: 0.0);
+    HapticFeedback.selectionClick();
     setState(() {
       _selectedIndex = index;
     });
@@ -414,11 +480,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
     return Scaffold(
       extendBody: true,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: IndexedStack(index: _selectedIndex, children: _screens),
-          ),
+      body: OfflineBanner(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: IndexedStack(index: _selectedIndex, children: _screens),
+            ),
 
           if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
 
@@ -438,6 +505,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           // ── Speed Dial Arc Buttons ──
           _buildSpeedDialButtons(context),
         ],
+        ),
       ),
       floatingActionButton: Container(
         height: 64,
@@ -485,7 +553,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               2,
               Icons.grid_view_outlined,
               Icons.grid_view,
-              'Activity',
+              'Explore',
             ),
             _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
           ],
@@ -502,7 +570,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       const _DialItem(icon: Icons.table_restaurant, label: 'Hangout', index: 0),
       const _DialItem(
         icon: Icons.camera_alt_outlined,
-        label: 'Moment',
+        label: 'Story',
         index: 1,
       ),
       const _DialItem(icon: Icons.edit_outlined, label: 'Post', index: 2),
@@ -626,24 +694,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              isSelected ? iconFilled : iconOutlined,
-              color: isSelected ? activeColor : Colors.grey[400],
-              size: 26,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
+        child: ScaleTransition(
+          scale: _navAnimations[index],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isSelected ? iconFilled : iconOutlined,
                 color: isSelected ? activeColor : Colors.grey[400],
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                size: 26,
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? activeColor : Colors.grey[400],
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

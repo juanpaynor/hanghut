@@ -242,17 +242,17 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
                             const Spacer(flex: 2),
                             // HERO TEXT
                             Text(
-                              'hello.',
+                              'miss us?',
                               style: GoogleFonts.inter(
                                 fontSize: 64,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: -3.0,
-                                color: indigo, // indigo
+                                color: indigo,
                                 height: 1.0,
                               ),
                             ),
                             Text(
-                              'Welcome back.',
+                              "The crew's been waiting.",
                               style: GoogleFonts.inter(
                                 fontSize: 24,
                                 fontWeight: FontWeight.w500,
@@ -460,6 +460,26 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
                                 ),
                               ],
                             ),
+
+                            const SizedBox(height: 16),
+
+                            // Shake hint
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text('📱', style: TextStyle(fontSize: 13)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Want to see something cool? Shake your phone!',
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 11,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
+                            ),
+
                             const Spacer(flex: 2),
                           ],
                         ),

@@ -152,12 +152,17 @@ class AppTheme {
       ),
 
       dialogTheme: DialogThemeData(
-        backgroundColor: Color(0xFF2B2D31),
+        backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         titleTextStyle: GoogleFonts.inter(
-          color: Color(0xFFF2F3F5),
+          color: const Color(0xFF1A1A1A),
           fontSize: 20,
           fontWeight: FontWeight.w600,
+        ),
+        contentTextStyle: GoogleFonts.inter(
+          color: const Color(0xFF4A4A4A),
+          fontSize: 14,
+          height: 1.4,
         ),
       ),
     );

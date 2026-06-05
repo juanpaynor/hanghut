@@ -1531,6 +1531,63 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           'Category',
           _getCategoryLabel(group['category']?.toString() ?? 'other'),
         ),
+
+        // Broadcast mode toggle — subscriber groups only, admins only
+        if (_isAdmin && group['group_type'] == 'subscriber') ...[
+          const SizedBox(height: 28),
+          _sectionLabel('Broadcast Settings'),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.grey[900] : Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.campaign_outlined,
+                  size: 20,
+                  color: Theme.of(context).primaryColor,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Broadcast mode',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        (group['broadcast_mode'] as bool? ?? false)
+                            ? 'Only you can post — members can react'
+                            : 'All members can post messages',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: group['broadcast_mode'] as bool? ?? false,
+                  activeColor: Theme.of(context).primaryColor,
+                  onChanged: _isUpdatingBroadcast ? null : _toggleBroadcastMode,
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

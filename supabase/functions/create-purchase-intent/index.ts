@@ -31,7 +31,7 @@ serve(async (req) => {
         )
 
         // Parse request body
-        const { event_id, quantity, tier_id, promo_code, channel_code, guest_details, success_url, failure_url, subscribed_to_newsletter } = await req.json()
+        const { event_id, quantity, tier_id, promo_code, channel_code, guest_details, success_url, failure_url, subscribed_to_newsletter, registration_id, metadata: clientMetadata } = await req.json()
 
         // Get authenticated user (if any)
         const {
@@ -72,6 +72,88 @@ serve(async (req) => {
                 }),
                 { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
+        }
+
+        // --- APPROVAL GATE (server-side enforcement) ---
+        // require_approval events MUST have an APPROVED event_registrations row
+        // before any ticket is reserved or issued. The app gates this client-side
+        // (submit_event_request → "pending" → stop), but a server guard is the only
+        // thing that stops a caller which skips registration entirely (e.g. the web
+        // checkout). Registration creation itself stays in submit_event_request RPC —
+        // we only VERIFY here, never create.
+        const { data: gateEvent, error: gateError } = await supabaseClient
+            .from('events')
+            .select('require_approval')
+            .eq('id', event_id)
+            .single()
+
+        if (gateError || !gateEvent) {
+            return new Response(
+                JSON.stringify({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid Event' } }),
+                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+        }
+
+        if (gateEvent.require_approval) {
+            // Must reference a registration
+            if (!registration_id) {
+                return new Response(
+                    JSON.stringify({
+                        success: false,
+                        error: { code: 'REGISTRATION_REQUIRED', message: 'This event requires approval. Submit a registration request before purchasing.' }
+                    }),
+                    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            const { data: reg, error: regError } = await supabaseClient
+                .from('event_registrations')
+                .select('id, status, event_id, user_id, guest_email')
+                .eq('id', registration_id)
+                .single()
+
+            // Must exist and belong to this event
+            if (regError || !reg || reg.event_id !== event_id) {
+                return new Response(
+                    JSON.stringify({
+                        success: false,
+                        error: { code: 'REGISTRATION_INVALID', message: 'Registration not found for this event.' }
+                    }),
+                    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            // Must belong to this caller (prevents using someone else's approval)
+            const ownsRegistration = user
+                ? reg.user_id === user.id
+                : (!!reg.guest_email && reg.guest_email.toLowerCase() === (guest_details?.email ?? '').toLowerCase())
+
+            if (!ownsRegistration) {
+                return new Response(
+                    JSON.stringify({
+                        success: false,
+                        error: { code: 'REGISTRATION_INVALID', message: 'Registration does not match this account.' }
+                    }),
+                    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            // Must be approved (organizer-approved; 'auto_approved' is for non-approval events)
+            if (reg.status !== 'approved') {
+                const code = reg.status === 'pending'
+                    ? 'REGISTRATION_PENDING'
+                    : reg.status === 'rejected'
+                        ? 'REGISTRATION_REJECTED'
+                        : 'REGISTRATION_NOT_APPROVED'
+                return new Response(
+                    JSON.stringify({
+                        success: false,
+                        error: { code, message: `Registration is ${reg.status}. Payment is only allowed after the organizer approves.` }
+                    }),
+                    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+            // approved → fall through to normal reserve / payment / issue flow
         }
 
         // --- PRICING LOGIC ---
@@ -117,13 +199,18 @@ serve(async (req) => {
         }
 
         // --- FETCH PLATFORM FEE ---
-        let platformFeePercentage = 10.0 // Default 10%
+        let platformFeePercentage = 4.0 // Default 4% (processing baseline)
+        // First-party partners settle directly to the main Xendit account
+        // (no sub-account, no split rule, no PLATFORM fee override).
+        let useMainWallet = false
         if (organizerId) {
             const { data: partner } = await supabaseClient
                 .from('partners')
-                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket, xendit_account_id, split_rule_id')
+                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket, xendit_account_id, split_rule_id, use_main_wallet')
                 .eq('id', organizerId)
                 .single()
+
+            useMainWallet = partner?.use_main_wallet === true
 
             // Check if distinct custom_percentage exists (it might be 0, so check undefined/null)
             if (partner && partner.custom_percentage !== null && partner.custom_percentage !== undefined) {
@@ -131,7 +218,11 @@ serve(async (req) => {
             }
 
             // --- PASS FEES LOGIC ---
-            if (partner && partner.pass_fees_to_customer) {
+            // Guard with unitPrice > 0 — free events have no booking fee.
+            // Without this guard, a free event with pass_fees_to_customer=true
+            // would compute totalAmount = fixedFee, skipping the free-event short-circuit
+            // and either charging the customer or 500ing at Xendit.
+            if (partner && partner.pass_fees_to_customer && unitPrice > 0) {
                 // Split Fee Model: Customer pays Ticket Price + Fixed Fee
                 // Organizer absorbs Percentage Fee + Processing Fee
                 const subtotal = unitPrice * quantity
@@ -223,15 +314,69 @@ serve(async (req) => {
 
         const intentId = intentData
 
+        // --- SUBSCRIBER DISCOUNT ---
+        // Price order: base → subscriber discount → promo code → booking fee.
+        // We verify server-side (never trust the client amount). Guest checkouts
+        // can't have a subscription so we skip entirely for non-authenticated users.
+        let subscriberDiscountAmount = 0
+        let subscriberDiscountMeta: Record<string, unknown> = {}
+
+        if (user && clientMetadata?.has_subscriber_discount === true) {
+            try {
+                const { data: discountResult } = await supabaseClient.rpc(
+                    'get_subscriber_event_discount',
+                    { p_event_id: event_id }
+                )
+
+                if (discountResult?.has_discount === true) {
+                    // Discount applies to min(quantity, max_tickets) tickets
+                    const eligibleQty = Math.min(quantity, discountResult.max_tickets ?? 1)
+                    const saving = Math.round((unitPrice - discountResult.discounted_price) * eligibleQty)
+                    if (saving > 0) {
+                        subscriberDiscountAmount = saving
+                        subscriberDiscountMeta = {
+                            applied: true,
+                            saving,
+                            discounted_price: discountResult.discounted_price,
+                            original_price: discountResult.original_price,
+                            eligible_tickets: eligibleQty,
+                            tier_id: discountResult.subscription_tier_id,
+                        }
+                        console.log(`👑 Subscriber discount applied: -₱${saving} (${eligibleQty}× tickets, tier ${discountResult.subscription_tier_id})`)
+                    }
+                } else if (discountResult?.has_discount === false) {
+                    // Sub expired mid-checkout — honour the price the user was shown.
+                    // Fall back to the client-sent saving so they aren't overcharged.
+                    const fallbackSaving = Number(clientMetadata?.subscriber_saving ?? 0)
+                    if (fallbackSaving > 0) {
+                        subscriberDiscountAmount = fallbackSaving
+                        subscriberDiscountMeta = {
+                            applied: true,
+                            saving: fallbackSaving,
+                            fallback: true, // subscription lapsed between page load and checkout
+                        }
+                        console.log(`👑 Subscriber discount fallback (sub lapsed): -₱${fallbackSaving}`)
+                    }
+                }
+            } catch (e) {
+                // Non-fatal — proceed without subscriber discount rather than blocking payment
+                console.warn('⚠️ Subscriber discount check failed (non-fatal):', e)
+            }
+        }
+
         // --- UPDATE INTENT WITH PRICING & TIER INFO ---
         const subtotal = unitPrice * quantity
-        let platformFee = (subtotal - discountAmount) * (platformFeePercentage / 100)
-        let totalAmount = (subtotal - discountAmount) + platformFee
-        let feeMetadata = {}
+        // Subscriber discount applies after promo code
+        const totalDiscount = discountAmount + subscriberDiscountAmount
+        let platformFee = (subtotal - totalDiscount) * (platformFeePercentage / 100)
+        // Customer pays ticket price only. Platform fee is deducted from organizer payout via Xendit fees override (see sessionBody.fees).
+        let totalAmount = subtotal - totalDiscount
+        let feeMetadata: Record<string, unknown> = {}
 
-        // Override if Pass Fees is enabled
+        // Override if Pass Fees is enabled (will only be set when unitPrice > 0,
+        // see the guard in the pass-fees block above)
         // @ts-ignore
-        if (req.feeDetails?.passFees) {
+        if (req.feeDetails?.passFees && unitPrice > 0) {
             // @ts-ignore
             const details = req.feeDetails
 
@@ -260,7 +405,12 @@ serve(async (req) => {
             }
         }
 
-        console.log(`Updating Intent ${intentId}: Tier=${tierName}, Promo=${promo_code}, Total=${totalAmount}, Fee%=${platformFeePercentage}`)
+        console.log(`Updating Intent ${intentId}: Tier=${tierName}, Promo=${promo_code}, SubDiscount=${subscriberDiscountAmount}, Total=${totalAmount}, Fee%=${platformFeePercentage}`)
+
+        const combinedMetadata = {
+            ...(Object.keys(feeMetadata).length > 0 ? feeMetadata : {}),
+            ...(Object.keys(subscriberDiscountMeta).length > 0 ? { subscriber_discount: subscriberDiscountMeta } : {}),
+        }
 
         const { error: updateError } = await supabaseAdmin // Use Admin to bypass RLS
             .from('purchase_intents')
@@ -269,14 +419,13 @@ serve(async (req) => {
                 promo_code_id: promoCodeId,
                 unit_price: unitPrice,
                 subtotal: subtotal,
-                discount_amount: discountAmount,
+                discount_amount: discountAmount + subscriberDiscountAmount,
                 platform_fee: platformFee,
                 total_amount: totalAmount,
-                pricing_note: `Tier: ${tierName}${promo_code ? ' | Promo: ' + promo_code : ''}`,
+                pricing_note: `Tier: ${tierName}${promo_code ? ' | Promo: ' + promo_code : ''}${subscriberDiscountAmount > 0 ? ' | Subscriber discount: -₱' + subscriberDiscountAmount : ''}`,
                 fee_percentage: platformFeePercentage,
                 subscribed_to_newsletter: subscribed_to_newsletter ?? false,
-                // @ts-ignore
-                metadata: Object.keys(feeMetadata).length > 0 ? feeMetadata : null
+                metadata: Object.keys(combinedMetadata).length > 0 ? combinedMetadata : null
             })
             .eq('id', intentId)
 
@@ -297,11 +446,99 @@ serve(async (req) => {
             throw new Error('Failed to fetch purchase intent')
         }
 
+        // --- FREE EVENT SHORT-CIRCUIT ---
+        // Skip Xendit entirely — Xendit rejects sessions with amount=0.
+        // Mark completed, issue tickets sync, enqueue confirmation email, return.
+        if (Math.round(Number(intent.total_amount)) === 0) {
+            console.log(`🎟️ Free event — short-circuiting Xendit for intent ${intentId}`)
+
+            await supabaseAdmin
+                .from('purchase_intents')
+                .update({
+                    status: 'completed',
+                    paid_at: new Date().toISOString(),
+                    payment_method: 'FREE',
+                })
+                .eq('id', intentId)
+
+            const { data: tickets, error: issueError } = await supabaseAdmin.rpc(
+                'issue_tickets',
+                {
+                    p_intent_id: intentId,
+                    p_registration_id: registration_id ?? intent.metadata?.registration_id ?? null,
+                }
+            )
+
+            if (issueError) {
+                console.error('❌ Failed to issue free tickets:', issueError)
+                throw new Error(`Failed to issue free tickets: ${issueError.message}`)
+            }
+
+            // Enqueue confirmation email (best-effort, non-blocking)
+            const recipientEmail = user?.email || guest_details?.email
+            const recipientName = user
+                ? (userProfile?.full_name ?? null)
+                : (guest_details?.name ?? null)
+
+            if (recipientEmail && Array.isArray(tickets) && tickets.length > 0) {
+                const { error: queueError } = await supabaseAdmin.rpc('pgmq_send', {
+                    queue_name: 'payment_side_effects',
+                    message: {
+                        type: 'send_ticket_email',
+                        data: {
+                            email: recipientEmail,
+                            name: recipientName,
+                            event_title: intent.event?.title || 'Event',
+                            event_venue: intent.event?.venue_name || 'Venue',
+                            event_date: intent.event?.start_datetime,
+                            event_end_date: intent.event?.end_datetime,
+                            event_cover_image: intent.event?.cover_image_url,
+                            ticket_quantity: quantity,
+                            total_amount: 0,
+                            transaction_ref: intent.xendit_external_id || intentId,
+                            payment_method: 'FREE',
+                            tickets,
+                        },
+                    },
+                })
+                if (queueError) {
+                    console.error('⚠️ Failed to enqueue free ticket email:', queueError)
+                }
+            }
+
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    data: {
+                        intent_id: intentId,
+                        free: true,
+                        total_amount: 0,
+                        tickets_reserved: quantity,
+                        tier_name: tierName,
+                        event: {
+                            title: intent.event?.title,
+                            start_datetime: intent.event?.start_datetime,
+                        },
+                    },
+                }),
+                { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+        }
+
         // Create Xendit Payment Session (Hosted Checkout)
         const xenditKey = Deno.env.get('XENDIT_SECRET_KEY')
         if (!xenditKey) {
             throw new Error('XENDIT_SECRET_KEY not configured')
         }
+
+        // Hanghut's total take per session (overrides static split rule).
+        // = platform % on base, plus the fixed fee if pass_fees_to_customer is enabled.
+        // Xendit's processing fee is deducted from this slice (Hanghut absorbs the variance).
+        // @ts-ignore
+        const passFees = req.feeDetails?.passFees === true
+        // @ts-ignore
+        const fixedFeeAmount = passFees ? req.feeDetails.fixedFee : 0
+        const hanghutTake = Math.round(platformFee + fixedFeeAmount)
 
         const sessionBody = {
             reference_id: intent.xendit_external_id,
@@ -310,12 +547,31 @@ serve(async (req) => {
             amount: Math.round(intent.total_amount),
             currency: 'PHP',
             country: 'PH',
-            // Only include payment channels activated in Xendit Dashboard
-            // Excludes: QR_PH, OTC (7-Eleven/Cebuana/Palawan), BILLEASE
-            allowed_payment_channels: [
-                'CARDS',
-                'GCASH',
-            ],
+            // Only include payment channels activated in Xendit Dashboard.
+            // First-party (main account) checkouts also offer CARDS + GCASH.
+            // Sub-account checkouts keep the channels their sub-accounts support.
+            allowed_payment_channels: useMainWallet
+                ? [
+                    'QRPH',
+                    'PAYMAYA',
+                    'GRABPAY',
+                    'BPI_DIRECT_DEBIT',
+                    'UBP_DIRECT_DEBIT',
+                    'RCBC_DIRECT_DEBIT',
+                ]
+                : [
+                    'PAYMAYA',
+                    'GRABPAY',
+                    'BPI_DIRECT_DEBIT',
+                    'UBP_DIRECT_DEBIT',
+                    'RCBC_DIRECT_DEBIT',
+                ],
+            // Route Hanghut's take to the platform sub-account (overrides split rule per session).
+            // Skipped for first-party events — the money already lands in the main account,
+            // so a PLATFORM fee split is meaningless (and Xendit rejects it without a sub-account).
+            ...(organizerId && hanghutTake > 0 && !useMainWallet ? {
+                fees: [{ type: 'PLATFORM', value: hanghutTake }]
+            } : {}),
             customer: {
                 // Append unique timestamp to reference_id to prevent DUPLICATE_ERROR from Xendit
                 reference_id: (user?.id ? `${user.id}_${Date.now()}` : `guest_${intent.id}_${Date.now()}`),
@@ -346,8 +602,10 @@ serve(async (req) => {
         headers.set('Authorization', `Basic ${btoa(xenditKey + ':')}`)
         headers.set('Content-Type', 'application/json')
 
-        // XenPlatform: Route payment to organizer's sub-account with split rule
-        if (organizerId) {
+        // XenPlatform: Route payment to organizer's sub-account with split rule.
+        // First-party partners (use_main_wallet) skip this entirely — the payment
+        // settles directly to the main Xendit account.
+        if (organizerId && !useMainWallet) {
             const { data: orgPartner } = await supabaseAdmin
                 .from('partners')
                 .select('xendit_account_id, split_rule_id')
@@ -361,6 +619,8 @@ serve(async (req) => {
                 }
                 console.log(`🏦 XenPlatform: routing to sub-account ${orgPartner.xendit_account_id}, split rule ${orgPartner.split_rule_id}`)
             }
+        } else if (useMainWallet) {
+            console.log(`🏦 Main wallet: first-party event ${event_id} settles directly to main account`)
         }
 
         const xenditResponse = await fetch('https://api.xendit.co/sessions', {

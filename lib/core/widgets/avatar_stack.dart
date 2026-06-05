@@ -14,6 +14,7 @@ class AvatarStack extends StatelessWidget {
     required this.avatarUrls,
     required this.totalCount,
     this.size = 32,
+  
     this.overlap = 0.4, // Percentage overlap (0.0 to 1.0)
     this.borderColor = Colors.white,
     this.borderWidth = 2.0,

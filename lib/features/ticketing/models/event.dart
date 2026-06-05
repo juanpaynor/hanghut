@@ -26,6 +26,10 @@ class Event {
   final String? externalTicketUrl;
   final String? externalProviderName;
 
+  // Luma-style features
+  final bool requireApproval;
+  final bool hideVenueUntilRegistered;
+
   Event({
     required this.id,
     required this.title,
@@ -54,6 +58,8 @@ class Event {
     this.isExternal = false,
     this.externalTicketUrl,
     this.externalProviderName,
+    this.requireApproval = false,
+    this.hideVenueUntilRegistered = false,
   });
 
   final bool? passFeesToCustomer;
@@ -102,6 +108,8 @@ class Event {
       isExternal: json['is_external'] as bool? ?? false,
       externalTicketUrl: json['external_ticket_url'] as String?,
       externalProviderName: json['external_provider_name'] as String?,
+      requireApproval: json['require_approval'] as bool? ?? false,
+      hideVenueUntilRegistered: json['hide_venue_until_registered'] as bool? ?? false,
     );
   }
 

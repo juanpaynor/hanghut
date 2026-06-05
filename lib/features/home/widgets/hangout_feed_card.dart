@@ -194,6 +194,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
           Padding(
             padding: const EdgeInsets.all(12.0),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 GestureDetector(
                   onTap: () {

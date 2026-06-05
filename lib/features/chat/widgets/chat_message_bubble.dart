@@ -1,9 +1,13 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:any_link_preview/any_link_preview.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/chat/widgets/poll_message_bubble.dart';
 
@@ -821,25 +825,97 @@ void _showFullScreenImage(BuildContext context, String imageUrl) {
   Navigator.of(context).push(
     MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (context) => Scaffold(
+      builder: (context) => _FullScreenImagePage(imageUrl: imageUrl),
+    ),
+  );
+}
+
+class _FullScreenImagePage extends StatefulWidget {
+  final String imageUrl;
+  const _FullScreenImagePage({required this.imageUrl});
+
+  @override
+  State<_FullScreenImagePage> createState() => _FullScreenImagePageState();
+}
+
+class _FullScreenImagePageState extends State<_FullScreenImagePage> {
+  bool _downloading = false;
+
+  Future<void> _downloadImage() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final response = await http.get(Uri.parse(widget.imageUrl));
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+
+      // Write to a temp file, then hand off to the OS share sheet — where
+      // "Save Image" / "Save to Photos" is a one-tap option. This avoids a
+      // native gallery-saver plugin, keeping the feature Shorebird-patchable.
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}/hanghut_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      await file.writeAsBytes(response.bodyBytes);
+
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)]),
+      );
+    } catch (e) {
+      debugPrint('❌ Download failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to download image')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
         backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          iconTheme: const IconThemeData(color: Colors.white),
-        ),
-        body: Center(
-          child: InteractiveViewer(
-            child: CachedNetworkImage(
-              imageUrl: imageUrl,
-              fit: BoxFit.contain,
-              placeholder: (context, url) =>
-                  const CircularProgressIndicator(color: Colors.white),
-              errorWidget: (context, url, error) =>
-                  const Icon(Icons.broken_image, color: Colors.white, size: 64),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          if (_downloading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.download_rounded, color: Colors.white),
+              tooltip: 'Save to gallery',
+              onPressed: _downloadImage,
             ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          child: CachedNetworkImage(
+            imageUrl: widget.imageUrl,
+            fit: BoxFit.contain,
+            placeholder: (context, url) =>
+                const CircularProgressIndicator(color: Colors.white),
+            errorWidget: (context, url, error) =>
+                const Icon(Icons.broken_image, color: Colors.white, size: 64),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

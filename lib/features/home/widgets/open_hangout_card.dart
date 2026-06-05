@@ -10,11 +10,7 @@ class OpenHangoutCard extends StatefulWidget {
   final Map<String, dynamic> table;
   final VoidCallback onTap;
 
-  const OpenHangoutCard({
-    super.key,
-    required this.table,
-    required this.onTap,
-  });
+  const OpenHangoutCard({super.key, required this.table, required this.onTap});
 
   @override
   State<OpenHangoutCard> createState() => _OpenHangoutCardState();
@@ -67,7 +63,8 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
 
   String get _activityType {
     final type = widget.table['activity_type'] as String?;
-    return type?.toUpperCase() ?? '';
+    if (type == null || type.toLowerCase() == 'other') return '';
+    return type.toUpperCase();
   }
 
   int get _memberCount => widget.table['member_count'] as int? ?? 0;
@@ -102,8 +99,6 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
         scale: _scale,
         duration: const Duration(milliseconds: 100),
         child: Container(
-          width: 200,
-          margin: const EdgeInsets.only(right: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
             color: Colors.black,
@@ -161,11 +156,7 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
               ),
 
               // Top: Capacity badge
-              Positioned(
-                top: 10,
-                right: 10,
-                child: _buildCapacityBadge(),
-              ),
+              Positioned(top: 10, right: 10, child: _buildCapacityBadge()),
 
               // Bottom content
               Positioned(
@@ -310,8 +301,7 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
       label = '$_memberCount/$_maxCapacity 🔥';
     } else {
       bgColor = const Color(0xFFFFD700);
-      label =
-          _maxCapacity > 0 ? '$_memberCount/$_maxCapacity' : 'OPEN';
+      label = _maxCapacity > 0 ? '$_memberCount/$_maxCapacity' : 'OPEN';
     }
 
     return Container(
@@ -403,11 +393,7 @@ class _MiniAvatar extends StatelessWidget {
   final double size;
   final bool isHost;
 
-  const _MiniAvatar({
-    this.url,
-    this.size = 28,
-    this.isHost = false,
-  });
+  const _MiniAvatar({this.url, this.size = 28, this.isHost = false});
 
   @override
   Widget build(BuildContext context) {
@@ -427,22 +413,12 @@ class _MiniAvatar extends StatelessWidget {
           ? CachedNetworkImage(
               imageUrl: url!,
               fit: BoxFit.cover,
-              placeholder: (_, __) => Icon(
-                Icons.person,
-                size: size * 0.5,
-                color: Colors.grey[400],
-              ),
-              errorWidget: (_, __, ___) => Icon(
-                Icons.person,
-                size: size * 0.5,
-                color: Colors.grey[400],
-              ),
+              placeholder: (_, __) =>
+                  Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
+              errorWidget: (_, __, ___) =>
+                  Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
             )
-          : Icon(
-              Icons.person,
-              size: size * 0.5,
-              color: Colors.grey[400],
-            ),
+          : Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),
     );
   }
 }
