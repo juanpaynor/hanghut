@@ -10,6 +10,7 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
+import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -264,6 +265,33 @@ class PushNotificationService {
           MaterialPageRoute(builder: (_) => const MyTicketsScreen()),
         );
       }
+    } else if (data['type'] == 'subscription_confirmed' ||
+        data['type'] == 'subscription_expired' ||
+        data['type'] == 'subscription_renewal_reminder' ||
+        data['type'] == 'claim_fulfilled') {
+      // Fan subscription events → open My Memberships
+      final navContext = navigatorKey.currentContext;
+      if (navContext != null) {
+        Navigator.of(navContext).push(
+          MaterialPageRoute(builder: (_) => const MyMembershipsScreen()),
+        );
+      }
+    } else if (data['type'] == 'new_subscriber_post') {
+      // New members-only post → open Feed tab
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(initialIndex: 1),
+        ),
+        (route) => false,
+      );
+    } else if (data['type'] == 'new_claim_received') {
+      // Organizer: new claim received → open Profile tab (host dashboard)
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(initialIndex: 3),
+        ),
+        (route) => false,
+      );
     } else if (data['type'] == 'broadcast') {
       // Admin broadcast — route to target tab
       // Tab indices: Map=0, Feed=1, Explore=2, Profile=3

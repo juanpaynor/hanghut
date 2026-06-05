@@ -95,7 +95,7 @@ serve(async (req) => {
             const { data: subscriptions, error } = await supabase
                 .from('fan_subscriptions')
                 .select(`
-                    id, fan_id, current_period_end,
+                    id, fan_id, partner_id, current_period_end,
                     subscription_tiers!inner(name, price_monthly),
                     partners!inner(business_name)
                 `)
@@ -141,6 +141,18 @@ serve(async (req) => {
                             }),
                         }),
                     })
+
+                    // Also enqueue a push notification (fire & forget)
+                    supabase.from('notifications').insert({
+                        user_id: sub.fan_id,
+                        actor_id: null,
+                        type: 'subscription_renewal_reminder',
+                        title: `${partner.business_name} renews in 3 days`,
+                        body: `₱${tier.price_monthly}/mo · ${renewalDate}`,
+                        entity_id: sub.partner_id,
+                        metadata: { partner_id: sub.partner_id, subscription_id: sub.id },
+                    }).then(() => {}).catch(() => {})
+
                     sent++
                 } catch (e) {
                     console.error(`⚠️ Failed reminder for sub ${sub.id}:`, e)
@@ -153,7 +165,7 @@ serve(async (req) => {
         }
 
         // Single send (direct call from web)
-        const { fan_id, tier_name, partner_name, price_monthly, current_period_end } = body
+        const { fan_id, tier_name, partner_name, partner_id, price_monthly, current_period_end } = body
         if (!fan_id || !tier_name || !partner_name) {
             return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400, headers: corsHeaders })
         }
@@ -195,6 +207,19 @@ serve(async (req) => {
         if (!res.ok) throw new Error(`Resend error: ${await res.text()}`)
         const data = await res.json()
         console.log(`✅ Renewal reminder sent to ${user.email} (${data.id})`)
+
+        // Also enqueue a push notification (fire & forget)
+        if (partner_id) {
+            supabase.from('notifications').insert({
+                user_id: fan_id,
+                actor_id: null,
+                type: 'subscription_renewal_reminder',
+                title: `${partner_name} renews in 3 days`,
+                body: `₱${price_monthly}/mo · ${renewalDate}`,
+                entity_id: partner_id,
+                metadata: { partner_id },
+            }).then(() => {}).catch(() => {})
+        }
 
         return new Response(JSON.stringify({ success: true, id: data.id }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
