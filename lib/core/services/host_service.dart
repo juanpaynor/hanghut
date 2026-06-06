@@ -225,11 +225,11 @@ class HostService {
     return List<Map<String, dynamic>>.from(response);
   }
 
-  /// Returns all upcoming schedules across all of this host's experiences.
+  /// Returns all schedules across all of this host's experiences.
   Future<List<Map<String, dynamic>>> getAllMySchedules(String partnerId) async {
     final response = await _supabase
         .from('experience_schedules')
-        .select('*, experience:tables!table_id(title, image_url, partner_id)')
+        .select('*, experience:tables!inner!table_id(title, image_url, partner_id)')
         .eq('tables.partner_id', partnerId)
         .order('start_time', ascending: true);
 

@@ -503,8 +503,43 @@ class _SchedulesTabState extends State<_SchedulesTab> {
     }).toList();
   }
 
+  bool _isDayInPast(DateTime day) {
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    return day.isBefore(today);
+  }
+
+  // Returns a colour summarising the slots on a given day for calendar markers.
+  Color _markerColorForDay(DateTime day) {
+    final slots = _getEventsForDay(day);
+    if (slots.isEmpty) return AppTheme.primaryColor;
+    final now = DateTime.now();
+    final allPastOrCancelled = slots.every((s) {
+      final dt = DateTime.tryParse(s['start_time'] ?? '') ?? now;
+      return dt.isBefore(now) || s['status'] == 'cancelled';
+    });
+    if (allPastOrCancelled) return Colors.grey;
+    final anyFull = slots.any((s) {
+      final max = (s['max_guests'] as num?)?.toInt() ?? 0;
+      final cur = (s['current_guests'] as num?)?.toInt() ?? 0;
+      return max > 0 && cur >= max;
+    });
+    if (anyFull) return Colors.orange;
+    return AppTheme.primaryColor;
+  }
+
   Future<void> _showAddSlotSheet(DateTime day) async {
-    // Fetch host's experiences to select from
+    // Past-date guard
+    if (_isDayInPast(day)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot add slots to past dates')),
+      );
+      return;
+    }
+
     final experiences = await widget.hostService.getMyExperiences(
       widget.partnerId,
     );
@@ -518,9 +553,11 @@ class _SchedulesTabState extends State<_SchedulesTab> {
     }
 
     String? selectedTableId = experiences.first['id'] as String;
-    TimeOfDay? startTime = const TimeOfDay(hour: 10, minute: 0);
-    TimeOfDay? endTime = const TimeOfDay(hour: 12, minute: 0);
-    bool _isAdding = false;
+    TimeOfDay startTime = const TimeOfDay(hour: 10, minute: 0);
+    TimeOfDay endTime = const TimeOfDay(hour: 12, minute: 0);
+    bool repeatWeekly = false;
+    int repeatWeeks = 3;
+    bool isAdding = false;
 
     await showModalBottomSheet(
       context: context,
@@ -532,9 +569,9 @@ class _SchedulesTabState extends State<_SchedulesTab> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
-            return Padding(
+            return SingleChildScrollView(
               padding: EdgeInsets.only(
-                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
                 left: 24,
                 right: 24,
                 top: 24,
@@ -543,14 +580,28 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Drag handle
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
                   Text(
-                    'Add slot on ${DateFormat('MMM d, yyyy').format(day)}',
+                    'Add slot — ${DateFormat('EEE, MMM d').format(day)}',
                     style: GoogleFonts.inter(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 20),
+
+                  // Experience picker
                   Text(
                     'Experience',
                     style: GoogleFonts.inter(fontWeight: FontWeight.w600),
@@ -571,8 +622,9 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                       return DropdownMenuItem<String>(
                         value: exp['id'] as String,
                         child: Text(
-                          exp['title'] ?? 'Experience Details',
+                          exp['title'] ?? 'Experience',
                           maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       );
                     }).toList(),
@@ -582,140 +634,197 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                     },
                   ),
                   const SizedBox(height: 20),
+
+                  // Time pickers
                   Row(
                     children: [
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Start Time',
-                              style: GoogleFonts.inter(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            InkWell(
-                              onTap: () async {
-                                final time = await showTimePicker(
-                                  context: ctx,
-                                  initialTime: startTime!,
-                                );
-                                if (time != null)
-                                  setSheetState(() => startTime = time);
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 14,
-                                ),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey[300]!),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(startTime!.format(ctx)),
-                              ),
-                            ),
-                          ],
+                        child: _TimePickerField(
+                          label: 'Start Time',
+                          time: startTime,
+                          onTap: () async {
+                            final t = await showTimePicker(
+                              context: ctx,
+                              initialTime: startTime,
+                            );
+                            if (t != null)
+                              setSheetState(() => startTime = t);
+                          },
                         ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'End Time',
-                              style: GoogleFonts.inter(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            InkWell(
-                              onTap: () async {
-                                final time = await showTimePicker(
-                                  context: ctx,
-                                  initialTime: endTime!,
-                                );
-                                if (time != null)
-                                  setSheetState(() => endTime = time);
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 14,
-                                ),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey[300]!),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(endTime!.format(ctx)),
-                              ),
-                            ),
-                          ],
+                        child: _TimePickerField(
+                          label: 'End Time',
+                          time: endTime,
+                          onTap: () async {
+                            final t = await showTimePicker(
+                              context: ctx,
+                              initialTime: endTime,
+                            );
+                            if (t != null) setSheetState(() => endTime = t);
+                          },
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
+
+                  // Repeat weekly toggle
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[50],
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.grey[200]!),
+                    ),
+                    child: SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 2,
+                      ),
+                      title: Text(
+                        'Repeat weekly',
+                        style: GoogleFonts.inter(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Create the same slot on multiple weeks',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                      value: repeatWeekly,
+                      activeThumbColor: AppTheme.primaryColor,
+                      onChanged: (v) =>
+                          setSheetState(() => repeatWeekly = v),
+                    ),
+                  ),
+
+                  // Week count picker (visible when repeat is on)
+                  if (repeatWeekly) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      'Number of weeks',
+                      style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: repeatWeeks > 1
+                              ? () => setSheetState(() => repeatWeeks--)
+                              : null,
+                          icon: const Icon(Icons.remove_circle_outline),
+                          color: AppTheme.primaryColor,
+                        ),
+                        Expanded(
+                          child: Center(
+                            child: Text(
+                              '$repeatWeeks weeks',
+                              style: GoogleFonts.inter(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: repeatWeeks < 12
+                              ? () => setSheetState(() => repeatWeeks++)
+                              : null,
+                          icon: const Icon(Icons.add_circle_outline),
+                          color: AppTheme.primaryColor,
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Will create ${repeatWeekly ? repeatWeeks : 1} slot${repeatWeeks > 1 ? 's' : ''}'
+                        ' (${DateFormat('MMM d').format(day)}'
+                        '${repeatWeekly && repeatWeeks > 1 ? ' → ${DateFormat('MMM d').format(day.add(Duration(days: 7 * (repeatWeeks - 1))))}' : ''})',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 28),
+
+                  // Submit button
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _isAdding
+                      onPressed: isAdding
                           ? null
                           : () async {
-                              setSheetState(() => _isAdding = true);
+                              setSheetState(() => isAdding = true);
                               try {
                                 final experience = experiences.firstWhere(
                                   (e) => e['id'] == selectedTableId,
                                 );
-                                final maxGuestsStr =
-                                    experience['max_guests']?.toString() ?? '6';
-                                final priceStr =
-                                    experience['price_per_person']
-                                        ?.toString() ??
-                                    '0';
+                                final maxGuests =
+                                    (experience['max_guests'] as num?)
+                                        ?.toInt() ??
+                                    6;
+                                final price =
+                                    (experience['price_per_person'] as num?)
+                                        ?.toDouble();
 
                                 final sDateTime = DateTime(
-                                  day.year,
-                                  day.month,
-                                  day.day,
-                                  startTime!.hour,
-                                  startTime!.minute,
+                                  day.year, day.month, day.day,
+                                  startTime.hour, startTime.minute,
                                 );
                                 final eDateTime = DateTime(
-                                  day.year,
-                                  day.month,
-                                  day.day,
-                                  endTime!.hour,
-                                  endTime!.minute,
+                                  day.year, day.month, day.day,
+                                  endTime.hour, endTime.minute,
                                 );
 
-                                // Check if end time is before start time
-                                if (eDateTime.isBefore(sDateTime)) {
+                                if (!eDateTime.isAfter(sDateTime)) {
                                   throw Exception(
                                     'End time must be after start time.',
                                   );
                                 }
 
-                                // Adding Schedule
-                                await widget.hostService.addSchedule(
-                                  tableId: selectedTableId!,
-                                  startTime: sDateTime,
-                                  endTime: eDateTime,
-                                  maxGuests: int.tryParse(maxGuestsStr) ?? 6,
-                                  pricePerPerson: double.tryParse(priceStr),
-                                );
+                                final weeks = repeatWeekly ? repeatWeeks : 1;
+                                for (int i = 0; i < weeks; i++) {
+                                  await widget.hostService.addSchedule(
+                                    tableId: selectedTableId!,
+                                    startTime: sDateTime
+                                        .add(Duration(days: 7 * i)),
+                                    endTime: eDateTime
+                                        .add(Duration(days: 7 * i)),
+                                    maxGuests: maxGuests,
+                                    pricePerPerson: price,
+                                  );
+                                }
+
                                 if (mounted) Navigator.pop(ctx);
                                 _fetchSchedules();
+                                if (mounted && repeatWeekly && repeatWeeks > 1) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Created $repeatWeeks slots 🎉',
+                                      ),
+                                    ),
+                                  );
+                                }
                               } catch (e) {
                                 if (mounted) {
-                                  ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to add time slot.');
+                                  ErrorHandler.showError(
+                                    context,
+                                    error: e,
+                                    fallbackMessage: 'Unable to add time slot.',
+                                  );
                                 }
                               } finally {
-                                if (mounted) {
-                                  setSheetState(() => _isAdding = false);
-                                }
+                                if (mounted)
+                                  setSheetState(() => isAdding = false);
                               }
                             },
                       style: ElevatedButton.styleFrom(
@@ -725,7 +834,7 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
-                      child: _isAdding
+                      child: isAdding
                           ? const SizedBox(
                               width: 20,
                               height: 20,
@@ -735,15 +844,17 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                               ),
                             )
                           : Text(
-                              'Add Slot',
+                              repeatWeekly && repeatWeeks > 1
+                                  ? 'Add $repeatWeeks Slots'
+                                  : 'Add Slot',
                               style: GoogleFonts.inter(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
+                                fontSize: 15,
                               ),
                             ),
                     ),
                   ),
-                  const SizedBox(height: 32),
                 ],
               ),
             );
@@ -790,6 +901,9 @@ class _SchedulesTabState extends State<_SchedulesTab> {
         ? _getEventsForDay(_selectedDay!)
         : [];
 
+    final isPastSelected =
+        _selectedDay != null && _isDayInPast(_selectedDay!);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Column(
@@ -809,11 +923,30 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                 });
               },
               eventLoader: _getEventsForDay,
+              calendarBuilders: CalendarBuilders(
+                markerBuilder: (ctx, day, events) {
+                  if (events.isEmpty) return const SizedBox.shrink();
+                  final color = _markerColorForDay(day);
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: events
+                        .take(3)
+                        .map(
+                          (_) => Container(
+                            width: 6,
+                            height: 6,
+                            margin: const EdgeInsets.symmetric(horizontal: 1),
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  );
+                },
+              ),
               calendarStyle: CalendarStyle(
-                markerDecoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withOpacity(0.8),
-                  shape: BoxShape.circle,
-                ),
                 selectedDecoration: const BoxDecoration(
                   color: AppTheme.primaryColor,
                   shape: BoxShape.circle,
@@ -830,6 +963,22 @@ class _SchedulesTabState extends State<_SchedulesTab> {
               ),
             ),
           ),
+
+          // Calendar legend
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                _LegendDot(color: AppTheme.primaryColor, label: 'Open'),
+                const SizedBox(width: 12),
+                _LegendDot(color: Colors.orange, label: 'Full'),
+                const SizedBox(width: 12),
+                _LegendDot(color: Colors.grey, label: 'Past'),
+              ],
+            ),
+          ),
+
           Expanded(
             child: _selectedDay == null
                 ? Center(
@@ -842,19 +991,46 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                     padding: const EdgeInsets.only(
                       left: 16,
                       right: 16,
-                      top: 24,
-                      bottom: 80,
+                      top: 16,
+                      bottom: 100,
                     ),
                     children: [
-                      Text(
-                        DateFormat('EEEE, MMMM d, yyyy').format(_selectedDay!),
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              DateFormat('EEEE, MMMM d').format(_selectedDay!),
+                              style: GoogleFonts.inter(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                                color: isPastSelected
+                                    ? Colors.grey
+                                    : Colors.black87,
+                              ),
+                            ),
+                          ),
+                          if (isPastSelected)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[200],
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Past',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
                       if (selectedDayEvents.isEmpty)
                         Center(
                           child: Padding(
@@ -868,8 +1044,11 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
-                                  'No slots scheduled.',
-                                  style: GoogleFonts.inter(color: Colors.grey),
+                                  isPastSelected
+                                      ? 'No slots on this day.'
+                                      : 'No slots yet — tap Add Slot.',
+                                  style:
+                                      GoogleFonts.inter(color: Colors.grey),
                                 ),
                               ],
                             ),
@@ -887,7 +1066,7 @@ class _SchedulesTabState extends State<_SchedulesTab> {
           ),
         ],
       ),
-      floatingActionButton: _selectedDay != null
+      floatingActionButton: _selectedDay != null && !isPastSelected
           ? FloatingActionButton.extended(
               onPressed: () => _showAddSlotSheet(_selectedDay!),
               heroTag: null,
@@ -2681,6 +2860,81 @@ class _DetailRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Shared helper widgets ────────────────────────────────────────────────────
+
+class _TimePickerField extends StatelessWidget {
+  final String label;
+  final TimeOfDay time;
+  final VoidCallback onTap;
+
+  const _TimePickerField({
+    required this.label,
+    required this.time,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey[300]!),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.access_time, size: 16, color: Colors.grey),
+                const SizedBox(width: 8),
+                Text(
+                  time.format(context),
+                  style: GoogleFonts.inter(fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600]),
+        ),
+      ],
     );
   }
 }
