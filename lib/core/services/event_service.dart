@@ -53,6 +53,7 @@ class EventService {
             )
           ''')
           .eq('status', 'active')
+          .eq('is_subscriber_only', false)
           .gte('start_datetime', DateTime.now().toIso8601String())
           .order('start_datetime', ascending: true)
           .limit(limit);
@@ -123,6 +124,7 @@ class EventService {
           ''')
           .eq('organizer_id', organizerId)
           .eq('status', 'active')
+          .eq('is_subscriber_only', false)
           .gte('start_datetime', DateTime.now().toIso8601String());
 
       if (excludeEventId != null) {

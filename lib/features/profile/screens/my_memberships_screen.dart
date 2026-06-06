@@ -407,15 +407,13 @@ class _MembershipCard extends StatelessWidget {
                     else if (isClaim && isActive)
                       _PerkButton(
                         label: type == 'merch' ? 'Claim' : 'Request',
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Claim flow coming soon',
-                              ),
-                            ),
-                          );
-                        },
+                        onTap: () => _showClaimModal(
+                          context,
+                          subscriptionId: sub['id'] as String,
+                          partnerId: sub['partner_id'] as String,
+                          perkType: type,
+                          perkLabel: label,
+                        ),
                       ),
                   ],
                 ),
@@ -517,6 +515,272 @@ class _PerkButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Claim modal (top-level so StatelessWidget cards can call it) ─────────────
+
+Future<void> _showClaimModal(
+  BuildContext context, {
+  required String subscriptionId,
+  required String partnerId,
+  required String perkType,
+  required String perkLabel,
+}) async {
+  final userId = SupabaseConfig.client.auth.currentUser?.id;
+  if (userId == null) return;
+
+  final claimPeriod =
+      '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
+
+  // Dedup check
+  try {
+    final existing = await SupabaseConfig.client
+        .from('subscription_claims')
+        .select('id')
+        .eq('subscription_id', subscriptionId)
+        .eq('perk_type', perkType)
+        .eq('claim_period', claimPeriod)
+        .limit(1);
+    if ((existing as List).isNotEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Already claimed this month'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+  } catch (_) {}
+
+  if (!context.mounted) return;
+
+  await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => _ClaimModal(
+      subscriptionId: subscriptionId,
+      partnerId: partnerId,
+      perkType: perkType,
+      perkLabel: perkLabel,
+      claimPeriod: claimPeriod,
+      fanId: userId,
+    ),
+  );
+}
+
+class _ClaimModal extends StatefulWidget {
+  final String subscriptionId;
+  final String partnerId;
+  final String perkType;
+  final String perkLabel;
+  final String claimPeriod;
+  final String fanId;
+
+  const _ClaimModal({
+    required this.subscriptionId,
+    required this.partnerId,
+    required this.perkType,
+    required this.perkLabel,
+    required this.claimPeriod,
+    required this.fanId,
+  });
+
+  @override
+  State<_ClaimModal> createState() => _ClaimModalState();
+}
+
+class _ClaimModalState extends State<_ClaimModal> {
+  final _formKey = GlobalKey<FormState>();
+  bool _isSubmitting = false;
+
+  final _nameCtrl    = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _sizeCtrl    = TextEditingController();
+  final _notesCtrl   = TextEditingController();
+  final _requestCtrl = TextEditingController();
+  String _platform   = 'Instagram';
+
+  static const _platforms = [
+    'Instagram', 'TikTok', 'Facebook', 'Twitter', 'YouTube',
+  ];
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _addressCtrl.dispose();
+    _sizeCtrl.dispose();
+    _notesCtrl.dispose();
+    _requestCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSubmitting = true);
+
+    final Map<String, dynamic> details = widget.perkType == 'merch'
+        ? {
+            'name': _nameCtrl.text.trim(),
+            'address': _addressCtrl.text.trim(),
+            if (_sizeCtrl.text.trim().isNotEmpty) 'size': _sizeCtrl.text.trim(),
+            if (_notesCtrl.text.trim().isNotEmpty) 'notes': _notesCtrl.text.trim(),
+          }
+        : {
+            'request': _requestCtrl.text.trim(),
+            'platform': _platform,
+          };
+
+    try {
+      await SupabaseConfig.client.from('subscription_claims').insert({
+        'subscription_id': widget.subscriptionId,
+        'fan_id': widget.fanId,
+        'partner_id': widget.partnerId,
+        'perk_type': widget.perkType,
+        'perk_label': widget.perkLabel,
+        'claim_period': widget.claimPeriod,
+        'details': details,
+        'status': 'pending',
+      });
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Claim submitted — organizer will be in touch'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not submit — please try again')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMerch = widget.perkType == 'merch';
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              isMerch
+                  ? 'Claim your ${widget.perkLabel}'
+                  : 'Request a ${widget.perkLabel}',
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 20),
+            if (isMerch) ...[
+              _FormField(ctrl: _nameCtrl, label: 'Full name', required: true),
+              const SizedBox(height: 12),
+              _FormField(ctrl: _addressCtrl, label: 'Delivery address', required: true, maxLines: 2),
+              const SizedBox(height: 12),
+              _FormField(ctrl: _sizeCtrl, label: 'Size (optional)'),
+              const SizedBox(height: 12),
+              _FormField(ctrl: _notesCtrl, label: 'Notes (optional)', maxLines: 2),
+            ] else ...[
+              _FormField(ctrl: _requestCtrl, label: 'Your request', required: true, maxLines: 3),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _platform,
+                decoration: InputDecoration(
+                  labelText: 'Platform',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                ),
+                items: _platforms
+                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                    .toList(),
+                onChanged: (v) => setState(() => _platform = v ?? 'Instagram'),
+              ),
+            ],
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _isSubmitting ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isSubmitting
+                    ? const SizedBox(
+                        width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text(
+                        'Submit',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FormField extends StatelessWidget {
+  final TextEditingController ctrl;
+  final String label;
+  final bool required;
+  final int maxLines;
+
+  const _FormField({
+    required this.ctrl,
+    required this.label,
+    this.required = false,
+    this.maxLines = 1,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: ctrl,
+      maxLines: maxLines,
+      decoration: InputDecoration(
+        labelText: label,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      ),
+      validator: required
+          ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+          : null,
     );
   }
 }
