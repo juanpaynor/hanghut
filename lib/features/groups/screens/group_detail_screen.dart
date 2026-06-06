@@ -42,6 +42,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   List<Map<String, dynamic>> _inviteSearchResults = [];
   bool _showInviteResults = false;
   bool _isInviting = false;
+  bool _isUpdatingBroadcast = false;
 
   String? get _currentUserId => SupabaseConfig.client.auth.currentUser?.id;
   bool get _isMember => _membership?['status'] == 'approved';
@@ -101,6 +102,30 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   Future<void> _loadActivities() async {
     final list = await _groupService.getGroupActivities(widget.groupId);
     if (mounted) setState(() => _activities = list);
+  }
+
+  Future<void> _toggleBroadcastMode(bool value) async {
+    if (_isUpdatingBroadcast) return;
+    setState(() => _isUpdatingBroadcast = true);
+    try {
+      await SupabaseConfig.client
+          .from('groups')
+          .update({'broadcast_mode': value})
+          .eq('id', widget.groupId);
+      if (mounted) {
+        setState(() {
+          _group = {...?_group, 'broadcast_mode': value};
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not update broadcast mode')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdatingBroadcast = false);
+    }
   }
 
   // ─── Actions ───────────────────────────────────
