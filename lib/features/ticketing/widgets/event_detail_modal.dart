@@ -985,12 +985,38 @@ class _EventDetailModalState extends State<EventDetailModal> {
       return;
     }
 
-    // Internal event: normal purchase flow
-    Navigator.pop(context); // Close modal
+    // Internal event: check for existing approved registration first
+    // (require_approval events: if already approved, skip re-registration)
+    _openPurchaseScreen();
+  }
+
+  Future<void> _openPurchaseScreen() async {
+    String? existingRegistrationId;
+
+    final userId = SupabaseConfig.client.auth.currentUser?.id;
+    if (userId != null && widget.event.requireApproval) {
+      try {
+        final existing = await SupabaseConfig.client
+            .from('event_registrations')
+            .select('id')
+            .eq('event_id', widget.event.id)
+            .eq('user_id', userId)
+            .eq('status', 'approved')
+            .limit(1)
+            .maybeSingle();
+        existingRegistrationId = existing?['id'] as String?;
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context);
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => EventPurchaseScreen(event: widget.event),
+        builder: (context) => EventPurchaseScreen(
+          event: widget.event,
+          existingRegistrationId: existingRegistrationId,
+        ),
       ),
     );
   }

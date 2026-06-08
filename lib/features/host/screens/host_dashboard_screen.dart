@@ -779,14 +779,15 @@ class _SchedulesTabState extends State<_SchedulesTab> {
                                   day.year, day.month, day.day,
                                   startTime.hour, startTime.minute,
                                 );
-                                final eDateTime = DateTime(
+                                // If end clock-time <= start, treat as overnight
+                                // (e.g. 9 PM → 2 AM = ends next calendar day)
+                                var eDateTime = DateTime(
                                   day.year, day.month, day.day,
                                   endTime.hour, endTime.minute,
                                 );
-
                                 if (!eDateTime.isAfter(sDateTime)) {
-                                  throw Exception(
-                                    'End time must be after start time.',
+                                  eDateTime = eDateTime.add(
+                                    const Duration(days: 1),
                                   );
                                 }
 
@@ -1165,7 +1166,8 @@ class _ScheduleCard extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '${DateFormat('h:mm a').format(start)} – ${DateFormat('h:mm a').format(end)}',
+                              '${DateFormat('h:mm a').format(start)} – ${DateFormat('h:mm a').format(end)}'
+                                  '${!isSameDay(start, end) ? ' (+1)' : ''}',
                               style: GoogleFonts.inter(
                                 fontSize: 13,
                                 color: Colors.grey[600],
@@ -1878,7 +1880,6 @@ class _EarningsTabState extends State<_EarningsTab> {
               'transaction_count': 0,
             };
 
-        final availableBalance = (summary['available_balance'] as num?)?.toDouble() ?? 0.0;
         final totalWithdrawn = (summary['total_withdrawn'] as num?)?.toDouble() ?? 0.0;
 
         return SingleChildScrollView(
@@ -1886,65 +1887,43 @@ class _EarningsTabState extends State<_EarningsTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Summary card
+              // Compact stats strip
               Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppTheme.primaryColor,
-                      AppTheme.primaryColor.withOpacity(0.7),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Theme.of(context).dividerColor.withOpacity(0.5),
                   ),
-                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Available Balance',
-                      style: GoogleFonts.inter(
-                        color: Colors.white70,
-                        fontSize: 14,
+                child: IntrinsicHeight(
+                  child: Row(
+                    children: [
+                      _StatCell(
+                        label: 'Total Earned',
+                        value: '₱${(summary['total_payout'] as double).toStringAsFixed(0)}',
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '₱${availableBalance.toStringAsFixed(2)}',
-                      style: GoogleFonts.inter(
-                        color: Colors.white,
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
+                      VerticalDivider(
+                        width: 1,
+                        thickness: 1,
+                        color: Theme.of(context).dividerColor.withOpacity(0.4),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        _EarningsStat(
-                          label: 'Total Earned',
-                          value:
-                              '₱${(summary['total_payout'] as double).toStringAsFixed(0)}',
-                          color: Colors.white70,
-                        ),
-                        const SizedBox(width: 24),
-                        _EarningsStat(
-                          label: 'Withdrawn',
-                          value:
-                              '₱${totalWithdrawn.toStringAsFixed(0)}',
-                          color: Colors.white70,
-                        ),
-                        const SizedBox(width: 24),
-                        _EarningsStat(
-                          label: 'Bookings',
-                          value: '${summary['transaction_count']}',
-                          color: Colors.white,
-                        ),
-                      ],
-                    ),
-                  ],
+                      _StatCell(
+                        label: 'Withdrawn',
+                        value: '₱${totalWithdrawn.toStringAsFixed(0)}',
+                      ),
+                      VerticalDivider(
+                        width: 1,
+                        thickness: 1,
+                        color: Theme.of(context).dividerColor.withOpacity(0.4),
+                      ),
+                      _StatCell(
+                        label: 'Bookings',
+                        value: '${summary['transaction_count']}',
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -2600,35 +2579,35 @@ class _EarningsTabState extends State<_EarningsTab> {
   }
 }
 
-class _EarningsStat extends StatelessWidget {
+class _StatCell extends StatelessWidget {
   final String label;
   final String value;
-  final Color color;
 
-  const _EarningsStat({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+  const _StatCell({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: GoogleFonts.inter(color: Colors.white60, fontSize: 11),
-        ),
-        Text(
-          value,
-          style: GoogleFonts.inter(
-            color: color,
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
+    return Expanded(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            value,
+            style: GoogleFonts.inter(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              color: Colors.grey[500],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -41,6 +41,7 @@ class HostService {
           'work_email': workEmail,
           'status': 'pending',
           'kyc_status': 'not_started',
+          'capabilities': ['experience_host'],
         })
         .select()
         .single();

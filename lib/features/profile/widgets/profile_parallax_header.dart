@@ -28,15 +28,9 @@ class ProfileParallaxHeader extends StatelessWidget {
   });
 
   // Badge gradient — consistent purple
-  List<Color> _getBadgeGradient() {
-    return [const Color(0xFF7C3AED), const Color(0xFF5B21B6)];
-  }
-
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final badgeColors = _getBadgeGradient();
 
     return SliverAppBar(
       expandedHeight: 400.0,
@@ -134,53 +128,6 @@ class ProfileParallaxHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Character Class Badge — gradient pill (tappable on own profile)
-                  GestureDetector(
-                    onTap: onBadgeEdit,
-                    child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: badgeColors,
-                          ),
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: badgeColors[0].withValues(alpha: 0.4),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (onBadgeEdit != null)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 5),
-                                child: Icon(Icons.edit, color: Colors.white70, size: 11),
-                              ),
-                            Text(
-                              characterClass.toUpperCase(),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 1.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  )
-                      .animate()
-                      .fadeIn(duration: 600.ms, delay: 200.ms)
-                      .slideX(begin: -0.2, end: 0),
-                  const SizedBox(height: 10),
-
                   // Display Name — bold, centered
                   Text(
                         displayName,

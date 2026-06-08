@@ -127,12 +127,9 @@ serve(async (req: Request) => {
             amount: Math.round(amount),
             currency: 'PHP',
             country: 'PH',
-            // Only include payment channels activated in Xendit Dashboard
-            // Excludes: QR_PH, OTC, BILLEASE
-            allowed_payment_channels: [
-                'CARDS',
-                'GCASH',
-            ],
+            // No channel restriction — Xendit shows all channels available
+            // for this sub-account. Each partner's channels differ based on
+            // their individual Xendit sub-account activation.
             customer: {
                 reference_id: `${user.id}_topup_${Date.now()}`,
                 type: 'INDIVIDUAL',
