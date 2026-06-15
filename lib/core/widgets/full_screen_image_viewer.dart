@@ -5,12 +5,14 @@ class FullScreenImageViewer extends StatefulWidget {
   final String imageUrl;
   final List<String>? imageUrls; // Optional: for carousel mode
   final int? initialIndex; // Optional: starting index for carousel
+  final Object? heroTag; // Optional: match a source Hero for a morph transition
 
   const FullScreenImageViewer({
     super.key,
     required this.imageUrl,
     this.imageUrls,
     this.initialIndex,
+    this.heroTag,
   });
 
   @override
@@ -63,7 +65,11 @@ class _FullScreenImageViewerState extends State<FullScreenImageViewer> {
               minScale: 0.5,
               maxScale: 4.0,
               child: Hero(
-                tag: images[index],
+                // Single-image mode can supply a custom tag to morph from a
+                // specific source widget; carousel mode keys by URL.
+                tag: (widget.imageUrls == null && widget.heroTag != null)
+                    ? widget.heroTag!
+                    : images[index],
                 child: CachedNetworkImage(
                   imageUrl: images[index],
                   fit: BoxFit.contain,

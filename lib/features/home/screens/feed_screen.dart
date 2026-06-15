@@ -765,9 +765,26 @@ class FeedScreenState extends State<FeedScreen>
                   // 1. App Bar
                   SliverAppBar(
                     floating: true,
-                    backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-                    surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
+                    backgroundColor: Colors.transparent,
+                    surfaceTintColor: Colors.transparent,
                     elevation: 0,
+                    flexibleSpace: ClipRect(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Colors.white.withOpacity(0.82),
+                                Colors.white.withOpacity(0.70),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     centerTitle: false,
                     title: Padding(
                       padding: const EdgeInsets.only(left: 8.0),

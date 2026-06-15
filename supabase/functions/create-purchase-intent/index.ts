@@ -203,14 +203,20 @@ serve(async (req) => {
         // First-party partners settle directly to the main Xendit account
         // (no sub-account, no split rule, no PLATFORM fee override).
         let useMainWallet = false
+        // Cards + GCash require Xendit to have ACTIVATED the capabilities on the
+        // sub-account (account_holder.capabilities.status:live) — which only happens
+        // after KYC passes. xendit_cards_gcash_live is the true signal; gating on
+        // kyc_status='verified' alone would offer them before they're actually live.
+        let organizerCardsGcashLive = false
         if (organizerId) {
             const { data: partner } = await supabaseClient
                 .from('partners')
-                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket, xendit_account_id, split_rule_id, use_main_wallet')
+                .select('custom_percentage, pass_fees_to_customer, fixed_fee_per_ticket, xendit_account_id, split_rule_id, use_main_wallet, xendit_cards_gcash_live')
                 .eq('id', organizerId)
                 .single()
 
             useMainWallet = partner?.use_main_wallet === true
+            organizerCardsGcashLive = partner?.xendit_cards_gcash_live === true
 
             // Check if distinct custom_percentage exists (it might be 0, so check undefined/null)
             if (partner && partner.custom_percentage !== null && partner.custom_percentage !== undefined) {
@@ -547,25 +553,19 @@ serve(async (req) => {
             amount: Math.round(intent.total_amount),
             currency: 'PHP',
             country: 'PH',
-            // Only include payment channels activated in Xendit Dashboard.
-            // First-party (main account) checkouts also offer CARDS + GCASH.
-            // Sub-account checkouts keep the channels their sub-accounts support.
-            allowed_payment_channels: useMainWallet
-                ? [
-                    'QRPH',
-                    'PAYMAYA',
-                    'GRABPAY',
-                    'BPI_DIRECT_DEBIT',
-                    'UBP_DIRECT_DEBIT',
-                    'RCBC_DIRECT_DEBIT',
-                ]
-                : [
-                    'PAYMAYA',
-                    'GRABPAY',
-                    'BPI_DIRECT_DEBIT',
-                    'UBP_DIRECT_DEBIT',
-                    'RCBC_DIRECT_DEBIT',
-                ],
+            // Payment channels. Base set works for any account (incl. unverified
+            // sub-accounts). CARDS + GCASH are gated by Xendit behind KYC, so we
+            // only add them for the main wallet (verified platform account) or a
+            // sub-account whose KYC is verified. QRPH stays main-wallet-only.
+            allowed_payment_channels: [
+                ...(useMainWallet ? ['QRPH'] : []),
+                ...(useMainWallet || organizerCardsGcashLive ? ['CARDS', 'GCASH'] : []),
+                'PAYMAYA',
+                'GRABPAY',
+                'BPI_DIRECT_DEBIT',
+                'UBP_DIRECT_DEBIT',
+                'RCBC_DIRECT_DEBIT',
+            ],
             // Route Hanghut's take to the platform sub-account (overrides split rule per session).
             // Skipped for first-party events — the money already lands in the main account,
             // so a PLATFORM fee split is meaningless (and Xendit rejects it without a sub-account).

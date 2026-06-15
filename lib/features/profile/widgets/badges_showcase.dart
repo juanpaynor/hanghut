@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart' hide Badge;
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/gamification/models/badge.dart';
@@ -82,78 +83,142 @@ class BadgesShowcase extends StatelessWidget {
 
     final earnedCount = earnedIds.length;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Row(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      Colors.white.withValues(alpha: 0.12),
+                      Colors.white.withValues(alpha: 0.06),
+                    ]
+                  : [
+                      Colors.white.withValues(alpha: 0.92),
+                      Colors.white.withValues(alpha: 0.7),
+                    ],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.08)
+                  : Colors.white.withValues(alpha: 0.7),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('🏅', style: TextStyle(fontSize: 18)),
-              const SizedBox(width: 8),
-              Text(
-                'Badges',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: isDark ? Colors.white : Colors.black87,
+              // Header
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFA5B0FF), AppTheme.primaryColor],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppTheme.primaryColor.withValues(alpha: 0.35),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.workspace_premium_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Badges',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$earnedCount/${allBadges.length}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.primaryColor,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '$earnedCount/${allBadges.length}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.primaryColor,
-                  ),
+
+              // Horizontal scroll of badges
+              SizedBox(
+                height: 88,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: sorted.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (context, index) {
+                    final badge = sorted[index];
+                    final isEarned = earnedIds.contains(badge.id);
+                    return _BadgeChip(
+                      badge: badge,
+                      isEarned: isEarned,
+                      earnedAt: isEarned
+                          ? earnedBadges
+                                .firstWhere((e) => e.badgeId == badge.id)
+                                .earnedAt
+                          : null,
+                      isDark: isDark,
+                      onTap: () => _showBadgeDetail(
+                        context,
+                        badge,
+                        isEarned,
+                        isEarned
+                            ? earnedBadges
+                                  .firstWhere((e) => e.badgeId == badge.id)
+                                  .earnedAt
+                            : null,
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
           ),
         ),
-
-        // Horizontal scroll of badges
-        SizedBox(
-          height: 88,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: sorted.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final badge = sorted[index];
-              final isEarned = earnedIds.contains(badge.id);
-              return _BadgeChip(
-                badge: badge,
-                isEarned: isEarned,
-                earnedAt: isEarned
-                    ? earnedBadges
-                          .firstWhere((e) => e.badgeId == badge.id)
-                          .earnedAt
-                    : null,
-                isDark: isDark,
-                onTap: () => _showBadgeDetail(
-                  context,
-                  badge,
-                  isEarned,
-                  isEarned
-                      ? earnedBadges
-                            .firstWhere((e) => e.badgeId == badge.id)
-                            .earnedAt
-                      : null,
-                ),
-              );
-            },
-          ),
-        ),
-      ],
+      ),
     );
   }
 

@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -49,11 +50,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
   Map<String, dynamic>? _stats;
-  List<dynamic> _hostedTables = [];
   List<Map<String, dynamic>> _userPhotos = [];
   List<String> _postImages = [];
   List<String> _userInterests = [];
-  bool _isAdventureLogExpanded = true;
   int _postImagesPage = 0;
   static const int _postImagesPageSize = 30;
   bool _hasMorePostImages = true;
@@ -284,41 +283,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final joinedCount = results[1] as int;
       final followersCount = results[2] as int;
       final followingCount = results[3] as int;
-      final hostedTables = results[4] as List<dynamic>;
-      final joinedTables = results[5] as List<dynamic>;
       final photosResponse = results[6] as List<dynamic>;
       final gamificationResult = results[7] as Map<String, dynamic>?;
       final interestsResponse = results[8] as List<dynamic>;
-
-      // PHASE 1 FIX: Combine hosted and joined tables for complete history
-      final List<Map<String, dynamic>> allTables = [];
-
-      // Add hosted tables
-      for (var table in hostedTables) {
-        allTables.add({
-          ...table,
-          'role': 'host',
-          'sort_date': table['datetime'],
-        });
-      }
-
-      // Add joined tables
-      for (var participation in joinedTables) {
-        if (participation['table'] != null) {
-          allTables.add({
-            ...participation['table'],
-            'role': 'participant',
-            'sort_date': participation['table']['datetime'],
-          });
-        }
-      }
-
-      // Sort combined list by date
-      allTables.sort((a, b) {
-        final aDate = DateTime.tryParse(a['sort_date'] ?? '') ?? DateTime(0);
-        final bDate = DateTime.tryParse(b['sort_date'] ?? '') ?? DateTime(0);
-        return bDate.compareTo(aDate);
-      });
 
       final List<Map<String, dynamic>> photos = List<Map<String, dynamic>>.from(
         photosResponse,
@@ -344,7 +311,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             'followers': followersCount,
             'following': followingCount,
           };
-          _hostedTables = allTables.take(10).toList();
           _userPhotos = photos;
           _userInterests = interestsResponse
               .map((r) {
@@ -803,6 +769,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
+  /// Whether the organizer has anything live worth showing: at least one
+  /// active upcoming event or one active subscription tier. The RPC already
+  /// filters both lists to active/upcoming only.
+  bool get _hasActiveOrganizerContent {
+    if (_organizerProfile == null) return false;
+    final events = _organizerProfile!['events'];
+    final tiers = _organizerProfile!['tiers'];
+    final hasEvents = events is List && events.isNotEmpty;
+    final hasTiers = tiers is List && tiers.isNotEmpty;
+    return hasEvents || hasTiers;
+  }
+
   @override
   Widget build(BuildContext context) {
     // 1. Loading State (Premium Shimmer)
@@ -1240,8 +1218,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ),
 
-            // 5. Organizer Section (if applicable)
-            if (_organizerProfile != null)
+            // 5. Organizer Section — only shown when the organizer has active
+            // content (an upcoming event OR an active subscription tier).
+            // Being an approved partner alone is not enough: cancelling all
+            // events/tiers hides this section.
+            if (_organizerProfile != null && _hasActiveOrganizerContent)
               SliverToBoxAdapter(
                 child: _OrganizerSection(
                   profile: _organizerProfile!,
@@ -1362,49 +1343,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ),
               ),
 
-            // 6c. Photos SliverGrid (lazy, paginated)
+            // 6c. Photos — Polaroid scatter (lazy, paginated)
             if (_postImages.isNotEmpty)
               SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
                 sliver: SliverGrid(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 2,
-                    mainAxisSpacing: 2,
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 14,
+                    childAspectRatio: 0.80,
                   ),
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => FullScreenImageViewer(
-                              imageUrl: _postImages[index],
-                            ),
-                          ),
-                        );
-                      },
-                      child: CachedNetworkImage(
-                        imageUrl: _postImages[index],
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.05)
-                              : Colors.grey[100],
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.05)
-                              : Colors.grey[100],
-                          child: Icon(
-                            Icons.broken_image_outlined,
-                            color: Colors.grey[400],
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                    );
-                  }, childCount: _postImages.length),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _buildPolaroidTile(context, index, isDark),
+                    childCount: _postImages.length,
+                  ),
                 ),
               ),
 
@@ -1438,226 +1391,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ),
               ),
 
-            // 7. Adventure Log (History)
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate([
-                  GestureDetector(
-                    onTap: () => setState(
-                      () => _isAdventureLogExpanded = !_isAdventureLogExpanded,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _buildSectionHeader(context, 'ADVENTURE LOG'),
-                        ),
-                        Icon(
-                          _isAdventureLogExpanded
-                              ? Icons.keyboard_arrow_up_rounded
-                              : Icons.keyboard_arrow_down_rounded,
-                          color: Colors.grey[500],
-                          size: 22,
-                        ),
-                        const SizedBox(width: 4),
-                      ],
-                    ),
-                  ),
-                  if (_isAdventureLogExpanded) ...[
-                    const SizedBox(height: 16),
-                    if (_hostedTables.isEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        alignment: Alignment.center,
-                        child: Column(
-                          children: [
-                            Icon(
-                              Icons.explore_outlined,
-                              size: 40,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'No adventures yet',
-                              style: TextStyle(
-                                color: Colors.grey[500],
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      ..._hostedTables.asMap().entries.map((entry) {
-                        final i = entry.key;
-                        final table = entry.value;
-                        final isHost = table['role'] == 'host';
-                        final isLast = i == _hostedTables.length - 1;
-                        DateTime? dt;
-                        try {
-                          if (table['datetime'] != null)
-                            dt = DateTime.parse(table['datetime']);
-                        } catch (_) {}
-
-                        return IntrinsicHeight(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // Timeline spine
-                              SizedBox(
-                                width: 40,
-                                child: Column(
-                                  children: [
-                                    Container(
-                                      width: 28,
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: isHost
-                                            ? AppTheme.accentColor.withOpacity(
-                                                0.15,
-                                              )
-                                            : Colors.blue.withOpacity(0.12),
-                                        border: Border.all(
-                                          color: isHost
-                                              ? AppTheme.accentColor
-                                              : Colors.blue,
-                                          width: 1.5,
-                                        ),
-                                      ),
-                                      child: Icon(
-                                        isHost
-                                            ? Icons.star_rounded
-                                            : Icons.people_rounded,
-                                        size: 14,
-                                        color: isHost
-                                            ? AppTheme.accentColor
-                                            : Colors.blue,
-                                      ),
-                                    ),
-                                    if (!isLast)
-                                      Expanded(
-                                        child: Container(
-                                          width: 1.5,
-                                          color: isDark
-                                              ? Colors.white.withOpacity(0.08)
-                                              : Colors.grey.shade200,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              // Card
-                              Expanded(
-                                child: Container(
-                                  margin: EdgeInsets.only(
-                                    bottom: isLast ? 0 : 12,
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 12,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isDark
-                                        ? Colors.white.withOpacity(0.04)
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                      color: isDark
-                                          ? Colors.white.withOpacity(0.06)
-                                          : Colors.grey.shade100,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              table['title'] ?? 'Unknown Event',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 14,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 7,
-                                              vertical: 2,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: isHost
-                                                  ? AppTheme.accentColor
-                                                        .withOpacity(0.12)
-                                                  : Colors.blue.withOpacity(
-                                                      0.10,
-                                                    ),
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                            ),
-                                            child: Text(
-                                              isHost ? 'HOST' : 'JOINED',
-                                              style: TextStyle(
-                                                fontSize: 9,
-                                                fontWeight: FontWeight.bold,
-                                                letterSpacing: 0.6,
-                                                color: isHost
-                                                    ? AppTheme.accentColor
-                                                    : Colors.blue,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Row(
-                                        children: [
-                                          Icon(
-                                            Icons.calendar_today_outlined,
-                                            size: 11,
-                                            color: Colors.grey[500],
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            dt != null
-                                                ? DateFormat(
-                                                    'MMM d, y',
-                                                  ).format(dt)
-                                                : 'Date unknown',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey[500],
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          Text(
-                                            isHost ? '+100 XP' : '+50 XP',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.green[600],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-                  ], // end if _isAdventureLogExpanded
-                  SizedBox(height: MediaQuery.of(context).padding.bottom + 80),
-                ]),
+            // Bottom spacer
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: MediaQuery.of(context).padding.bottom + 80,
               ),
             ),
           ], // Close slivers array
@@ -1686,6 +1423,98 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // Deterministic tilt per index so the scatter is stable across rebuilds.
+  static const _polaroidTilts = [
+    -0.045,
+    0.032,
+    -0.022,
+    0.05,
+    -0.05,
+    0.028,
+    -0.035,
+    0.04,
+  ];
+
+  /// A single tilted polaroid card for the PHOTOS scatter.
+  Widget _buildPolaroidTile(BuildContext context, int index, bool isDark) {
+    final url = _postImages[index];
+    final tilt = _polaroidTilts[index % _polaroidTilts.length];
+    // Unique per-tile tag — guards against duplicate URLs in the grid.
+    final heroTag = 'polaroid_${index}_$url';
+
+    return Transform.rotate(
+      angle: tilt,
+      child: GestureDetector(
+        onTap: () => _openPhoto(context, url, heroTag),
+        child: Container(
+          // White polaroid frame — chunkier at the bottom lip.
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 20),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF26262E) : Colors.white,
+            borderRadius: BorderRadius.circular(4),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.18),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: Hero(
+                    tag: heroTag,
+                    child: CachedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      placeholder: (_, __) => Container(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : Colors.grey[200],
+                      ),
+                      errorWidget: (_, __, ___) => Container(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : Colors.grey[200],
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.grey[400],
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens a photo with a morph (Hero) transition. The black backdrop fades in
+  /// while the tapped image flies and expands into the fullscreen viewer.
+  void _openPhoto(BuildContext context, String url, Object heroTag) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        transitionDuration: const Duration(milliseconds: 350),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (_, __, ___) =>
+            FullScreenImageViewer(imageUrl: url, heroTag: heroTag),
+        transitionsBuilder: (_, animation, __, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
     );
   }
 }
@@ -2231,92 +2060,130 @@ class _XpLevelBar extends StatelessWidget {
     final xpInCurrentLevel = isMaxLevel ? xp : xp - kLevelThresholds[level - 1];
     final xpNeeded = isMaxLevel ? 0 : xpForNext - kLevelThresholds[level - 1];
 
-    final barColor = level >= 8
-        ? const Color(0xFFFFD700) // gold for high levels
-        : level >= 5
-        ? const Color(0xFF8B5CF6) // purple mid
-        : const Color(0xFF6366F1); // indigo low
+    // Hanghut brand indigo — consistent across all levels.
+    const barColor = AppTheme.primaryColor; // 0xFF6B7FFF
+    const barColorLight = Color(0xFFA5B0FF);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(0.04) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.shade100,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [barColor, barColor.withOpacity(0.6)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  '$level',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      Colors.white.withValues(alpha: 0.12),
+                      Colors.white.withValues(alpha: 0.06),
+                    ]
+                  : [
+                      Colors.white.withValues(alpha: 0.92),
+                      Colors.white.withValues(alpha: 0.7),
+                    ],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.08)
+                  : Colors.white.withValues(alpha: 0.7),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: barColor.withValues(alpha: 0.12),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Level $level${isMaxLevel ? ' · MAX' : ''}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
-                            color: barColor,
-                          ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [barColorLight, barColor],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: barColor.withValues(alpha: 0.4),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
                         ),
-                        Text(
-                          isMaxLevel
-                              ? '$xp XP total'
-                              : '$xpInCurrentLevel / $xpNeeded XP',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[500],
+                      ],
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '$level',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Level $level${isMaxLevel ? ' · MAX' : ''}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                color: barColor,
+                              ),
+                            ),
+                            Text(
+                              isMaxLevel
+                                  ? '$xp XP total'
+                                  : '$xpInCurrentLevel / $xpNeeded XP',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? Colors.grey[400]
+                                    : Colors.grey[500],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 7),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: isMaxLevel ? 1.0 : progress,
+                            minHeight: 7,
+                            backgroundColor: isDark
+                                ? Colors.white.withValues(alpha: 0.1)
+                                : barColor.withValues(alpha: 0.12),
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              barColor,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: isMaxLevel ? 1.0 : progress,
-                        minHeight: 6,
-                        backgroundColor: isDark
-                            ? Colors.white.withOpacity(0.08)
-                            : Colors.grey.shade100,
-                        valueColor: AlwaysStoppedAnimation<Color>(barColor),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

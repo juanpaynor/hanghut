@@ -66,6 +66,20 @@ const GENDER_MAP: Record<string, string> = {
     'other': 'OTHER',
 }
 
+// Private bucket holding KYC documents (system of record for multi-gateway reuse)
+const KYC_BUCKET = 'kyc-documents'
+
+// Document columns store a bucket-relative PATH (e.g. "userId/id-123.png"), not a URL.
+// Defensive: if a full URL ever slipped in, extract the path after the bucket segment.
+function toStoragePath(stored: string): string {
+    if (stored.startsWith('http')) {
+        const marker = `/${KYC_BUCKET}/`
+        const idx = stored.indexOf(marker)
+        if (idx !== -1) return stored.slice(idx + marker.length).split('?')[0]
+    }
+    return stored
+}
+
 serve(async (req: Request) => {
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders })
@@ -198,18 +212,22 @@ serve(async (req: Request) => {
         const kycDocuments: { type: string; country: string; file_id: string }[] = []
 
         for (const doc of docsToUpload) {
-            const docUrl = partner[doc.field] as string
-            console.log(`  📎 Uploading ${doc.type} from: ${docUrl}`)
+            const docPath = toStoragePath(partner[doc.field] as string)
+            console.log(`  📎 Uploading ${doc.type} from: ${docPath}`)
 
-            // Download file from Supabase Storage URL
-            const fileResponse = await fetch(docUrl)
-            if (!fileResponse.ok) throw new Error(`Failed to download ${doc.field} from storage: ${fileResponse.status}`)
+            // Download bytes from the PRIVATE kyc-documents bucket via the service-role
+            // client. The columns store a bucket-relative PATH (not a URL) and the bucket
+            // is private, so a plain fetch() cannot read them.
+            const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage
+                .from(KYC_BUCKET)
+                .download(docPath)
 
-            const fileBlob = await fileResponse.blob()
+            if (downloadError || !fileBlob) {
+                throw new Error(`Failed to download ${doc.field} from storage (${docPath}): ${downloadError?.message || 'not found'}`)
+            }
 
-            // Determine filename and extension
-            const urlPath = new URL(docUrl).pathname
-            const filename = urlPath.split('/').pop() || `${doc.type}.pdf`
+            // Determine filename and extension from the storage path
+            const filename = docPath.split('/').pop() || `${doc.type}.pdf`
 
             // Upload to Xendit File API
             const formData = new FormData()

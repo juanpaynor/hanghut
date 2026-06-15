@@ -118,12 +118,19 @@ class _DraggableChatBubbleState extends State<DraggableChatBubble>
                   width: _bubbleSize,
                   height: _bubbleSize,
                   decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor,
                     shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color.lerp(Theme.of(context).primaryColor, Colors.white, 0.30)!,
+                        Theme.of(context).primaryColor,
+                      ],
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 8,
+                        color: Theme.of(context).primaryColor.withOpacity(0.3),
+                        blurRadius: 12,
                         offset: const Offset(0, 4),
                       ),
                     ],

@@ -1,7 +1,51 @@
 /**
  * ============================================================================
- * XENDIT WEBHOOK HANDLER — VERSION 31 (Queue-Based Side Effects)
+ * XENDIT WEBHOOK HANDLER — VERSION 35 (legacy account holder KYC + capabilities)
  * ============================================================================
+ *
+ * WHAT CHANGED (v34 → v35):
+ * -------------------------
+ * 1. CAPABILITIES — on account_holder.kyc.status:passed we now PATCH the account
+ *    holder to request Cards (PH_CARDS) + GCash capabilities (only allowed once
+ *    KYC is PASSED). A new handler for account_holder.capabilities.status:live
+ *    flips partners.xendit_cards_gcash_live so checkout starts offering them.
+ *    (Pivoted off account_verification — capabilities only exist on the legacy
+ *    account_holder object.)
+ *
+ * WHAT CHANGED (v33 → v34):
+ * -------------------------
+ * 1. ACCOUNT VERIFICATION — the KYC result handler now maps the
+ *    account_verification status enum: PASSED → verified, FAILED → rejected,
+ *    AWAITING_RESUBMISSION → resubmission_required,
+ *    PENDING_VERIFICATION / VERIFICATION_IN_PROGRESS → submitted.
+ * 2. Partner lookup falls back to partner_gateway_accounts
+ *    (verification_id / account_id / account_holder_id), since
+ *    account_verification callbacks reference the verification / sub-account id.
+ * 3. Mirrors the raw status onto partner_gateway_accounts and notifies the
+ *    organizer on resubmission_required too.
+ *
+ * WHAT CHANGED (v32 → v33):
+ * -------------------------
+ * 1. KYC RESULT HANDLER — Handles Xendit xenPlatform Account Holder KYC
+ *    verification callbacks (account_holder.kyc.status / account.updated).
+ *    Maps Xendit's KYC status to partners.kyc_status (submitted → verified /
+ *    rejected), stores rejection reasons, and notifies the organizer (in-app
+ *    notification + best-effort push). This closes the sub-merchant onboarding
+ *    loop — without it kyc_status was stuck at 'submitted' forever.
+ *    NOTE: requires kyc_status_type enum value 'submitted' and notifications
+ *    types 'kyc_verified'/'kyc_rejected' (added via migration).
+ *
+ * WHAT CHANGED (v31 → v32):
+ * -------------------------
+ * 1. SEAT BOOKING — After issue_tickets succeeds, book_seats_for_intent flips
+ *    the intent's assigned seats to 'booked' and clears their holds. Failure/
+ *    expiry/cancellation paths call release_seats_for_intent so held seats
+ *    return to the available pool.
+ *
+ * 2. BUGFIX — the atomic idempotency claim referenced `supabaseAdmin`, which
+ *    was never defined in this function (crashed the event-ticket success
+ *    path with a ReferenceError). Now uses `supabaseClient` (already service
+ *    role).
  *
  * WHAT CHANGED (v30 → v31):
  * -------------------------
@@ -126,7 +170,7 @@ function extractPaymentMethod(data: any): string {
 }
 
 serve(async (req) => {
-    console.log('🚨 WEBHOOK RECEIVED - VERSION 31 (QUEUE-BASED SIDE EFFECTS) 🚨')
+    console.log('🚨 WEBHOOK RECEIVED - VERSION 33 (xenPlatform KYC RESULT) 🚨')
 
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -377,7 +421,7 @@ serve(async (req) => {
             console.log(`💳 Raw payments array:`, JSON.stringify(data.payments));
             console.log(`💳 Raw payment_channel:`, data.payment_channel);
 
-            const { data: claimedRows, error: claimError } = await supabaseAdmin
+            const { data: claimedRows, error: claimError } = await supabaseClient
                 .from('purchase_intents')
                 .update({
                     status: 'completed',
@@ -456,6 +500,20 @@ serve(async (req) => {
                 console.error('❌ Failed to issue tickets:', issueError)
             } else {
                 console.log(`✅ Successfully issued ${generatedTickets?.length ?? 0} tickets`)
+
+                // ==========================================
+                // 💺 BOOK ASSIGNED SEATS (v32)
+                // ==========================================
+                // Seated events: flip the intent's held seats to 'booked' and clear
+                // their holds. No-op (returns 0) for GA intents without seats.
+                const { data: bookedCount, error: bookError } = await supabaseClient.rpc('book_seats_for_intent', {
+                    p_intent_id: intent.id,
+                })
+                if (bookError) {
+                    console.error('⚠️ Failed to book seats:', bookError)
+                } else if (bookedCount > 0) {
+                    console.log(`💺 Booked ${bookedCount} seats for intent ${intent.id}`)
+                }
 
                 // ==========================================
                 // 📬 ENQUEUE SIDE-EFFECTS (v31: QUEUE-BASED)
@@ -600,6 +658,16 @@ serve(async (req) => {
                             .eq('id', intent.event_id)
                     }
                 })
+
+                // 💺 Release any held seats back to the available pool (v32)
+                const { data: releasedCount, error: releaseError } = await supabaseClient.rpc('release_seats_for_intent', {
+                    p_intent_id: intent.id,
+                })
+                if (releaseError) {
+                    console.error('⚠️ Failed to release seats:', releaseError)
+                } else if (releasedCount > 0) {
+                    console.log(`💺 Released ${releasedCount} held seats for intent ${intent.id}`)
+                }
 
                 console.log(`❌ Released ${intent.quantity} tickets for intent ${intent.id}`)
             }
@@ -793,6 +861,21 @@ serve(async (req) => {
                             }
                         })
 
+                        // 💺 Free the refunded seats (v32): booked → available
+                        const { data: refundedSeats, error: seatFreeError } = await supabaseClient
+                            .from('tickets')
+                            .select('seat_id')
+                            .eq('purchase_intent_id', intentId)
+                            .not('seat_id', 'is', null)
+                        if (!seatFreeError && refundedSeats && refundedSeats.length > 0) {
+                            const seatIds = refundedSeats.map((t: any) => t.seat_id)
+                            await supabaseClient
+                                .from('seats')
+                                .update({ status: 'available' })
+                                .in('id', seatIds)
+                            console.log(`💺 Freed ${seatIds.length} refunded seats for intent ${intentId}`)
+                        }
+
                         // 4. Record Negative Transaction (Accounting)
                         const { data: partner } = await supabaseClient
                             .from('partners')
@@ -877,11 +960,265 @@ serve(async (req) => {
             return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
+        // ==========================================
+        // 💳 CAPABILITIES STATUS (v35) — Cards/GCash activation result
+        // ==========================================
+        // account_holder.capabilities.status:live | declined | resubmission_required.
+        // When LIVE, flip partners.xendit_cards_gcash_live so checkout starts
+        // offering Cards + GCash. Handle BEFORE the KYC block (a capabilities
+        // event would otherwise fall into the KYC mapping and be ignored).
+        if (typeof eventType === 'string' && eventType.includes('capabilities')) {
+            const data = payload.data || payload
+            const accountHolderId = data.account_holder_id || data.id || payload.account_holder_id
+            const capStatus = String(data.status || data.capabilities?.status || eventType.split(':').pop() || '').toUpperCase()
+            console.log(`💳 Capabilities webhook: holder=${accountHolderId}, status=${capStatus}`)
+
+            let partnerId: string | null = null
+            let partnerUserId: string | null = null
+            if (accountHolderId) {
+                const { data: p } = await supabaseClient
+                    .from('partners').select('id, user_id')
+                    .eq('xendit_account_holder_id', accountHolderId).maybeSingle()
+                if (p) { partnerId = p.id; partnerUserId = p.user_id }
+            }
+
+            if (partnerId) {
+                if (capStatus.includes('LIVE') || capStatus.includes('ACTIVE')) {
+                    await supabaseClient.from('partners').update({ xendit_cards_gcash_live: true }).eq('id', partnerId)
+                    await supabaseClient.from('partner_gateway_accounts')
+                        .update({ kyc_status: 'CAPABILITIES_LIVE', updated_at: new Date().toISOString() })
+                        .eq('partner_id', partnerId).eq('provider', 'xendit')
+                    console.log(`✅ Cards/GCash LIVE for partner ${partnerId}`)
+                    if (partnerUserId) {
+                        await supabaseClient.from('notifications').insert({
+                            user_id: partnerUserId, actor_id: null, type: 'kyc_verified',
+                            title: 'Cards & GCash are live 💳',
+                            body: 'Your customers can now pay with credit/debit cards and GCash.',
+                            entity_id: partnerId, metadata: { partner_id: partnerId, capabilities: 'live' },
+                        })
+                    }
+                } else {
+                    console.log(`💳 Capabilities ${capStatus} for partner ${partnerId} (no flag change)`)
+                }
+            }
+            return new Response(JSON.stringify({ success: true, capabilities: capStatus }),
+                { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+
+        // 🪪 xenPlatform ACCOUNT HOLDER KYC RESULT (v33)
+        // ==========================================
+        // Xendit fires an account-holder/KYC callback when a sub-account's KYC
+        // decision is made. Event names + payload shapes vary across OWNED vs
+        // MANAGED and API versions, so match + extract defensively.
+        if (
+            typeof eventType === 'string' &&
+            (eventType.includes('account_holder') ||
+                eventType.includes('account.updated') ||
+                eventType.includes('kyc') ||
+                eventType.includes('verification'))
+        ) {
+            const data = payload.data || payload
+
+            // Account Holder id can appear under several keys depending on payload shape
+            const accountHolderId =
+                data.account_holder_id || data.id || data.business_id ||
+                payload.account_holder_id || payload.business_id
+
+            // KYC status: data.kyc.status (account holder webhook) or data.status (account updated)
+            const rawStatus = String(data.kyc?.status || data.status || '').toUpperCase()
+            const failureReasons = data.kyc?.failure_reasons || data.failure_reasons || null
+
+            console.log(`🪪 KYC webhook: event=${eventType}, holder=${accountHolderId}, status=${rawStatus}`)
+
+            // Map Xendit KYC status → our kyc_status_type enum.
+            // account_verification terminal/intermediate statuses:
+            //   PASSED → verified, FAILED → rejected,
+            //   AWAITING_RESUBMISSION → resubmission_required,
+            //   PENDING_VERIFICATION / VERIFICATION_IN_PROGRESS → submitted.
+            let newKyc: 'verified' | 'rejected' | 'submitted' | 'resubmission_required' | null = null
+            if (['VERIFIED', 'APPROVED', 'SUCCESS', 'SUCCESSFUL', 'LIVE', 'COMPLETED', 'ACTIVE', 'PASSED'].includes(rawStatus)) {
+                newKyc = 'verified'
+            } else if (['REJECTED', 'FAILED', 'DECLINED', 'INVALID'].includes(rawStatus)) {
+                newKyc = 'rejected'
+            } else if (['AWAITING_RESUBMISSION', 'RESUBMISSION_REQUIRED', 'AWAITING_RESUBMISSION_REQUIRED'].includes(rawStatus)) {
+                newKyc = 'resubmission_required'
+            } else if (['PENDING', 'PROCESSING', 'IN_REVIEW', 'AWAITING_DOCUMENTS', 'SUBMITTED', 'REQUESTED', 'UNDER_REVIEW', 'PENDING_VERIFICATION', 'VERIFICATION_IN_PROGRESS'].includes(rawStatus)) {
+                newKyc = 'submitted'
+            }
+
+            if (!accountHolderId || !newKyc) {
+                console.log(`🪪 KYC webhook ignored (holder=${accountHolderId}, status=${rawStatus} → ${newKyc})`)
+                return new Response(
+                    JSON.stringify({ success: true, status: 'ignored', kyc_status: rawStatus }),
+                    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            // Find the partner by account holder id, falling back to the sub-account id
+            let { data: partner } = await supabaseClient
+                .from('partners')
+                .select('id, user_id, business_name, kyc_status')
+                .eq('xendit_account_holder_id', accountHolderId)
+                .maybeSingle()
+
+            if (!partner) {
+                const { data: byAccount } = await supabaseClient
+                    .from('partners')
+                    .select('id, user_id, business_name, kyc_status')
+                    .eq('xendit_account_id', accountHolderId)
+                    .maybeSingle()
+                partner = byAccount
+            }
+
+            // account_verification callbacks reference the verification id / sub-account
+            // business id, not the legacy account_holder_id — fall back to the gateway row.
+            if (!partner) {
+                const { data: byGateway } = await supabaseClient
+                    .from('partner_gateway_accounts')
+                    .select('partner_id')
+                    .eq('provider', 'xendit')
+                    .or(`verification_id.eq.${accountHolderId},account_id.eq.${accountHolderId},account_holder_id.eq.${accountHolderId}`)
+                    .maybeSingle()
+                if (byGateway?.partner_id) {
+                    const { data: p } = await supabaseClient
+                        .from('partners')
+                        .select('id, user_id, business_name, kyc_status')
+                        .eq('id', byGateway.partner_id)
+                        .maybeSingle()
+                    partner = p
+                }
+            }
+
+            if (!partner) {
+                console.log(`🪪 No partner for account holder ${accountHolderId} (likely a test webhook)`)
+                return new Response(
+                    JSON.stringify({ success: true, message: 'No matching partner (test passed)' }),
+                    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            // Idempotency: already in the target state
+            if (partner.kyc_status === newKyc) {
+                console.log(`⚡ Partner ${partner.id} kyc_status already ${newKyc}, skipping`)
+                return new Response(
+                    JSON.stringify({ success: true, message: `Already ${newKyc}` }),
+                    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+
+            const update: Record<string, unknown> = { kyc_status: newKyc }
+            if (newKyc === 'rejected' || newKyc === 'resubmission_required') {
+                update.kyc_rejection_reason = Array.isArray(failureReasons)
+                    ? failureReasons.join('; ')
+                    : (failureReasons || (newKyc === 'resubmission_required'
+                        ? 'Additional information required — please review and resubmit'
+                        : 'Verification failed — please review and resubmit'))
+            } else if (newKyc === 'verified') {
+                update.kyc_rejection_reason = null
+            }
+
+            const { error: kycUpdateError } = await supabaseClient
+                .from('partners')
+                .update(update)
+                .eq('id', partner.id)
+
+            if (kycUpdateError) {
+                console.error(`❌ Failed to update kyc_status for partner ${partner.id}:`, kycUpdateError)
+                return new Response(JSON.stringify({ error: kycUpdateError.message }), { status: 500, headers: corsHeaders })
+            }
+
+            console.log(`✅ Partner ${partner.id} kyc_status → ${newKyc}`)
+
+            // Mirror the raw gateway status onto the xendit gateway-account row.
+            await supabaseClient
+                .from('partner_gateway_accounts')
+                .update({ kyc_status: rawStatus, updated_at: new Date().toISOString() })
+                .eq('partner_id', partner.id)
+                .eq('provider', 'xendit')
+
+            // 💳 On KYC PASSED, request the Cards + GCash capabilities. These can
+            // only be requested once verification is PASSED, and Xendit notifies us
+            // via account_holder.capabilities.status:live (handled above → flips the
+            // xendit_cards_gcash_live flag). Best-effort; failures are logged only.
+            if (newKyc === 'verified' && accountHolderId) {
+                try {
+                    const xenditKey = Deno.env.get('XENDIT_SECRET_KEY')
+                    if (xenditKey) {
+                        const capRes = await fetch(`https://api.xendit.co/account_holders/${accountHolderId}`, {
+                            method: 'PATCH',
+                            headers: { Authorization: `Basic ${btoa(xenditKey + ':')}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                capabilities: [
+                                    { type: 'MONEY_IN', channel_code: 'PH_CARDS' },
+                                    { type: 'MONEY_IN', channel_code: 'GCASH' },
+                                ],
+                            }),
+                        })
+                        const capJson = await capRes.json().catch(() => ({}))
+                        console.log(`💳 Requested Cards/GCash capabilities for ${accountHolderId}: ${capRes.status}`, JSON.stringify(capJson))
+                    }
+                } catch (capErr) {
+                    console.error('⚠️ Capabilities request failed (non-fatal):', capErr)
+                }
+            }
+
+            // Notify the organizer on actionable states (in-app notification + best-effort push)
+            if (partner.user_id && (newKyc === 'verified' || newKyc === 'rejected' || newKyc === 'resubmission_required')) {
+                const notif = newKyc === 'verified'
+                    ? {
+                        type: 'kyc_verified',
+                        title: 'Your account is verified ✅',
+                        body: 'Your business is verified — you can now accept GCash and card payments.',
+                    }
+                    : newKyc === 'resubmission_required'
+                    ? {
+                        type: 'kyc_rejected',
+                        title: 'More information needed',
+                        body: `Our payment provider needs more from your KYC${update.kyc_rejection_reason ? ': ' + update.kyc_rejection_reason : ''}. Please review and resubmit.`,
+                    }
+                    : {
+                        type: 'kyc_rejected',
+                        title: 'Verification needs attention',
+                        body: `Your KYC could not be verified${update.kyc_rejection_reason ? ': ' + update.kyc_rejection_reason : ''}. Please review and resubmit.`,
+                    }
+
+                const { error: notifError } = await supabaseClient.from('notifications').insert({
+                    user_id: partner.user_id,
+                    actor_id: null,
+                    type: notif.type,
+                    title: notif.title,
+                    body: notif.body,
+                    entity_id: partner.id,
+                    metadata: { partner_id: partner.id, kyc_status: newKyc },
+                })
+                if (notifError) console.error('⚠️ Failed to insert KYC notification:', notifError)
+
+                const { error: pushQueueError } = await supabaseClient.rpc('pgmq_send', {
+                    queue_name: 'payment_side_effects',
+                    message: {
+                        type: 'send_push',
+                        data: {
+                            user_id: partner.user_id,
+                            title: notif.title,
+                            body: notif.body,
+                            data: { type: notif.type, partner_id: partner.id },
+                        },
+                    },
+                })
+                if (pushQueueError) console.error('⚠️ Failed to enqueue KYC push:', pushQueueError)
+            }
+
+            return new Response(
+                JSON.stringify({ success: true, partner_id: partner.id, kyc_status: newKyc }),
+                { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+        }
+
         // Unknown event type
         console.log('Unhandled webhook event:', eventType)
         return new Response(
             JSON.stringify({ success: true, status: 'ignored', event: eventType }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
 
     } catch (error) {

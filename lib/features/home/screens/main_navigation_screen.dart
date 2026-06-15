@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:bitemates/features/home/screens/feed_screen.dart';
@@ -504,60 +505,129 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
           // ── Speed Dial Arc Buttons ──
           _buildSpeedDialButtons(context),
+
+          // ── Floating Nav Bar ──
+          _buildFloatingNavBar(context),
         ],
         ),
       ),
-      floatingActionButton: Container(
-        height: 64,
-        width: 64,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Theme.of(context).primaryColor.withOpacity(0.4),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: FloatingActionButton(
-          heroTag: 'main_fab',
-          onPressed: _toggleDial,
-          backgroundColor: Theme.of(context).primaryColor,
-          elevation: 0,
-          shape: const CircleBorder(),
-          child: AnimatedBuilder(
-            animation: _dialController,
-            builder: (_, __) => Transform.rotate(
-              angle: _dialController.value * math.pi / 4,
-              child: const Icon(Icons.add, color: Colors.white, size: 32),
+    );
+  }
+
+  Widget _buildFloatingNavBar(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // FAB protrudes 4px above the bar top — pops out slightly without floating away
+    const barHeight = 72.0;
+    const fabSize = 58.0;
+    const protrusion = 4.0;
+    const stackHeight = barHeight + protrusion + fabSize / 2; // = 105
+
+    return Positioned(
+      bottom: bottomInset + 12,
+      left: 16,
+      right: 16,
+      height: stackHeight,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Frosted glass bar — at the bottom of the stack
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(32),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.12),
+                    blurRadius: 24,
+                    spreadRadius: 0,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(32),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                  child: Container(
+                    height: barHeight,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: isDark
+                            ? [
+                                Colors.grey[900]!.withOpacity(0.92),
+                                Colors.grey[850]!.withOpacity(0.85),
+                              ]
+                            : [
+                                Colors.white.withOpacity(0.82),
+                                Colors.white.withOpacity(0.70),
+                              ],
+                      ),
+                      borderRadius: BorderRadius.circular(32),
+                      border: Border.all(
+                        color: isDark
+                            ? Colors.white.withOpacity(0.12)
+                            : Colors.white.withOpacity(0.50),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map'),
+                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed'),
+                        const SizedBox(width: fabSize), // placeholder keeps spacing
+                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore'),
+                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: BottomAppBar(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
-        shape: const CircularNotchedRectangle(),
-        notchMargin: 8.0,
-        height: 80,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map'),
-            _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed'),
-            const SizedBox(width: 48),
-            _buildNavItem(
-              2,
-              Icons.grid_view_outlined,
-              Icons.grid_view,
-              'Explore',
+          // FAB — sits above the bar, outside the ClipRRect
+          Align(
+            alignment: Alignment.topCenter,
+            child: GestureDetector(
+              onTap: _toggleDial,
+              child: Container(
+                height: fabSize,
+                width: fabSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color.lerp(Theme.of(context).primaryColor, Colors.white, 0.30)!,
+                      Theme.of(context).primaryColor,
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Theme.of(context).primaryColor.withOpacity(0.4),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: AnimatedBuilder(
+                  animation: _dialController,
+                  builder: (_, __) => Transform.rotate(
+                    angle: _dialController.value * math.pi / 4,
+                    child: const Icon(Icons.add, color: Colors.white, size: 34),
+                  ),
+                ),
+              ),
             ),
-            _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -586,10 +656,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       builder: (context, _) {
         final screenSize = MediaQuery.of(context).size;
         final bottomInset = MediaQuery.of(context).padding.bottom;
-        // FAB sits in the centre notch of the 80px BottomAppBar
-        // 80 = appbar height, /2 = center of appbar = FAB center
+        // Stack height=105, bottom=bottomInset+12; FAB at Align.topCenter → center=top+29
+        // fabCy = screenHeight - bottomInset - 12 - 105 + 29 = screenHeight - bottomInset - 88
         final fabCx = screenSize.width / 2;
-        final fabCy = screenSize.height - bottomInset - 40;
+        final fabCy = screenSize.height - bottomInset - 88;
 
         return Stack(
           children: [
@@ -688,6 +758,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   ) {
     final isSelected = _selectedIndex == index;
     final activeColor = Theme.of(context).primaryColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final inactiveColor = isDark ? Colors.white60 : Colors.grey[400]!;
 
     return InkWell(
       onTap: () => _onItemTapped(index),
@@ -701,14 +773,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             children: [
               Icon(
                 isSelected ? iconFilled : iconOutlined,
-                color: isSelected ? activeColor : Colors.grey[400],
+                color: isSelected ? activeColor : inactiveColor,
                 size: 26,
               ),
               const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
-                  color: isSelected ? activeColor : Colors.grey[400],
+                  color: isSelected ? activeColor : inactiveColor,
                   fontSize: 10,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                 ),

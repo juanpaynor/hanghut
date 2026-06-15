@@ -5,8 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
-import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
-import 'package:bitemates/features/ticketing/models/event.dart';
 
 class DiscoverSearchScreen extends StatefulWidget {
   const DiscoverSearchScreen({super.key});
@@ -22,7 +20,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
   Timer? _debounceTimer;
   late TabController _tabController;
 
-  List<Map<String, dynamic>> _upcomingEvents = [];
   List<Map<String, dynamic>> _suggestedPeople = [];
   bool _isDiscoverLoading = true;
 
@@ -30,12 +27,11 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
   bool _isSearchLoading = false;
   List<Map<String, dynamic>> _peopleResults = [];
   List<Map<String, dynamic>> _hangoutResults = [];
-  List<Map<String, dynamic>> _eventResults = [];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _focusNode.requestFocus(),
     );
@@ -56,9 +52,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
       final data = await SocialService().getDiscoverFeed();
       if (mounted) {
         setState(() {
-          _upcomingEvents = List<Map<String, dynamic>>.from(
-            data['events'] ?? [],
-          );
           _suggestedPeople = List<Map<String, dynamic>>.from(
             data['people'] ?? [],
           );
@@ -78,7 +71,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
         _isSearchLoading = false;
         _peopleResults = [];
         _hangoutResults = [];
-        _eventResults = [];
       });
       return;
     }
@@ -94,7 +86,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
       setState(() {
         _peopleResults = results['people'] ?? [];
         _hangoutResults = results['hangouts'] ?? [];
-        _eventResults = results['events'] ?? [];
         _isSearchLoading = false;
       });
     });
@@ -238,7 +229,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
         Tab(text: 'Top'),
         Tab(text: 'People'),
         Tab(text: 'Hangouts'),
-        Tab(text: 'Events'),
       ],
     );
   }
@@ -256,25 +246,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
         const SizedBox(height: 10),
         _buildCategoryChips(),
         const SizedBox(height: 28),
-        if (_upcomingEvents.isNotEmpty) ...[
-          _sectionHeader('Upcoming Events 🎫', isDark),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 230,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              itemCount: _upcomingEvents.length,
-              itemBuilder: (_, i) => Padding(
-                padding: EdgeInsets.only(
-                  right: i < _upcomingEvents.length - 1 ? 14 : 0,
-                ),
-                child: _EventCard(event: _upcomingEvents[i]),
-              ),
-            ),
-          ),
-          const SizedBox(height: 28),
-        ],
         if (_suggestedPeople.isNotEmpty) ...[
           _sectionHeader('Meet New People 👋', isDark),
           const SizedBox(height: 4),
@@ -377,7 +348,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
         _buildTopTab(isDark),
         _buildPeopleTab(isDark),
         _buildHangoutsTab(isDark),
-        _buildEventsTab(isDark),
       ],
     );
   }
@@ -385,8 +355,7 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
   Widget _buildTopTab(bool isDark) {
     final hasAny =
         _peopleResults.isNotEmpty ||
-        _hangoutResults.isNotEmpty ||
-        _eventResults.isNotEmpty;
+        _hangoutResults.isNotEmpty;
     if (!hasAny)
       return _emptyState('No results found.', Icons.search_off_rounded);
     return ListView(
@@ -428,22 +397,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
           ),
           const SizedBox(height: 20),
         ],
-        if (_eventResults.isNotEmpty) ...[
-          _sectionHeader('Events', isDark),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 230,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              itemCount: _eventResults.take(4).length,
-              itemBuilder: (_, i) => Padding(
-                padding: EdgeInsets.only(right: i < 3 ? 14 : 0),
-                child: _EventCard(event: _eventResults[i]),
-              ),
-            ),
-          ),
-        ],
         const SizedBox(height: 24),
       ],
     );
@@ -482,19 +435,6 @@ class _DiscoverSearchScreenState extends State<DiscoverSearchScreen>
       itemCount: _hangoutResults.length,
       itemBuilder: (_, i) =>
           _HangoutRow(hangout: _hangoutResults[i], isDark: isDark),
-    );
-  }
-
-  Widget _buildEventsTab(bool isDark) {
-    if (_eventResults.isEmpty)
-      return _emptyState(
-        'No events found.\nTry searching by event name or venue.',
-        Icons.event_busy_outlined,
-      );
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _eventResults.length,
-      itemBuilder: (_, i) => _EventRow(event: _eventResults[i], isDark: isDark),
     );
   }
 
@@ -995,423 +935,6 @@ class _HangoutRow extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ── Event card (horizontal scroll, full-bleed) ────────────────────────────────
-
-class _EventCard extends StatelessWidget {
-  final Map<String, dynamic> event;
-
-  const _EventCard({required this.event});
-
-  void _open(BuildContext context) {
-    try {
-      final rawDate = event['start_datetime'] as String?;
-      final startDate = rawDate != null
-          ? DateTime.tryParse(rawDate)?.toLocal() ?? DateTime.now()
-          : DateTime.now();
-      final e = Event(
-        id: event['id'] as String,
-        title: event['title'] as String? ?? '',
-        description: '',
-        venueName: event['venue_name'] as String? ?? '',
-        venueAddress: '',
-        latitude: 0,
-        longitude: 0,
-        startDatetime: startDate,
-        coverImageUrl: event['cover_image_url'] as String?,
-        ticketPrice: (event['ticket_price'] as num?)?.toDouble() ?? 0,
-        capacity: (event['capacity'] as num?)?.toInt() ?? 0,
-        ticketsSold: (event['tickets_sold'] as num?)?.toInt() ?? 0,
-        category: event['event_type'] as String? ?? 'other',
-        organizerId: '',
-        createdAt: DateTime.now(),
-      );
-      EventDetailModal.show(context, e);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final title = event['title'] as String? ?? 'Event';
-    final venue =
-        event['venue_name'] as String? ?? event['city'] as String? ?? '';
-    final coverUrl = event['cover_image_url'] as String?;
-    final price = (event['ticket_price'] as num?)?.toDouble() ?? 0;
-    final capacity = (event['capacity'] as num?)?.toInt() ?? 0;
-    final sold = (event['tickets_sold'] as num?)?.toInt() ?? 0;
-    DateTime? dt;
-    try {
-      if (event['start_datetime'] != null)
-        dt = DateTime.parse(event['start_datetime']).toLocal();
-    } catch (_) {}
-
-    return GestureDetector(
-      onTap: () => _open(context),
-      child: Container(
-        width: 190,
-        height: 230,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            (coverUrl != null && coverUrl.isNotEmpty)
-                ? CachedNetworkImage(imageUrl: coverUrl, fit: BoxFit.cover)
-                : Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF845EC2), Color(0xFF4FACFE)],
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.event_rounded,
-                      size: 52,
-                      color: Colors.white54,
-                    ),
-                  ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0.25, 1.0],
-                  colors: [Colors.transparent, Colors.black.withOpacity(0.85)],
-                ),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        height: 1.25,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    if (venue.isNotEmpty)
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.location_on_rounded,
-                            size: 11,
-                            color: Colors.white70,
-                          ),
-                          const SizedBox(width: 3),
-                          Expanded(
-                            child: Text(
-                              venue,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Colors.white70,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: price == 0
-                                ? Colors.green.withOpacity(0.85)
-                                : Colors.white.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            price == 0
-                                ? 'Free'
-                                : '₱${price.toStringAsFixed(0)}',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const Spacer(),
-                        if (capacity > 0)
-                          Text(
-                            '${capacity - sold} left',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.white60,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (dt != null)
-              Positioned(
-                top: 10,
-                right: 10,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        DateFormat('MMM').format(dt).toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white70,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                      Text(
-                        DateFormat('d').format(dt),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          height: 1,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Event row (full-width list) ───────────────────────────────────────────────
-
-class _EventRow extends StatelessWidget {
-  final Map<String, dynamic> event;
-  final bool isDark;
-
-  const _EventRow({required this.event, required this.isDark});
-
-  void _open(BuildContext context) {
-    try {
-      final rawDate = event['start_datetime'] as String?;
-      final startDate = rawDate != null
-          ? DateTime.tryParse(rawDate)?.toLocal() ?? DateTime.now()
-          : DateTime.now();
-      final e = Event(
-        id: event['id'] as String,
-        title: event['title'] as String? ?? '',
-        description: '',
-        venueName: event['venue_name'] as String? ?? '',
-        venueAddress: '',
-        latitude: 0,
-        longitude: 0,
-        startDatetime: startDate,
-        coverImageUrl: event['cover_image_url'] as String?,
-        ticketPrice: (event['ticket_price'] as num?)?.toDouble() ?? 0,
-        capacity: (event['capacity'] as num?)?.toInt() ?? 0,
-        ticketsSold: (event['tickets_sold'] as num?)?.toInt() ?? 0,
-        category: event['event_type'] as String? ?? 'other',
-        organizerId: '',
-        createdAt: DateTime.now(),
-      );
-      EventDetailModal.show(context, e);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final title = event['title'] as String? ?? 'Event';
-    final venue = event['venue_name'] as String? ?? '';
-    final coverUrl = event['cover_image_url'] as String?;
-    final price = (event['ticket_price'] as num?)?.toDouble() ?? 0;
-    final capacity = (event['capacity'] as num?)?.toInt() ?? 0;
-    final sold = (event['tickets_sold'] as num?)?.toInt() ?? 0;
-    DateTime? dt;
-    try {
-      if (event['start_datetime'] != null)
-        dt = DateTime.parse(event['start_datetime']).toLocal();
-    } catch (_) {}
-
-    return GestureDetector(
-      onTap: () => _open(context),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: isDark ? Colors.white.withOpacity(0.05) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: isDark
-              ? null
-              : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(16),
-                bottomLeft: Radius.circular(16),
-              ),
-              child: SizedBox(
-                width: 82,
-                height: 82,
-                child: (coverUrl != null && coverUrl.isNotEmpty)
-                    ? CachedNetworkImage(imageUrl: coverUrl, fit: BoxFit.cover)
-                    : Container(
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [Color(0xFF845EC2), Color(0xFF4FACFE)],
-                          ),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(
-                          Icons.event_rounded,
-                          size: 28,
-                          color: Colors.white70,
-                        ),
-                      ),
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white : const Color(0xFF1A1A2E),
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (venue.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on_outlined,
-                            size: 12,
-                            color: Colors.grey[500],
-                          ),
-                          const SizedBox(width: 2),
-                          Expanded(
-                            child: Text(
-                              venue,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[500],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    if (dt != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        DateFormat('EEE, MMM d · h:mm a').format(dt),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.primaryColor,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 14),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: price == 0
-                          ? Colors.green.withOpacity(0.12)
-                          : AppTheme.primaryColor.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      price == 0 ? 'Free' : '₱${price.toStringAsFixed(0)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: price == 0
-                            ? Colors.green[700]
-                            : AppTheme.primaryColor,
-                      ),
-                    ),
-                  ),
-                  if (capacity > 0) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      '${capacity - sold} left',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
