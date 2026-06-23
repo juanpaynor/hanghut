@@ -54,6 +54,7 @@ class EventService {
           ''')
           .eq('status', 'active')
           .eq('is_subscriber_only', false)
+          .neq('invite_only', true)
           .gte('start_datetime', DateTime.now().toIso8601String())
           .order('start_datetime', ascending: true)
           .limit(limit);
@@ -106,6 +107,9 @@ class EventService {
     String? excludeEventId,
     int limit = 5,
   }) async {
+    // Guard against blank organizer ids (legacy/test events) — an empty string
+    // is not a valid uuid and would throw a 22P02 Postgrest error.
+    if (organizerId.trim().isEmpty) return [];
     try {
       var query = SupabaseConfig.client
           .from('events')
@@ -125,6 +129,7 @@ class EventService {
           .eq('organizer_id', organizerId)
           .eq('status', 'active')
           .eq('is_subscriber_only', false)
+          .neq('invite_only', true)
           .gte('start_datetime', DateTime.now().toIso8601String());
 
       if (excludeEventId != null) {

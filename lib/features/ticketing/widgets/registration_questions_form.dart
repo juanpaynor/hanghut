@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
 
 class RegistrationQuestionsForm extends StatefulWidget {
   final List<Map<String, dynamic>> questions;
@@ -106,22 +107,28 @@ class _RegistrationQuestionsFormState
     final label = q['label'] as String;
     final type = q['question_type'] as String;
     final required = q['is_required'] == true;
+    // Some organizers already type a trailing "*" in their label — don't add a
+    // second one, which looked like "... * *".
+    final showAsterisk = required && !label.trimRight().endsWith('*');
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           RichText(
             text: TextSpan(
               text: label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : Colors.black87,
+                height: 1.3,
               ),
               children: [
-                if (required)
+                if (showAsterisk)
                   const TextSpan(
                     text: ' *',
                     style: TextStyle(color: Colors.red),
@@ -129,7 +136,7 @@ class _RegistrationQuestionsFormState
               ],
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           _buildInput(id, type, q),
         ],
       ),
@@ -157,18 +164,16 @@ class _RegistrationQuestionsFormState
 
       case 'single_choice':
         final options = _options(q);
-        return RadioGroup<String>(
-          groupValue: widget.answers[id] as String?,
-          onChanged: (v) => _update(id, v),
-          child: Column(
-            children: options.map((opt) => RadioListTile<String>(
-              value: opt,
-              title: Text(opt, style: const TextStyle(fontSize: 14)),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              activeColor: Colors.deepPurple,
-            )).toList(),
-          ),
+        final current = widget.answers[id] as String?;
+        return Column(
+          children: options
+              .map((opt) => _ChoiceCard(
+                    label: opt,
+                    selected: current == opt,
+                    isMulti: false,
+                    onTap: () => _update(id, opt),
+                  ))
+              .toList(),
         );
 
       case 'multi_choice':
@@ -178,22 +183,19 @@ class _RegistrationQuestionsFormState
         return Column(
           children: options.map((opt) {
             final checked = selected.contains(opt);
-            return CheckboxListTile(
-              value: checked,
-              onChanged: (v) {
+            return _ChoiceCard(
+              label: opt,
+              selected: checked,
+              isMulti: true,
+              onTap: () {
                 final updated = List<String>.from(selected);
-                if (v == true) {
-                  updated.add(opt);
-                } else {
+                if (checked) {
                   updated.remove(opt);
+                } else {
+                  updated.add(opt);
                 }
                 _update(id, updated);
               },
-              title: Text(opt, style: const TextStyle(fontSize: 14)),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              activeColor: Colors.deepPurple,
-              controlAffinity: ListTileControlAffinity.leading,
             );
           }).toList(),
         );
@@ -208,7 +210,7 @@ class _RegistrationQuestionsFormState
           ),
           dense: true,
           contentPadding: EdgeInsets.zero,
-          activeColor: Colors.deepPurple,
+          activeColor: AppTheme.primaryColor,
           controlAffinity: ListTileControlAffinity.leading,
         );
 
@@ -218,26 +220,34 @@ class _RegistrationQuestionsFormState
   }
 
   Widget _textField(String id, {int maxLines = 1, String? hint}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fill =
+        isDark ? Colors.white.withValues(alpha: 0.06) : Colors.grey.shade100;
     return TextField(
       controller: _controllers[id],
       maxLines: maxLines,
       onChanged: (v) => _update(id, v),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+        hintStyle: TextStyle(
+          color: isDark ? Colors.white38 : Colors.grey[400],
+          fontSize: 14,
+        ),
+        filled: true,
+        fillColor: fill,
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Colors.deepPurple),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
         ),
       ),
     );
@@ -248,5 +258,101 @@ class _RegistrationQuestionsFormState
     if (raw == null) return [];
     if (raw is List) return raw.map((e) => e.toString()).toList();
     return [];
+  }
+}
+
+/// A tappable card for a single/multi choice option — indigo highlight when
+/// selected, with a radio (single) or check (multi) indicator.
+class _ChoiceCard extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final bool isMulti;
+  final VoidCallback onTap;
+
+  const _ChoiceCard({
+    required this.label,
+    required this.selected,
+    required this.isMulti,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final unselectedBorder =
+        isDark ? Colors.white.withValues(alpha: 0.16) : Colors.grey.shade300;
+    final unselectedText = isDark ? Colors.white : Colors.black87;
+    final unselectedIndicator =
+        isDark ? Colors.white38 : Colors.grey.shade400;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: selected ? primary.withValues(alpha: 0.10) : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? primary : unselectedBorder,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                _indicator(primary, unselectedIndicator),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.3,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected ? primary : unselectedText,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _indicator(Color primary, Color unselectedColor) {
+    if (isMulti) {
+      return Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: selected ? primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: selected ? primary : unselectedColor,
+            width: 1.5,
+          ),
+        ),
+        child: selected
+            ? const Icon(Icons.check, size: 15, color: Colors.white)
+            : null,
+      );
+    }
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? primary : unselectedColor,
+          width: selected ? 6 : 1.5,
+        ),
+      ),
+    );
   }
 }

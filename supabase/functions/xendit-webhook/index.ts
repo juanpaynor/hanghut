@@ -1,7 +1,15 @@
 /**
  * ============================================================================
- * XENDIT WEBHOOK HANDLER — VERSION 35 (legacy account holder KYC + capabilities)
+ * XENDIT WEBHOOK HANDLER — VERSION 36 (legacy account holder KYC + capabilities)
  * ============================================================================
+ *
+ * WHAT CHANGED (v35 → v36):
+ * -------------------------
+ * 1. Status is parsed from the EVENT NAME suffix (account_holder.kyc.status:passed)
+ *    as a fallback — Xendit carries the decision in the event name, not always in
+ *    the body. Failure detail also reads failure_reason / invalid_fields.
+ * 2. Capabilities declined / resubmission_required now keep cards/gcash OFF and
+ *    notify the organizer (per Xendit's webhook guide).
  *
  * WHAT CHANGED (v34 → v35):
  * -------------------------
@@ -998,7 +1006,20 @@ serve(async (req) => {
                         })
                     }
                 } else {
-                    console.log(`💳 Capabilities ${capStatus} for partner ${partnerId} (no flag change)`)
+                    // declined / resubmission_required — keep cards/gcash off and tell the organizer.
+                    const reason = data.failure_reason || (Array.isArray(data.invalid_fields) ? data.invalid_fields.join(', ') : data.invalid_fields) || null
+                    await supabaseClient.from('partners').update({ xendit_cards_gcash_live: false }).eq('id', partnerId)
+                    console.log(`💳 Capabilities ${capStatus} for partner ${partnerId}${reason ? ': ' + reason : ''}`)
+                    if (partnerUserId) {
+                        await supabaseClient.from('notifications').insert({
+                            user_id: partnerUserId, actor_id: null, type: 'kyc_rejected',
+                            title: 'Cards & GCash need attention',
+                            body: capStatus.includes('RESUBMISSION')
+                                ? `Xendit needs more info to enable Cards & GCash${reason ? ': ' + reason : ''}. Please update your verification.`
+                                : `Your Cards & GCash activation was declined${reason ? ': ' + reason : ''}.`,
+                            entity_id: partnerId, metadata: { partner_id: partnerId, capabilities: capStatus },
+                        })
+                    }
                 }
             }
             return new Response(JSON.stringify({ success: true, capabilities: capStatus }),
@@ -1024,9 +1045,16 @@ serve(async (req) => {
                 data.account_holder_id || data.id || data.business_id ||
                 payload.account_holder_id || payload.business_id
 
-            // KYC status: data.kyc.status (account holder webhook) or data.status (account updated)
-            const rawStatus = String(data.kyc?.status || data.status || '').toUpperCase()
-            const failureReasons = data.kyc?.failure_reasons || data.failure_reasons || null
+            // KYC status. Xendit's account_holder.kyc.status:<status> events carry the
+            // decision in the EVENT NAME (e.g. ":passed"), not always in the body — so
+            // fall back to the suffix after the last ':'.
+            const eventSuffix = typeof eventType === 'string' && eventType.includes(':')
+                ? eventType.split(':').pop() : ''
+            const rawStatus = String(data.kyc?.status || data.status || eventSuffix || '').toUpperCase()
+            // Failure detail may be failure_reason(s) or invalid_fields (resubmission).
+            const failureReasons = data.kyc?.failure_reasons || data.failure_reasons
+                || data.kyc?.failure_reason || data.failure_reason
+                || data.kyc?.invalid_fields || data.invalid_fields || null
 
             console.log(`🪪 KYC webhook: event=${eventType}, holder=${accountHolderId}, status=${rawStatus}`)
 

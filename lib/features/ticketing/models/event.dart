@@ -15,6 +15,11 @@ class Event {
   final int ticketsSold;
   final String category;
   final String organizerId;
+
+  /// Whether this event has a real organizer (some legacy/test events have a
+  /// blank organizer_id, which must never be used in UUID-typed queries).
+  bool get hasOrganizer => organizerId.trim().isNotEmpty;
+
   final String? organizerName;
   final String? organizerPhotoUrl;
   final bool organizerVerified;
@@ -100,7 +105,7 @@ class Event {
       capacity: json['capacity'] as int,
       ticketsSold: json['tickets_sold'] as int? ?? 0,
       category: (json['category'] ?? json['event_type'] ?? '') as String,
-      organizerId: json['organizer_id'] as String,
+      organizerId: (json['organizer_id'] as String?) ?? '',
       status: json['status'] as String? ?? 'active',
       organizerName: json['organizer_name'] as String?,
       organizerPhotoUrl: json['organizer_photo_url'] as String?,

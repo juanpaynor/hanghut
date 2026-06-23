@@ -31,6 +31,10 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
   }
 
   Future<void> _load() async {
+    if (widget.partnerId.trim().isEmpty) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
     await Future.wait([_loadPartner(), _loadEvents(), _loadFollowState()]);
     if (mounted) setState(() => _isLoading = false);
   }
@@ -125,54 +129,62 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
 
     final businessName = _partner?['business_name'] as String? ?? 'Organizer';
     final photoUrl = _partner?['profile_photo_url'] as String?;
-    final coverUrl = _partner?['cover_image_url'] as String?;
     final description = _partner?['description'] as String?;
     final verified = _partner?['verified'] as bool? ?? false;
     final slug = _partner?['slug'] as String?;
+    final businessType = _partner?['business_type'] as String?;
     final socialLinks =
         (_partner?['social_links'] as Map<String, dynamic>?) ?? {};
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scaffoldBg = Theme.of(context).scaffoldBackgroundColor;
+    final primary = Theme.of(context).primaryColor;
+    final eventCount = _events.length;
+
     return Scaffold(
+      backgroundColor: scaffoldBg,
+      appBar: AppBar(
+        backgroundColor: scaffoldBg,
+        surfaceTintColor: scaffoldBg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       body: CustomScrollView(
         slivers: [
-          SliverAppBar(
-            expandedHeight: 160,
-            pinned: true,
-            flexibleSpace: FlexibleSpaceBar(
-              background: coverUrl != null
-                  ? CachedNetworkImage(
-                      imageUrl: coverUrl,
-                      fit: BoxFit.cover,
-                      errorWidget: (_, __, ___) =>
-                          _buildCoverPlaceholder(businessName),
-                    )
-                  : _buildCoverPlaceholder(businessName),
-            ),
-          ),
-
+          // ── PROFILE HEADER ──
           SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Avatar row — floats up over the cover
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-                  child: Transform.translate(
-                    offset: const Offset(0, -24),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Theme.of(context).scaffoldBackgroundColor,
-                          width: 3,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black12, blurRadius: 8),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Avatar — fully visible, soft indigo ring
+                  Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          primary.withOpacity(0.5),
+                          primary.withOpacity(0.15),
                         ],
                       ),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: scaffoldBg,
+                      ),
                       child: CircleAvatar(
-                        radius: 32,
-                        backgroundColor: Colors.deepPurple[100],
+                        radius: 42,
+                        backgroundColor: primary.withOpacity(0.12),
                         backgroundImage:
                             photoUrl != null ? NetworkImage(photoUrl) : null,
                         child: photoUrl == null
@@ -180,116 +192,146 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
                                 businessName.isNotEmpty
                                     ? businessName[0].toUpperCase()
                                     : '?',
-                                style: const TextStyle(
-                                  fontSize: 24,
+                                style: TextStyle(
+                                  fontSize: 34,
                                   fontWeight: FontWeight.w800,
-                                  color: Colors.white,
+                                  color: primary,
                                 ),
                               )
                             : null,
                       ),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 16),
 
-                // Name + verified + follow button
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                  // Name + verified
+                  Row(
                     children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                businessName,
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (verified) ...[
-                              const SizedBox(width: 5),
-                              const Icon(Icons.verified,
-                                  size: 18, color: Colors.blue),
-                            ],
-                          ],
+                      Flexible(
+                        child: Text(
+                          businessName,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      _buildFollowButton(context),
+                      if (verified) ...[
+                        const SizedBox(width: 6),
+                        const Icon(Icons.verified, size: 20, color: Colors.blue),
+                      ],
                     ],
                   ),
-                ),
+                  const SizedBox(height: 6),
 
-                // Follow disclosure
-                if (!_isFollowing)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                    child: Text(
+                  // Subtitle: event count / business type
+                  Row(
+                    children: [
+                      Icon(Icons.event_rounded,
+                          size: 14, color: Colors.grey[500]),
+                      const SizedBox(width: 5),
+                      Text(
+                        eventCount == 0
+                            ? (businessType ?? 'Organizer')
+                            : '$eventCount upcoming '
+                                '${eventCount == 1 ? 'event' : 'events'}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Action row: Follow (primary) + View full page
+                  Row(
+                    children: [
+                      Expanded(child: _buildFollowButton(context)),
+                      if (slug != null && slug.isNotEmpty) ...[
+                        const SizedBox(width: 10),
+                        _ViewFullPageButton(slug: slug),
+                      ],
+                    ],
+                  ),
+
+                  if (!_isFollowing) ...[
+                    const SizedBox(height: 8),
+                    Text(
                       'Following also subscribes you to their email updates.',
                       style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
-                  ),
+                  ],
 
-                // Description
-                if (description != null && description.isNotEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-                    child: Text(
+                  // Description
+                  if (description != null && description.isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Text(
                       description,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.grey[600],
+                        color: isDark ? Colors.grey[300] : Colors.grey[700],
                         height: 1.5,
                       ),
                     ),
+                  ],
+
+                  // Social links
+                  if (socialLinks.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _SocialLinksRow(
+                      socialLinks: socialLinks,
+                      noPadding: true,
+                    ),
+                  ],
+
+                  const SizedBox(height: 20),
+                  Divider(height: 1, color: Colors.grey[200]),
+                  const SizedBox(height: 18),
+
+                  // Events header
+                  Row(
+                    children: [
+                      Text(
+                        _events.isEmpty
+                            ? 'No upcoming events'
+                            : 'Upcoming Events',
+                        style: const TextStyle(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      if (eventCount > 0) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: primary.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '$eventCount',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 14),
                 ],
-
-                // Social links
-                if (socialLinks.isNotEmpty) ...[
-                  _SocialLinksRow(socialLinks: socialLinks),
-                  const SizedBox(height: 16),
-                ],
-
-                // View full page button
-                if (slug != null && slug.isNotEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: OutlinedButton.icon(
-                      onPressed: () => launchUrl(
-                        Uri.parse('https://hanghut.com/$slug'),
-                        mode: LaunchMode.externalApplication,
-                      ),
-                      icon: const Icon(Icons.open_in_new, size: 16),
-                      label: const Text('View full page'),
-                      style: OutlinedButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
-
-                const Divider(height: 1),
-
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                  child: Text(
-                    _events.isEmpty ? 'No upcoming events' : 'Upcoming Events',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
 
@@ -300,10 +342,39 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
                     _StorefrontEventTile(event: _events[index]),
                 childCount: _events.length,
               ),
-            ),
+            )
+          else
+            SliverToBoxAdapter(child: _buildEmptyEvents(context)),
 
           const SliverToBoxAdapter(child: SizedBox(height: 48)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyEvents(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+      child: Center(
+        child: Column(
+          children: [
+            Icon(Icons.event_busy_rounded, size: 44, color: Colors.grey[400]),
+            const SizedBox(height: 12),
+            Text(
+              'No upcoming events right now',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Follow to get notified when they post one.',
+              style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -319,87 +390,71 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
       ),
     );
 
+    const pad = EdgeInsets.symmetric(horizontal: 20, vertical: 14);
+    const labelStyle = TextStyle(fontSize: 15, fontWeight: FontWeight.w700);
+
     if (_isFollowing) {
       return OutlinedButton.icon(
         onPressed: _toggleFollow,
-        icon: _followBusy ? spinner : const Icon(Icons.check, size: 16),
+        icon: _followBusy ? spinner : const Icon(Icons.check_rounded, size: 18),
         label: const Text('Following'),
         style: OutlinedButton.styleFrom(
-          visualDensity: VisualDensity.compact,
           foregroundColor: primary,
-          side: BorderSide(color: primary),
+          side: BorderSide(color: primary, width: 1.5),
+          padding: pad,
+          shape: const StadiumBorder(),
+          textStyle: labelStyle,
         ),
       );
     }
 
     return ElevatedButton.icon(
       onPressed: _toggleFollow,
-      icon: _followBusy ? spinner : const Icon(Icons.add, size: 16),
+      icon: _followBusy ? spinner : const Icon(Icons.add_rounded, size: 18),
       label: const Text('Follow'),
       style: ElevatedButton.styleFrom(
-        visualDensity: VisualDensity.compact,
         backgroundColor: primary,
         foregroundColor: Colors.white,
         elevation: 0,
+        padding: pad,
+        shape: const StadiumBorder(),
+        textStyle: labelStyle,
       ),
     );
   }
 
-  Widget _buildCoverPlaceholder(String name) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Theme.of(context).primaryColor,
-            Theme.of(context).primaryColor.withOpacity(0.6),
-          ],
-        ),
+}
+
+/// Compact outlined "view full page" pill that opens the web storefront.
+class _ViewFullPageButton extends StatelessWidget {
+  final String slug;
+
+  const _ViewFullPageButton({required this.slug});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return OutlinedButton(
+      onPressed: () => launchUrl(
+        Uri.parse('https://hanghut.com/$slug'),
+        mode: LaunchMode.externalApplication,
       ),
-      child: Stack(
-        children: [
-          // subtle pattern overlay
-          Positioned.fill(
-            child: Opacity(
-              opacity: 0.08,
-              child: GridView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 6,
-                ),
-                itemBuilder: (_, __) => const Icon(
-                  Icons.circle,
-                  color: Colors.white,
-                  size: 8,
-                ),
-              ),
-            ),
-          ),
-          // organizer initials — smaller, bottom-left
-          Positioned(
-            left: 20,
-            bottom: 36,
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.25),
-                fontSize: 80,
-                fontWeight: FontWeight.w900,
-                height: 1,
-              ),
-            ),
-          ),
-        ],
+      style: OutlinedButton.styleFrom(
+        foregroundColor: isDark ? Colors.white70 : Colors.black87,
+        side: BorderSide(color: isDark ? Colors.grey[700]! : Colors.grey[300]!),
+        padding: const EdgeInsets.all(14),
+        shape: const CircleBorder(),
       ),
+      child: const Icon(Icons.open_in_new_rounded, size: 18),
     );
   }
 }
 
 class _SocialLinksRow extends StatelessWidget {
   final Map<String, dynamic> socialLinks;
+  final bool noPadding;
 
-  const _SocialLinksRow({required this.socialLinks});
+  const _SocialLinksRow({required this.socialLinks, this.noPadding = false});
 
   static const _platforms = <String, Map<String, Object>>{
     'instagram': {
@@ -450,8 +505,14 @@ class _SocialLinksRow extends StatelessWidget {
             avatar: Icon(entry.value['icon'] as IconData, size: 16),
             label: Text(
               entry.value['label'] as String,
-              style: const TextStyle(fontSize: 12),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
+            backgroundColor:
+                Theme.of(context).primaryColor.withOpacity(0.06),
+            side: BorderSide(
+              color: Theme.of(context).primaryColor.withOpacity(0.18),
+            ),
+            shape: const StadiumBorder(),
             onPressed: () => launchUrl(
               Uri.parse(url),
               mode: LaunchMode.externalApplication,
@@ -465,7 +526,9 @@ class _SocialLinksRow extends StatelessWidget {
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: noPadding
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 20),
       child: Row(children: chips),
     );
   }
@@ -478,77 +541,113 @@ class _StorefrontEventTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => EventDetailModal.show(context, event),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardTheme.color ??
-                Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).primaryColor;
+    final isFree = event.ticketPrice == 0;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Material(
+        color: isDark ? const Color(0xFF1C1C22) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => EventDetailModal.show(context, event),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
               ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isDark ? 0.0 : 0.04),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            padding: const EdgeInsets.all(10),
             child: Row(
               children: [
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                   child: SizedBox(
-                    width: 72,
-                    height: 72,
+                    width: 76,
+                    height: 76,
                     child: event.coverImageUrl != null
                         ? CachedNetworkImage(
                             imageUrl: event.coverImageUrl!,
                             fit: BoxFit.cover,
-                            errorWidget: (_, __, ___) => _placeholder(),
+                            errorWidget: (_, __, ___) => _placeholder(primary),
                           )
-                        : _placeholder(),
+                        : _placeholder(primary),
                   ),
                 ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    event.title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        event.title,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.calendar_today_rounded,
+                              size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 5),
+                          Flexible(
+                            child: Text(
+                              DateFormat('EEE, MMM d • h:mm a')
+                                  .format(event.startDatetime),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Price pill
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isFree
+                              ? Colors.green.withOpacity(0.12)
+                              : primary.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          isFree
+                              ? 'Free'
+                              : '₱${event.ticketPrice.toStringAsFixed(0)}',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: isFree ? Colors.green[700] : primary,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    DateFormat('EEE, MMM d • h:mm a').format(event.startDatetime),
-                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    event.ticketPrice == 0
-                        ? 'Free'
-                        : '₱${event.ticketPrice.toStringAsFixed(0)}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: event.ticketPrice == 0
-                          ? Colors.green[700]
-                          : Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-                const Icon(Icons.chevron_right, color: Colors.grey),
+                ),
+                Icon(Icons.chevron_right_rounded, color: Colors.grey[400]),
               ],
             ),
           ),
@@ -557,10 +656,10 @@ class _StorefrontEventTile extends StatelessWidget {
     );
   }
 
-  Widget _placeholder() {
+  Widget _placeholder(Color primary) {
     return Container(
-      color: Colors.deepPurple[50],
-      child: const Icon(Icons.event, color: Colors.deepPurple),
+      color: primary.withOpacity(0.10),
+      child: Icon(Icons.event_rounded, color: primary),
     );
   }
 }

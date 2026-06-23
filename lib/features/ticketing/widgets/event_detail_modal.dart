@@ -66,6 +66,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Future<void> _loadMoreEvents() async {
+    if (!widget.event.hasOrganizer) return;
     try {
       final events = await EventService().getEventsByOrganizer(
         widget.event.organizerId,
@@ -97,6 +98,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Future<void> _fetchOrganizerInfo() async {
+    if (!widget.event.hasOrganizer) return;
     try {
       final response = await SupabaseConfig.client
           .from('partners')
@@ -787,14 +789,18 @@ class _EventDetailModalState extends State<EventDetailModal> {
     final photoUrl = widget.event.organizerPhotoUrl ?? _organizerAvatarUrl;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasOrganizer = widget.event.hasOrganizer;
     return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              PartnerStorefrontScreen(partnerId: widget.event.organizerId),
-        ),
-      ),
+      onTap: hasOrganizer
+          ? () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PartnerStorefrontScreen(
+                    partnerId: widget.event.organizerId,
+                  ),
+                ),
+              )
+          : null,
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -855,6 +861,12 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 ],
               ),
             ),
+            if (hasOrganizer)
+              Icon(
+                Icons.chevron_right,
+                size: 22,
+                color: isDark ? Colors.grey[500] : Colors.grey[400],
+              ),
           ],
         ),
       ),

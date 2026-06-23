@@ -12,6 +12,7 @@ import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
 import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/features/ticketing/widgets/registration_questions_form.dart';
+import 'package:bitemates/core/theme/app_theme.dart';
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
 // import 'package:workmanager/workmanager.dart';
 
@@ -36,6 +37,7 @@ class EventPurchaseScreen extends StatefulWidget {
 class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     with WidgetsBindingObserver {
   int _quantity = 1;
+  int _currentStep = 0; // Multi-step checkout: Ticket / Details / Questions / Review
   bool _isLoading = false;
   String? _currentPurchaseIntentId;
   Timer? _pollingTimer;
@@ -75,7 +77,6 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   // Registration questions
   List<Map<String, dynamic>> _registrationQuestions = [];
   Map<String, dynamic> _registrationAnswers = {};
-  bool _isLoadingQuestions = false;
   String? _registrationId;
 
   @override
@@ -96,7 +97,6 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   }
 
   Future<void> _loadRegistrationQuestions() async {
-    setState(() => _isLoadingQuestions = true);
     try {
       final response = await SupabaseConfig.client
           .from('registration_questions')
@@ -111,8 +111,6 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       }
     } catch (e) {
       print('⚠️ Could not load registration questions: $e');
-    } finally {
-      if (mounted) setState(() => _isLoadingQuestions = false);
     }
   }
 
@@ -842,300 +840,107 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     }
     final isSubOnlyBlocked = event.isSubscriberOnly && !_isActiveSubscriber;
 
+    final primary = AppTheme.primaryColor;
+    final isGated = isSubOnlyBlocked || isEarlyAccessBlocked;
+
+    // ── GATED STATE: no steps, just show why purchase is blocked ──
+    if (isGated) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Buy Tickets'), centerTitle: true),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _EventSummaryCard(event: widget.event),
+              const SizedBox(height: 24),
+              if (isSubOnlyBlocked)
+                _SubscriberGateBanner(
+                  message: 'This event is for members only.',
+                  subMessage: 'Subscribe to get access.',
+                  icon: Icons.lock_rounded,
+                )
+              else if (publicSaleOpens != null)
+                _SubscriberGateBanner(
+                  message: 'Members get early access',
+                  subMessage:
+                      'Public sale opens ${DateFormat('MMM d \'at\' h:mm a').format(publicSaleOpens)}',
+                  icon: Icons.bolt_rounded,
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── STEP DEFINITIONS (Questions step only when the event has them) ──
+    final hasQuestions = _registrationQuestions.isNotEmpty;
+    final stepTitles = <String>[
+      'Ticket',
+      'Details',
+      if (hasQuestions) 'Questions',
+      'Review',
+    ];
+    final lastStep = stepTitles.length - 1;
+    final step = _currentStep.clamp(0, lastStep);
+    final isLast = step == lastStep;
+
+    final stepBodies = <Widget>[
+      _buildTicketStep(feeAmount),
+      _buildDetailsStep(),
+      if (hasQuestions) _buildQuestionsStep(),
+      _buildReviewStep(
+        displayUnitPrice: displayUnitPrice,
+        displaySubtotal: displaySubtotal,
+        subscriberDiscountAmount: subscriberDiscountAmount,
+        total: total,
+      ),
+    ];
+
+    final payLabel = (widget.event.requireApproval &&
+            widget.existingRegistrationId == null)
+        ? 'Submit Request'
+        : (total <= 0
+            ? 'Get Free Tickets'
+            : 'Pay Now • ₱${total.toStringAsFixed(2)}');
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Buy Tickets'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Buy Tickets'),
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+          onPressed: () {
+            if (step > 0) {
+              setState(() => _currentStep = step - 1);
+            } else {
+              Navigator.pop(context);
+            }
+          },
+        ),
+      ),
       body: Form(
         key: _formKey,
         child: Column(
           children: [
+            _StepProgressBar(titles: stepTitles, current: step),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Event summary card
-                    _EventSummaryCard(event: widget.event),
-
-                    // --- SUBSCRIBER-ONLY GATE ---
-                    if (isSubOnlyBlocked) ...[
-                      const SizedBox(height: 24),
-                      _SubscriberGateBanner(
-                        message: 'This event is for members only.',
-                        subMessage: 'Subscribe to get access.',
-                        icon: Icons.lock_rounded,
-                      ),
-                    ] else if (isEarlyAccessBlocked &&
-                        publicSaleOpens != null) ...[
-                      const SizedBox(height: 24),
-                      _SubscriberGateBanner(
-                        message: 'Members get early access',
-                        subMessage:
-                            'Public sale opens ${DateFormat('MMM d \'at\' h:mm a').format(publicSaleOpens)}',
-                        icon: Icons.bolt_rounded,
-                      ),
-                    ],
-
-                    // Show purchase form only when not gated
-                    if (!isSubOnlyBlocked && !isEarlyAccessBlocked) ...[
-
-                    const SizedBox(height: 32),
-
-                    // --- TIER SELECTION ---
-                    if (_isLoadingTiers)
-                      const Center(child: CircularProgressIndicator())
-                    else if (_tiers.isNotEmpty) ...[
-                      const Text(
-                        'Select Ticket Type',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      ..._tiers.map(
-                        (tier) => _TierOption(
-                          tier: tier,
-                          feeAmount: feeAmount,
-                          isSelected: _selectedTier?.id == tier.id,
-                          onTap: () {
-                            if (!tier.isSoldOut) {
-                              setState(() {
-                                _selectedTier = tier;
-                                _recalculatePromo(); // Update if % based
-                              });
-                            }
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                    ],
-
-                    // Contact Details Section
-                    const Text(
-                      'Contact Details',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _nameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Full Name',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.person_outline),
-                      ),
-                      validator: (value) =>
-                          value == null || value.isEmpty ? 'Required' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email Address',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.email_outlined),
-                      ),
-                      validator: (value) => value == null
-                          ? 'Required'
-                          : (!value.contains('@') ? 'Invalid email' : null),
-                    ),
-                    const SizedBox(height: 16),
-                    IntlPhoneField(
-                      controller: _phoneController,
-                      decoration: const InputDecoration(
-                        labelText: 'Phone Number',
-                        border: OutlineInputBorder(),
-                      ),
-                      initialCountryCode: 'PH',
-                      dropdownIconPosition: IconPosition.trailing,
-                      flagsButtonPadding: const EdgeInsets.only(left: 8),
-                      dropdownTextStyle: const TextStyle(fontSize: 16),
-                      pickerDialogStyle: PickerDialogStyle(
-                        backgroundColor: Colors.white,
-                        countryCodeStyle: const TextStyle(
-                          color: Colors.black54,
-                        ),
-                        countryNameStyle: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 16,
-                        ),
-                        searchFieldInputDecoration: InputDecoration(
-                          hintText: 'Search country',
-                          hintStyle: const TextStyle(color: Colors.black38),
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            color: Colors.black54,
+              child: IndexedStack(
+                index: step,
+                sizing: StackFit.expand,
+                children: stepBodies
+                    .map((body) => SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [body],
                           ),
-                          filled: true,
-                          fillColor: Colors.grey[100],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                      ),
-                      onChanged: (phone) {
-                        _completePhoneNumber = phone.completeNumber;
-                      },
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // Quantity selector
-                    const Text(
-                      'Quantity',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _QuantitySelector(
-                      quantity: _quantity,
-                      // Use real availability from tickets table, capped at 10
-                      max: (_selectedTier != null)
-                          ? _selectedTier!.quantityAvailable.clamp(1, 10)
-                          : _realTicketsAvailable.clamp(1, 10),
-                      onChanged: (qty) => setState(() {
-                        _quantity = qty;
-                        _recalculatePromo();
-                      }),
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // --- PROMO CODE ---
-                    const Text(
-                      'Promo Code',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _promoCodeController,
-                            textCapitalization: TextCapitalization.characters,
-                            enabled: _appliedPromoCode == null,
-                            decoration: InputDecoration(
-                              hintText: 'ENTER CODE',
-                              border: const OutlineInputBorder(),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 0,
-                              ),
-                              errorText: _promoError,
-                              suffixIcon: _appliedPromoCode != null
-                                  ? IconButton(
-                                      icon: const Icon(Icons.close),
-                                      onPressed: _removePromoCode,
-                                    )
-                                  : null,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed:
-                              (_isCheckingPromo || _appliedPromoCode != null)
-                              ? null
-                              : _applyPromoCode,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.black,
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size(88, 48),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                          ),
-                          child: _isCheckingPromo
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Text('Apply'),
-                        ),
-                      ],
-                    ),
-                    if (_appliedPromoCode != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(
-                          'Code $_appliedPromoCode applied!',
-                          style: const TextStyle(
-                            color: Colors.green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-
-                    // --- REGISTRATION QUESTIONS ---
-                    if (_registrationQuestions.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      const Divider(),
-                      const SizedBox(height: 16),
-                      RegistrationQuestionsForm(
-                        questions: _registrationQuestions,
-                        answers: _registrationAnswers,
-                        onChanged: (updated) =>
-                            setState(() => _registrationAnswers = updated),
-                      ),
-                    ],
-
-                    const SizedBox(height: 16),
-
-                    // --- NEWSLETTER OPT-IN ---
-                    CheckboxListTile(
-                      value: _subscribedToNewsletter,
-                      onChanged: (val) =>
-                          setState(() => _subscribedToNewsletter = val ?? true),
-                      title: const Text(
-                        'Subscribe to updates from this organizer',
-                        style: TextStyle(fontSize: 14),
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      activeColor: Colors.deepPurple,
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    if (_isLoadingEventDetails)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8.0),
-                        child: LinearProgressIndicator(),
-                      ),
-
-                    // Price breakdown
-                    _PriceBreakdown(
-                      unitPrice: displayUnitPrice,
-                      quantity: _quantity,
-                      subtotal: displaySubtotal,
-                      promoDiscount: _promoDiscountAmount,
-                      subscriberDiscount: subscriberDiscountAmount,
-                      total: total,
-                    ),
-
-                    ], // end of !gated block
-                  ],
-                ),
+                        ))
+                    .toList(),
               ),
             ),
 
-            // Bottom action
+            // Sticky bottom navigation
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -1150,44 +955,68 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
               ),
               child: SafeArea(
                 top: false,
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: (_isLoading ||
-                            isSubOnlyBlocked ||
-                            isEarlyAccessBlocked)
-                        ? null
-                        : _proceedToPayment,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
+                child: Row(
+                  children: [
+                    if (step > 0) ...[
+                      SizedBox(
+                        height: 56,
+                        child: OutlinedButton(
+                          onPressed: _isLoading
+                              ? null
+                              : () => setState(() => _currentStep = step - 1),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: primary,
+                            side: BorderSide(
+                                color: primary.withOpacity(0.4), width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                          )
-                        : Text(
-                            (widget.event.requireApproval &&
-                                    widget.existingRegistrationId == null)
-                                ? 'Submit Request'
-                                : (total <= 0
-                                    ? 'Get Free Tickets'
-                                    : 'Pay Now • ₱${total.toStringAsFixed(2)}'),
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                          ),
+                          child: const Text('Back',
+                              style: TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    Expanded(
+                      child: SizedBox(
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: _isLoading
+                              ? null
+                              : (isLast
+                                  ? _proceedToPayment
+                                  : () => _advanceStep(stepTitles)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primary,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
                             ),
                           ),
-                  ),
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(
+                                  isLast ? payLabel : 'Continue',
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1196,11 +1025,392 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       ),
     );
   }
+
+  // ── Step navigation + per-step validation ──────────────────────────────────
+  void _advanceStep(List<String> titles) {
+    final current = titles[_currentStep];
+    if (current == 'Ticket') {
+      if (_tiers.isNotEmpty && _selectedTier == null) {
+        _snack('Please select a ticket type.');
+        return;
+      }
+    } else if (current == 'Details') {
+      if (!(_formKey.currentState?.validate() ?? false)) return;
+    } else if (current == 'Questions') {
+      final err = RegistrationQuestionsForm.validate(
+        _registrationQuestions,
+        _registrationAnswers,
+      );
+      if (err != null) {
+        _snack(err);
+        return;
+      }
+    }
+    setState(() => _currentStep = _currentStep + 1);
+  }
+
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// Shared modern filled input style for all checkout text fields.
+  InputDecoration _modernInput(String label, {IconData? icon, String? hint}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fill =
+        isDark ? Colors.white.withValues(alpha: 0.06) : Colors.grey.shade100;
+    final labelColor = isDark ? Colors.white70 : Colors.grey[700];
+    return InputDecoration(
+      labelText: label.isEmpty ? null : label,
+      hintText: hint,
+      counterText: '', // hide the phone-field length counter ("0/10")
+      labelStyle: TextStyle(color: labelColor),
+      floatingLabelStyle: const TextStyle(color: AppTheme.primaryColor),
+      prefixIcon: icon != null
+          ? Icon(icon, size: 20, color: isDark ? Colors.white54 : Colors.grey[600])
+          : null,
+      filled: true,
+      fillColor: fill,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title, {String? subtitle}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+          ),
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 4),
+          Text(subtitle,
+              style: TextStyle(fontSize: 13.5, color: Colors.grey[600])),
+        ],
+      ],
+    );
+  }
+
+  // ── STEP 1: Ticket type + quantity ──
+  Widget _buildTicketStep(double feeAmount) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _EventSummaryCard(event: widget.event),
+        const SizedBox(height: 28),
+        if (_isLoadingTiers)
+          const Center(child: CircularProgressIndicator())
+        else if (_tiers.isNotEmpty) ...[
+          _sectionTitle('Select Ticket Type'),
+          const SizedBox(height: 14),
+          ..._tiers.map(
+            (tier) => _TierOption(
+              tier: tier,
+              feeAmount: feeAmount,
+              isSelected: _selectedTier?.id == tier.id,
+              onTap: () {
+                if (!tier.isSoldOut) {
+                  setState(() {
+                    _selectedTier = tier;
+                    _recalculatePromo();
+                  });
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 28),
+        ],
+        _sectionTitle('Quantity'),
+        const SizedBox(height: 14),
+        _QuantitySelector(
+          quantity: _quantity,
+          max: (_selectedTier != null)
+              ? _selectedTier!.quantityAvailable.clamp(1, 10)
+              : _realTicketsAvailable.clamp(1, 10),
+          onChanged: (qty) => setState(() {
+            _quantity = qty;
+            _recalculatePromo();
+          }),
+        ),
+      ],
+    );
+  }
+
+  // ── STEP 2: Contact details ──
+  Widget _buildDetailsStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('Your Details',
+            subtitle: 'Where should we send your tickets?'),
+        const SizedBox(height: 18),
+        TextFormField(
+          controller: _nameController,
+          decoration: _modernInput('Full Name', icon: Icons.person_outline),
+          validator: (value) =>
+              value == null || value.isEmpty ? 'Required' : null,
+        ),
+        const SizedBox(height: 14),
+        TextFormField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: _modernInput('Email Address', icon: Icons.email_outlined),
+          validator: (value) => value == null
+              ? 'Required'
+              : (!value.contains('@') ? 'Invalid email' : null),
+        ),
+        const SizedBox(height: 14),
+        IntlPhoneField(
+          controller: _phoneController,
+          decoration: _modernInput('Phone Number'),
+          initialCountryCode: 'PH',
+          dropdownIconPosition: IconPosition.trailing,
+          flagsButtonPadding: const EdgeInsets.only(left: 8),
+          dropdownTextStyle: const TextStyle(fontSize: 16),
+          pickerDialogStyle: PickerDialogStyle(
+            backgroundColor: Colors.white,
+            countryCodeStyle: const TextStyle(color: Colors.black54),
+            countryNameStyle: const TextStyle(
+              color: Colors.black87,
+              fontSize: 16,
+            ),
+            searchFieldInputDecoration: InputDecoration(
+              hintText: 'Search country',
+              hintStyle: const TextStyle(color: Colors.black38),
+              prefixIcon: const Icon(Icons.search, color: Colors.black54),
+              filled: true,
+              fillColor: Colors.grey[100],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          onChanged: (phone) {
+            _completePhoneNumber = phone.completeNumber;
+          },
+        ),
+      ],
+    );
+  }
+
+  // ── STEP 3: Registration questions ──
+  Widget _buildQuestionsStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('A Few Questions',
+            subtitle: 'The organizer needs this to confirm your spot.'),
+        const SizedBox(height: 18),
+        RegistrationQuestionsForm(
+          questions: _registrationQuestions,
+          answers: _registrationAnswers,
+          onChanged: (updated) =>
+              setState(() => _registrationAnswers = updated),
+        ),
+      ],
+    );
+  }
+
+  // ── STEP 4: Review, promo, newsletter, price breakdown ──
+  Widget _buildReviewStep({
+    required double displayUnitPrice,
+    required double displaySubtotal,
+    required double subscriberDiscountAmount,
+    required double total,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('Review & Pay'),
+        const SizedBox(height: 20),
+
+        // Promo code
+        const Text('Promo Code',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _promoCodeController,
+                textCapitalization: TextCapitalization.characters,
+                enabled: _appliedPromoCode == null,
+                decoration: _modernInput('', hint: 'ENTER CODE').copyWith(
+                  labelText: null,
+                  errorText: _promoError,
+                  suffixIcon: _appliedPromoCode != null
+                      ? IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: _removePromoCode,
+                        )
+                      : null,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: (_isCheckingPromo || _appliedPromoCode != null)
+                  ? null
+                  : _applyPromoCode,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryColor,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                minimumSize: const Size(88, 48),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
+              child: _isCheckingPromo
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Apply'),
+            ),
+          ],
+        ),
+        if (_appliedPromoCode != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Text(
+              'Code $_appliedPromoCode applied!',
+              style: const TextStyle(
+                color: Colors.green,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+
+        const SizedBox(height: 20),
+
+        // Newsletter opt-in
+        CheckboxListTile(
+          value: _subscribedToNewsletter,
+          onChanged: (val) =>
+              setState(() => _subscribedToNewsletter = val ?? true),
+          title: const Text(
+            'Subscribe to updates from this organizer',
+            style: TextStyle(fontSize: 14),
+          ),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          activeColor: AppTheme.primaryColor,
+        ),
+
+        const SizedBox(height: 16),
+
+        if (_isLoadingEventDetails)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8.0),
+            child: LinearProgressIndicator(),
+          ),
+
+        _PriceBreakdown(
+          unitPrice: displayUnitPrice,
+          quantity: _quantity,
+          subtotal: displaySubtotal,
+          promoDiscount: _promoDiscountAmount,
+          subscriberDiscount: subscriberDiscountAmount,
+          total: total,
+        ),
+      ],
+    );
+  }
 }
 
 // ============================================
 // SUPPORTING WIDGETS
 // ============================================
+
+/// Segmented progress bar with step labels for the multi-step checkout.
+class _StepProgressBar extends StatelessWidget {
+  final List<String> titles;
+  final int current;
+
+  const _StepProgressBar({required this.titles, required this.current});
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = AppTheme.primaryColor;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              for (int i = 0; i < titles.length; i++) ...[
+                Expanded(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: i <= current
+                          ? primary
+                          : primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                if (i != titles.length - 1) const SizedBox(width: 6),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Step ${current + 1} of ${titles.length}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[500],
+                ),
+              ),
+              Text(
+                titles[current],
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: primary,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _TierOption extends StatelessWidget {
   final TicketTier tier;
@@ -1217,61 +1427,111 @@ class _TierOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? Colors.deepPurple.withOpacity(0.05)
-              : Colors.white,
-          border: Border.all(
-            color: isSelected ? Colors.deepPurple : Colors.grey[300]!,
-            width: isSelected ? 2 : 1,
-          ),
-          borderRadius: BorderRadius.circular(12),
+    final primary = AppTheme.primaryColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final price = tier.price + feeAmount;
+    final baseColor =
+        isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white;
+    final borderColor =
+        isDark ? Colors.white.withValues(alpha: 0.12) : Colors.grey.shade300;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: isSelected ? primary.withValues(alpha: 0.12) : baseColor,
+        border: Border.all(
+          color: isSelected ? primary : borderColor,
+          width: isSelected ? 2 : 1,
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    tier.name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: isSelected
+            ? [
+                BoxShadow(
+                  color: primary.withValues(alpha: 0.12),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Selection indicator
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isSelected ? primary : Colors.grey.shade400,
+                      width: isSelected ? 6.5 : 1.6,
                     ),
                   ),
-                  if (tier.description != null)
-                    Text(
-                      tier.description!,
-                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                    ),
-                  if (tier.isSoldOut)
-                    const Text(
-                      'SOLD OUT',
-                      style: TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        tier.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          letterSpacing: -0.2,
+                        ),
                       ),
-                    ),
-                ],
-              ),
+                      if (tier.description != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          tier.description!,
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 12.5),
+                        ),
+                      ],
+                      if (tier.isSoldOut) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'SOLD OUT',
+                            style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  price <= 0 ? 'Free' : '₱${price.toStringAsFixed(0)}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                    color: isSelected
+                        ? primary
+                        : (isDark ? Colors.white : Colors.black87),
+                  ),
+                ),
+              ],
             ),
-            Text(
-              '₱${(tier.price + feeAmount).toStringAsFixed(0)}',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: isSelected ? Colors.deepPurple : Colors.grey,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1285,13 +1545,19 @@ class _EventSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.05)
+            : Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: isDark
+            ? Border.all(color: Colors.white.withValues(alpha: 0.08))
+            : null,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: isDark ? 0.0 : 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1311,9 +1577,10 @@ class _EventSummaryCard extends StatelessWidget {
               children: [
                 Text(
                   event.title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1384,37 +1651,86 @@ class _QuantitySelector extends StatelessWidget {
       );
     }
 
+    final primary = AppTheme.primaryColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Row(
       children: [
-        IconButton(
-          onPressed: quantity > 1 ? () => onChanged(quantity - 1) : null,
-          icon: const Icon(Icons.remove_circle),
-          iconSize: 32,
-          color: quantity > 1 ? Colors.deepPurple : Colors.grey,
-        ),
-        const SizedBox(width: 16),
-        Text(
-          '$quantity',
-          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(width: 16),
-        IconButton(
-          onPressed: quantity < max ? () => onChanged(quantity + 1) : null,
-          icon: const Icon(Icons.add_circle),
-          iconSize: 32,
-          color: quantity < max ? Colors.deepPurple : Colors.grey,
+        Container(
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              _stepButton(
+                icon: Icons.remove_rounded,
+                enabled: quantity > 1,
+                onTap: () => onChanged(quantity - 1),
+                primary: primary,
+              ),
+              SizedBox(
+                width: 44,
+                child: Text(
+                  '$quantity',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              _stepButton(
+                icon: Icons.add_rounded,
+                enabled: quantity < max,
+                onTap: () => onChanged(quantity + 1),
+                primary: primary,
+              ),
+            ],
+          ),
         ),
         const Spacer(),
         if (max < 10)
-          Text(
-            'Only $max left',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.orange[700],
-              fontWeight: FontWeight.w500,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'Only $max left',
+              style: TextStyle(
+                fontSize: 12.5,
+                color: Colors.orange[800],
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
       ],
+    );
+  }
+
+  Widget _stepButton({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+    required Color primary,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Icon(
+            icon,
+            size: 22,
+            color: enabled ? primary : Colors.grey.shade400,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1438,11 +1754,20 @@ class _PriceBreakdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final primary = AppTheme.primaryColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(12),
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.04)
+            : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.10)
+              : Colors.grey.shade200,
+        ),
       ),
       child: Column(
         children: [
@@ -1452,11 +1777,6 @@ class _PriceBreakdown extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           _PriceRow(label: 'Quantity', value: '× $quantity'),
-          const Divider(),
-          _PriceRow(
-            label: 'Subtotal',
-            value: '₱${subtotal.toStringAsFixed(2)}',
-          ),
           if (subscriberDiscount > 0) ...[
             const SizedBox(height: 8),
             _PriceRow(
@@ -1473,12 +1793,27 @@ class _PriceBreakdown extends StatelessWidget {
               color: Colors.green,
             ),
           ],
-          const Divider(height: 24),
-          _PriceRow(
-            label: 'Total',
-            value: '₱${total.toStringAsFixed(2)}',
-            isBold: true,
-            fontSize: 18,
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: DottedLikeDivider(),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Total',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              Text(
+                total <= 0 ? 'Free' : '₱${total.toStringAsFixed(2)}',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: primary,
+                  letterSpacing: -0.5,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1486,40 +1821,69 @@ class _PriceBreakdown extends StatelessWidget {
   }
 }
 
+/// A thin dashed divider used inside the price card.
+class DottedLikeDivider extends StatelessWidget {
+  const DottedLikeDivider({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final dashColor =
+        isDark ? Colors.white.withValues(alpha: 0.18) : Colors.grey.shade300;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const dashWidth = 5.0;
+        const dashSpace = 4.0;
+        final count = (constraints.maxWidth / (dashWidth + dashSpace)).floor();
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(
+            count,
+            (_) => Container(
+              width: dashWidth,
+              height: 1.4,
+              color: dashColor,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _PriceRow extends StatelessWidget {
   final String label;
   final String value;
-  final bool isBold;
   final Color? color;
-  final double fontSize;
 
   const _PriceRow({
     required this.label,
     required this.value,
-    this.isBold = false,
     this.color,
-    this.fontSize = 16,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final labelColor = isDark ? Colors.white60 : Colors.grey[700];
+    final valueColor = isDark ? Colors.white : Colors.black87;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
           label,
           style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-            color: color,
+            fontSize: 14.5,
+            color: color ?? labelColor,
+            fontWeight: FontWeight.w500,
           ),
         ),
         Text(
           value,
           style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-            color: color,
+            fontSize: 14.5,
+            color: color ?? valueColor,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
@@ -1621,14 +1985,17 @@ class _EventImageGalleryState extends State<_EventImageGallery> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final placeholderColor = isDark ? Colors.white12 : Colors.grey[300];
     if (_allImages.isEmpty) {
       return ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         child: AspectRatio(
           aspectRatio: 16 / 9,
           child: Container(
-            color: Colors.grey[300],
-            child: const Icon(Icons.event, size: 48),
+            color: placeholderColor,
+            child: Icon(Icons.event,
+                size: 48, color: isDark ? Colors.white38 : Colors.grey[600]),
           ),
         ),
       );
@@ -1645,13 +2012,18 @@ class _EventImageGalleryState extends State<_EventImageGallery> {
               onPageChanged: (i) => setState(() => _current = i),
               itemBuilder: (_, i) => GestureDetector(
                 onTap: () => _openFullscreen(i),
-                child: CachedNetworkImage(
-                  imageUrl: _allImages[i],
-                  fit: BoxFit.cover,
-                  placeholder: (_, __) => Container(color: Colors.grey[300]),
-                  errorWidget: (_, __, ___) => Container(
-                    color: Colors.grey[300],
-                    child: const Icon(Icons.broken_image, size: 48),
+                // White backdrop so transparent (logo) images render correctly
+                // in dark mode instead of showing the dark card through them.
+                child: Container(
+                  color: Colors.white,
+                  child: CachedNetworkImage(
+                    imageUrl: _allImages[i],
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => Container(color: Colors.grey[300]),
+                    errorWidget: (_, __, ___) => Container(
+                      color: Colors.grey[300],
+                      child: const Icon(Icons.broken_image, size: 48),
+                    ),
                   ),
                 ),
               ),

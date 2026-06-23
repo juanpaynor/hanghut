@@ -48,6 +48,9 @@ dependencies:
   ably_flutter: ^1.2.42
   flutter_dotenv: ^6.0.0
   cached_network_image: ^3.4.1
+  # Already bundled transitively by cached_network_image; pinned to the resolved
+  # version so map marker photos can reuse its disk cache (no new code shipped).
+  flutter_cache_manager: 3.4.1
   sqflite: ^2.3.0
   path: ^1.8.3
   uuid: ^4.5.1

@@ -2409,8 +2409,11 @@ class _OrganizerSection extends StatelessWidget {
                 clipBehavior: Clip.none,
                 itemCount: events.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, i) =>
-                    _OrganizerEventCard(event: events[i], isDark: isDark),
+                itemBuilder: (context, i) => _OrganizerEventCard(
+                  event: events[i],
+                  isDark: isDark,
+                  organizerId: profile['partner_id'] as String? ?? '',
+                ),
               ),
             ),
           ],
@@ -2494,9 +2497,14 @@ class _SocialChip extends StatelessWidget {
 
 class _OrganizerEventCard extends StatelessWidget {
   final Map<String, dynamic> event;
+  final String organizerId;
   final bool isDark;
 
-  const _OrganizerEventCard({required this.event, required this.isDark});
+  const _OrganizerEventCard({
+    required this.event,
+    required this.isDark,
+    required this.organizerId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2529,7 +2537,7 @@ class _OrganizerEventCard extends StatelessWidget {
             capacity: (event['capacity'] as num?)?.toInt() ?? 0,
             ticketsSold: (event['tickets_sold'] as num?)?.toInt() ?? 0,
             category: event['event_type'] as String? ?? 'other',
-            organizerId: event['organizer_id'] as String? ?? '',
+            organizerId: event['organizer_id'] as String? ?? organizerId,
             createdAt: DateTime.now(),
           );
           EventDetailModal.show(context, eventObj);

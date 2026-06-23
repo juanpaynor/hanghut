@@ -381,12 +381,13 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                           ),
                         ),
 
-                      // Badges
+                      // Badges — bottom-left over the gradient so they never
+                      // collide with the close / report buttons in the app bar.
                       Positioned(
-                        top: MediaQuery.of(context).padding.top + 12,
-                        right: 16,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
+                        bottom: 20,
+                        left: 16,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -408,7 +409,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                               ),
                             ),
                             if (isVerified) ...[
-                              const SizedBox(height: 8),
+                              const SizedBox(width: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -426,6 +427,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                                   ],
                                 ),
                                 child: Row(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     const Icon(
                                       Icons.verified,

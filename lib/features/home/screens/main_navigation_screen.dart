@@ -64,6 +64,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   late final List<AnimationController> _navControllers;
   late final List<Animation<double>> _navAnimations;
 
+  // Compact nav on scroll — ValueNotifier so scroll never calls setState on
+  // the full screen; only the navbar's ValueListenableBuilder rebuilds.
+  final ValueNotifier<bool> navCompactNotifier = ValueNotifier(false);
+  double _scrollAccum = 0;
+
   @override
   void initState() {
     super.initState();
@@ -157,6 +162,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
   @override
   void dispose() {
+    navCompactNotifier.dispose();
     _dialController.dispose();
     for (final c in _navControllers) {
       c.dispose();
@@ -288,6 +294,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     }
     _navControllers[index].forward(from: 0.0);
     HapticFeedback.selectionClick();
+    navCompactNotifier.value = false;
+    _scrollAccum = 0;
     setState(() {
       _selectedIndex = index;
     });
@@ -485,7 +493,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         child: Stack(
           children: [
             Positioned.fill(
-              child: IndexedStack(index: _selectedIndex, children: _screens),
+              child: _wrapScrollDetector(
+                IndexedStack(index: _selectedIndex, children: _screens),
+              ),
             ),
 
           if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
@@ -507,14 +517,58 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           _buildSpeedDialButtons(context),
 
           // ── Floating Nav Bar ──
-          _buildFloatingNavBar(context),
+          // RepaintBoundary isolates the blur repaint from the rest of the
+          // screen; ValueListenableBuilder means only this subtree rebuilds
+          // when compact state changes — the IndexedStack never repaints.
+          RepaintBoundary(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: navCompactNotifier,
+              builder: (context, navCompact, _) =>
+                  _buildFloatingNavBar(context, navCompact),
+            ),
+          ),
         ],
         ),
       ),
     );
   }
 
-  Widget _buildFloatingNavBar(BuildContext context) {
+  Widget _wrapScrollDetector(Widget child) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is ScrollUpdateNotification) {
+          if (n.metrics.pixels <= 10) {
+            if (navCompactNotifier.value) navCompactNotifier.value = false;
+            _scrollAccum = 0;
+            return false;
+          }
+          final delta = n.scrollDelta ?? 0;
+          // Reset accumulator when direction flips so the bar reacts promptly
+          // to a reversal instead of having to unwind a large built-up value.
+          if ((delta > 0 && _scrollAccum < 0) ||
+              (delta < 0 && _scrollAccum > 0)) {
+            _scrollAccum = 0;
+          }
+          _scrollAccum += delta;
+          if (_scrollAccum > 40 && !navCompactNotifier.value) {
+            navCompactNotifier.value = true;
+            _scrollAccum = 0;
+          } else if (_scrollAccum < -20 && navCompactNotifier.value) {
+            navCompactNotifier.value = false;
+            _scrollAccum = 0;
+          }
+        } else if (n is ScrollEndNotification) {
+          // Once scrolling settles, spring the bar back to full size.
+          if (navCompactNotifier.value) navCompactNotifier.value = false;
+          _scrollAccum = 0;
+        }
+        return false;
+      },
+      child: child,
+    );
+  }
+
+  Widget _buildFloatingNavBar(BuildContext context, bool navCompact) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     // FAB protrudes 4px above the bar top — pops out slightly without floating away
@@ -522,6 +576,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     const fabSize = 58.0;
     const protrusion = 4.0;
     const stackHeight = barHeight + protrusion + fabSize / 2; // = 105
+
+    // Compact-on-scroll: bar shrinks width-inward (centered), labels collapse.
+    // Height/stackHeight stay constant so the speed-dial geometry is unaffected.
+    final availableWidth = MediaQuery.of(context).size.width - 32;
+    final compactWidth = (availableWidth * 0.66).clamp(260.0, availableWidth);
 
     return Positioned(
       bottom: bottomInset + 12,
@@ -536,7 +595,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             left: 0,
             right: 0,
             bottom: 0,
-            child: DecoratedBox(
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOutCubic,
+                width: navCompact ? compactWidth : availableWidth,
+                child: DecoratedBox(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(32),
                 boxShadow: [
@@ -551,7 +615,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(32),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                   child: Container(
                     height: barHeight,
                     decoration: BoxDecoration(
@@ -560,33 +624,35 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                         end: Alignment.bottomRight,
                         colors: isDark
                             ? [
-                                Colors.grey[900]!.withOpacity(0.92),
-                                Colors.grey[850]!.withOpacity(0.85),
+                                Colors.grey[900]!.withOpacity(0.74),
+                                Colors.grey[850]!.withOpacity(0.62),
                               ]
                             : [
-                                Colors.white.withOpacity(0.82),
-                                Colors.white.withOpacity(0.70),
+                                Colors.white.withOpacity(0.58),
+                                Colors.white.withOpacity(0.40),
                               ],
                       ),
                       borderRadius: BorderRadius.circular(32),
                       border: Border.all(
                         color: isDark
-                            ? Colors.white.withOpacity(0.12)
-                            : Colors.white.withOpacity(0.50),
+                            ? Colors.white.withOpacity(0.18)
+                            : Colors.white.withOpacity(0.65),
                         width: 1,
                       ),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map'),
-                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed'),
+                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map', navCompact),
+                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed', navCompact),
                         const SizedBox(width: fabSize), // placeholder keeps spacing
-                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore'),
-                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore', navCompact),
+                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile', navCompact),
                       ],
                     ),
                   ),
+                ),
+              ),
                 ),
               ),
             ),
@@ -755,34 +821,61 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     IconData iconOutlined,
     IconData iconFilled,
     String label,
+    bool navCompact,
   ) {
     final isSelected = _selectedIndex == index;
     final activeColor = Theme.of(context).primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final inactiveColor = isDark ? Colors.white60 : Colors.grey[400]!;
+    final inactiveColor = isDark ? Colors.white70 : Colors.grey[700]!;
 
     return InkWell(
       onTap: () => _onItemTapped(index),
       borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.symmetric(
+          horizontal: navCompact ? 8 : 12,
+          vertical: 8,
+        ),
         child: ScaleTransition(
           scale: _navAnimations[index],
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                isSelected ? iconFilled : iconOutlined,
-                color: isSelected ? activeColor : inactiveColor,
-                size: 26,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
+              AnimatedScale(
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOutCubic,
+                scale: navCompact ? 1.14 : 1.0,
+                child: Icon(
+                  isSelected ? iconFilled : iconOutlined,
                   color: isSelected ? activeColor : inactiveColor,
-                  fontSize: 10,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                  size: 26,
+                ),
+              ),
+              // Label collapses to zero height + fades when compact
+              ClipRect(
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 350),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  heightFactor: navCompact ? 0.0 : 1.0,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: navCompact ? 0.0 : 1.0,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          color: isSelected ? activeColor : inactiveColor,
+                          fontSize: 10,
+                          fontWeight:
+                              isSelected ? FontWeight.bold : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],

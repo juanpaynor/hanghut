@@ -17,6 +17,35 @@ import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 import 'package:bitemates/features/home/widgets/mention_text.dart';
 
+/// Ensures only one feed video plays at a time. Mobile GPUs expose very few
+/// hardware video decoders, so several simultaneously-playing feed videos cause
+/// severe jank / heat. Cards request the single playback slot through this.
+class _FeedVideoManager {
+  _FeedVideoManager._();
+  static final _FeedVideoManager instance = _FeedVideoManager._();
+
+  VideoPlayerController? _active;
+
+  void play(VideoPlayerController controller) {
+    if (identical(_active, controller)) {
+      if (controller.value.isInitialized && !controller.value.isPlaying) {
+        controller.play();
+      }
+      return;
+    }
+    final previous = _active;
+    _active = controller;
+    if (previous != null && previous.value.isInitialized) {
+      previous.pause();
+    }
+    if (controller.value.isInitialized) controller.play();
+  }
+
+  void release(VideoPlayerController controller) {
+    if (identical(_active, controller)) _active = null;
+  }
+}
+
 class SocialPostCard extends StatefulWidget {
   final Map<String, dynamic> post;
   final VoidCallback? onTap;
@@ -47,6 +76,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
   VideoPlayerController? _videoController;
   bool _videoInitialized = false;
   bool _isMuted = true;
+  // Visibility-gated playback: lazily init when the card scrolls into view and
+  // only let the single most-visible video play (mobile has few HW decoders).
+  ScrollPosition? _scrollPosition;
+  bool _isActiveVideo = false;
 
   @override
   void initState() {
@@ -56,7 +89,92 @@ class _SocialPostCardState extends State<SocialPostCard> {
     _commentCount = widget.post['comment_count'] ?? 0;
 
     _fetchAttachedEvent();
-    _initVideoIfNeeded();
+    // Video is initialized lazily once the card scrolls into view — see
+    // _evaluateVideoVisibility(). This avoids spinning up decoders for cards
+    // built off-screen by the list's cacheExtent.
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final hasVideo =
+        (widget.post['video_url'] as String?)?.isNotEmpty ?? false;
+    if (!hasVideo) return;
+    final newPosition = Scrollable.maybeOf(context)?.position;
+    if (!identical(newPosition, _scrollPosition)) {
+      _scrollPosition?.removeListener(_onScroll);
+      _scrollPosition = newPosition;
+      _scrollPosition?.addListener(_onScroll);
+    }
+    // Run an initial check after first layout so a video already on screen
+    // (no scroll yet) still starts.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _evaluateVideoVisibility();
+    });
+  }
+
+  void _onScroll() {
+    if (mounted) _evaluateVideoVisibility();
+  }
+
+  /// Measures how much of this card is on screen and drives lazy init +
+  /// single-active playback via [_FeedVideoManager].
+  void _evaluateVideoVisibility() {
+    final hasVideo =
+        (widget.post['video_url'] as String?)?.isNotEmpty ?? false;
+    if (!hasVideo) return;
+
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached || box.size.height == 0) return;
+
+    final screenH = MediaQuery.of(context).size.height;
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    final visibleTop = top.clamp(0.0, screenH);
+    final visibleBottom = bottom.clamp(0.0, screenH);
+    final visibleFraction =
+        ((visibleBottom - visibleTop) / box.size.height).clamp(0.0, 1.0);
+
+    // Lazy-init the controller the first time the card is meaningfully visible.
+    if (visibleFraction >= 0.25 && _videoController == null) {
+      _initVideo();
+    }
+
+    if (visibleFraction >= 0.65) {
+      // Most-visible card: claim the single playback slot.
+      if (_videoInitialized && _videoController != null) {
+        _FeedVideoManager.instance.play(_videoController!);
+        _isActiveVideo = true;
+      }
+    } else if (visibleFraction < 0.25) {
+      // Mostly off screen: yield the slot and pause.
+      if (_isActiveVideo && _videoController != null) {
+        _videoController!.pause();
+        _FeedVideoManager.instance.release(_videoController!);
+        _isActiveVideo = false;
+      }
+    }
+  }
+
+  void _initVideo() {
+    final videoUrl = widget.post['video_url'] as String?;
+    if (videoUrl == null || videoUrl.isEmpty || _videoController != null) return;
+    final controller = VideoPlayerController.networkUrl(Uri.parse(videoUrl))
+      ..setLooping(true)
+      ..setVolume(0); // Start muted
+    _videoController = controller;
+    controller
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+          setState(() => _videoInitialized = true);
+          // Re-check visibility now that it's ready — if still the visible
+          // card, the manager starts it.
+          _evaluateVideoVisibility();
+        })
+        .catchError((e) {
+          debugPrint('Video init error: $e');
+        });
   }
 
   @override
@@ -72,27 +190,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
   @override
   void dispose() {
+    _scrollPosition?.removeListener(_onScroll);
+    if (_videoController != null) {
+      _FeedVideoManager.instance.release(_videoController!);
+    }
     _videoController?.dispose();
     super.dispose();
-  }
-
-  void _initVideoIfNeeded() {
-    final videoUrl = widget.post['video_url'] as String?;
-    if (videoUrl != null && videoUrl.isNotEmpty) {
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl))
-        ..setLooping(true)
-        ..setVolume(0) // Start muted
-        ..initialize()
-            .then((_) {
-              if (mounted) {
-                setState(() => _videoInitialized = true);
-                _videoController!.play();
-              }
-            })
-            .catchError((e) {
-              debugPrint('Video init error: $e');
-            });
-    }
   }
 
   Future<void> _fetchAttachedEvent() async {
@@ -598,8 +701,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
           setState(() {
             if (_videoController!.value.isPlaying) {
               _videoController!.pause();
+              _FeedVideoManager.instance.release(_videoController!);
+              _isActiveVideo = false;
             } else {
-              _videoController!.play();
+              // Route through the manager so any other playing video pauses.
+              _FeedVideoManager.instance.play(_videoController!);
+              _isActiveVideo = true;
             }
           });
         },

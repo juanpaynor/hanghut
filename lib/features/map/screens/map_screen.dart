@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/matching_service.dart';
 import 'package:bitemates/core/services/event_service.dart';
@@ -2317,6 +2317,16 @@ class MapScreenState extends State<MapScreen>
 
       print('✅ Updated Cluster Source with ${features.length} features');
 
+      // Cap style-image memory: drop the oldest OFF-SCREEN marker images once
+      // we exceed the cache budget. Anything referenced by the current feature
+      // set (incl. filtered-out features re-shown without a refetch) is kept.
+      final neededIcons = <String>{
+        for (final f in features)
+          if ((f['properties'] as Map?)?['icon_id'] is String)
+            (f['properties'] as Map)['icon_id'] as String,
+      };
+      await _evictStaleMarkerImages(style, neededIcons);
+
       // Trigger "Spring Pop" Animation only when marker count changes
       if (features.length != _lastFeatureCount) {
         _lastFeatureCount = features.length;
@@ -2413,6 +2423,48 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
+  /// Fetches image bytes through the shared disk cache so marker photos are
+  /// downloaded from Storage at most once per device (not per map view).
+  /// Returns null on any failure so callers can fall back to a placeholder.
+  Future<Uint8List?> _loadMarkerImageBytes(String url) async {
+    try {
+      final file = await DefaultCacheManager().getSingleFile(url);
+      return await file.readAsBytes();
+    } catch (e) {
+      print('⚠️ Marker image fetch failed ($url): $e');
+      return null;
+    }
+  }
+
+  /// Caps the number of marker style-images held on the GPU/style. `_addedImages`
+  /// is a LinkedHashSet, so it iterates in insertion order — we remove the oldest
+  /// images that aren't part of the current map view until back under budget.
+  Future<void> _evictStaleMarkerImages(
+    StyleManager style,
+    Set<String> needed,
+  ) async {
+    if (_addedImages.length <= _maxCachedImages) return;
+    final overflow = _addedImages.length - _maxCachedImages;
+    final toRemove = _addedImages
+        .where((id) => !needed.contains(id))
+        .take(overflow)
+        .toList();
+    for (final id in toRemove) {
+      try {
+        await style.removeStyleImage(id);
+      } catch (_) {
+        // Drop from our set regardless so the cache can't overflow permanently.
+      }
+      _addedImages.remove(id);
+    }
+    if (toRemove.isNotEmpty) {
+      print(
+        '🧹 Evicted ${toRemove.length} off-screen marker images '
+        '(cache now ${_addedImages.length}/$_maxCachedImages)',
+      );
+    }
+  }
+
   // --- EXPERIENCE MARKER (Map Pin with Photo) ---
   Future<Uint8List> _createExperienceMarkerImage({
     required Map<String, dynamic> table,
@@ -2473,8 +2525,8 @@ class MapScreenState extends State<MapScreen>
 
     try {
       if (imageUrl != null) {
-        final response = await http.get(Uri.parse(imageUrl));
-        final Uint8List bytes = response.bodyBytes;
+        final bytes = await _loadMarkerImageBytes(imageUrl);
+        if (bytes == null) throw Exception('image unavailable');
         final ui.Codec codec = await ui.instantiateImageCodec(bytes);
         final ui.FrameInfo frameInfo = await codec.getNextFrame();
         final ui.Image image = frameInfo.image;
@@ -2624,9 +2676,8 @@ class MapScreenState extends State<MapScreen>
 
     try {
       if (imageUrl != null) {
-        final response = await http.get(Uri.parse(imageUrl));
-        if (response.statusCode == 200) {
-          final Uint8List bytes = response.bodyBytes;
+        final bytes = await _loadMarkerImageBytes(imageUrl);
+        if (bytes != null) {
           final ui.Codec codec = await ui.instantiateImageCodec(bytes);
           final ui.FrameInfo frameInfo = await codec.getNextFrame();
           final ui.Image image = frameInfo.image;
@@ -2692,9 +2743,8 @@ class MapScreenState extends State<MapScreen>
 
     if (authorAvatarUrl != null) {
       try {
-        final avatarResponse = await http.get(Uri.parse(authorAvatarUrl));
-        if (avatarResponse.statusCode == 200) {
-          final Uint8List aBytes = avatarResponse.bodyBytes;
+        final aBytes = await _loadMarkerImageBytes(authorAvatarUrl);
+        if (aBytes != null) {
           final ui.Codec aCodec = await ui.instantiateImageCodec(aBytes);
           final ui.FrameInfo aFrameInfo = await aCodec.getNextFrame();
           final ui.Image aImage = aFrameInfo.image;
@@ -2797,8 +2847,8 @@ class MapScreenState extends State<MapScreen>
 
     // Try to load custom image
     try {
-      final response = await http.get(Uri.parse(imageUrl));
-      final Uint8List bytes = response.bodyBytes;
+      final bytes = await _loadMarkerImageBytes(imageUrl);
+      if (bytes == null) throw Exception('image unavailable');
       final ui.Codec codec = await ui.instantiateImageCodec(bytes);
       final ui.FrameInfo frameInfo = await codec.getNextFrame();
       final ui.Image customImage = frameInfo.image;
@@ -2936,8 +2986,8 @@ class MapScreenState extends State<MapScreen>
     // Try to load host photo
     if (photoUrl != null) {
       try {
-        final response = await http.get(Uri.parse(photoUrl));
-        final Uint8List bytes = response.bodyBytes;
+        final bytes = await _loadMarkerImageBytes(photoUrl);
+        if (bytes == null) throw Exception('image unavailable');
         final ui.Codec codec = await ui.instantiateImageCodec(bytes);
         final ui.FrameInfo frameInfo = await codec.getNextFrame();
         final ui.Image profileImage = frameInfo.image;
@@ -3176,9 +3226,8 @@ class MapScreenState extends State<MapScreen>
     // 2. Draw Image (Clip to Circle)
     if (event.coverImageUrl != null) {
       try {
-        final response = await http.get(Uri.parse(event.coverImageUrl!));
-        if (response.statusCode == 200) {
-          final Uint8List bytes = response.bodyBytes;
+        final bytes = await _loadMarkerImageBytes(event.coverImageUrl!);
+        if (bytes != null) {
           final ui.Codec codec = await ui.instantiateImageCodec(bytes);
           final ui.FrameInfo frameInfo = await codec.getNextFrame();
           final ui.Image image = frameInfo.image;
