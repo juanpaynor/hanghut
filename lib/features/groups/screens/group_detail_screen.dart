@@ -11,6 +11,7 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/groups/screens/edit_group_screen.dart';
+import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 
 /// Minimal group detail: cover → meta → tabs (Chat | Members | About)
 class GroupDetailScreen extends StatefulWidget {
@@ -230,23 +231,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           return [
             // ── Cover Photo Header
             SliverAppBar(
-              expandedHeight: 260,
+              expandedHeight: 236,
               pinned: true,
               backgroundColor: theme.scaffoldBackgroundColor,
+              foregroundColor: Colors.white,
               leading: _circleIconButton(
                 icon: Icons.arrow_back_ios_new,
                 onTap: () => Navigator.pop(context),
               ),
               actions: [
-                if (_isMember)
-                  _circleIconButton(
-                    icon: Icons.chat_bubble_outline,
-                    onTap: _openGroupChat,
-                  ),
-                if (_isAdmin)
+                if (_isMember || _isAdmin)
                   _circleIconButton(
                     icon: Icons.more_horiz,
-                    onTap: () => _showOwnerMenu(context),
+                    onTap: () => _showActionsMenu(context),
                   ),
                 const SizedBox(width: 4),
               ],
@@ -280,41 +277,61 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                       ),
                     ),
 
-                    // Group name + pills on overlay
+                    // Group avatar + name + pills on overlay
                     Positioned(
                       left: 20,
                       right: 20,
-                      bottom: 20,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      bottom: 18,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(
-                            group['name'] ?? 'Group',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: -0.5,
+                          _groupAvatar(iconEmoji, category),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  group['name'] ?? 'Group',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: -0.5,
+                                    height: 1.1,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black45,
+                                        blurRadius: 8,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    _pill(
+                                      text: _getCategoryLabel(category),
+                                      emoji: iconEmoji,
+                                      icon:
+                                          iconEmoji == null || iconEmoji.isEmpty
+                                          ? _getCategoryIcon(category)
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _pill(
+                                      text:
+                                          privacy[0].toUpperCase() +
+                                          privacy.substring(1),
+                                      icon: _privacyIcon(privacy),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              _pill(
-                                text: _getCategoryLabel(category),
-                                emoji: iconEmoji,
-                                icon: iconEmoji == null || iconEmoji.isEmpty
-                                    ? _getCategoryIcon(category)
-                                    : null,
-                              ),
-                              const SizedBox(width: 8),
-                              _pill(
-                                text:
-                                    privacy[0].toUpperCase() +
-                                    privacy.substring(1),
-                                icon: _privacyIcon(privacy),
-                              ),
-                            ],
                           ),
                         ],
                       ),
@@ -330,69 +347,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                 child: Column(
                   children: [
-                    // Member count + location
-                    Row(
-                      children: [
-                        Icon(Icons.people_outline, size: 16, color: mutedText),
-                        const SizedBox(width: 6),
-                        Text(
-                          '$memberCount member${memberCount == 1 ? '' : 's'}',
-                          style: TextStyle(fontSize: 14, color: mutedText),
-                        ),
-                        if (group['location_city'] != null) ...[
-                          const SizedBox(width: 16),
-                          Icon(
-                            Icons.location_on_outlined,
-                            size: 16,
-                            color: mutedText,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              group['location_city'],
-                              style: TextStyle(fontSize: 14, color: mutedText),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ],
+                    // Stat strip: members · privacy · location
+                    _statStrip(
+                      memberCount: memberCount,
+                      privacy: privacy,
+                      city: group['location_city'] as String?,
+                      mutedText: mutedText,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 18),
 
-                    // Action buttons
-                    Row(
-                      children: [
-                        // Primary action
-                        Expanded(child: _buildPrimaryAction(primaryColor)),
-                        const SizedBox(width: 12),
-                        // Share button
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _shareGroup,
-                            icon: Icon(
-                              Icons.share_outlined,
-                              size: 18,
-                              color: mutedText,
-                            ),
-                            label: Text(
-                              'Share',
-                              style: TextStyle(color: mutedText),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              side: BorderSide(
-                                color: isDark
-                                    ? Colors.grey[800]!
-                                    : Colors.grey[300]!,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                    // Context-aware action bar
+                    _buildActionBar(primaryColor, isDark, mutedText),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -508,68 +473,222 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     );
   }
 
-  // ─── Primary Action Button ────────────────────
+  // ─── Header: stat strip, avatar, action bar ───
 
-  Widget _buildPrimaryAction(Color primaryColor) {
-    if (_isMember && !_isOwner) {
-      return OutlinedButton.icon(
-        onPressed: _leaveGroup,
-        icon: const Icon(Icons.logout, size: 18),
-        label: const Text('Leave'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.red[400],
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          side: BorderSide(color: Colors.red[300]!),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
+  Widget _statStrip({
+    required int memberCount,
+    required String privacy,
+    String? city,
+    required Color mutedText,
+  }) {
+    return Row(
+      children: [
+        _statItem(
+          Icons.people_alt_outlined,
+          '$memberCount member${memberCount == 1 ? '' : 's'}',
+          mutedText,
+        ),
+        _statDot(mutedText),
+        _statItem(
+          _privacyIcon(privacy),
+          privacy[0].toUpperCase() + privacy.substring(1),
+          mutedText,
+        ),
+        if (city != null && city.isNotEmpty) ...[
+          _statDot(mutedText),
+          Flexible(
+            child: _statItem(Icons.location_on_outlined, city, mutedText),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _statItem(IconData icon, String text, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13.5,
+              color: color,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
-      );
-    }
+      ],
+    );
+  }
 
+  Widget _statDot(Color color) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 9),
+    child: Text(
+      '·',
+      style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.bold),
+    ),
+  );
+
+  Widget _groupAvatar(String? emoji, String category) {
+    return Container(
+      width: 58,
+      height: 58,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Center(
+        child: emoji != null && emoji.isNotEmpty
+            ? Text(emoji, style: const TextStyle(fontSize: 28))
+            : Icon(
+                _getCategoryIcon(category),
+                size: 28,
+                color: GroupCover.forGroup(
+                  category: category,
+                  seed: widget.groupId,
+                ).accent,
+              ),
+      ),
+    );
+  }
+
+  /// Context-aware action bar: Join / Request for outsiders, Invite + Chat +
+  /// Share for members. Leave lives in the overflow menu, not here.
+  Widget _buildActionBar(Color primaryColor, bool isDark, Color mutedText) {
+    // Pending approval
     if (_membership?['status'] == 'pending') {
-      return OutlinedButton.icon(
-        onPressed: null,
-        icon: const Icon(Icons.hourglass_top, size: 18),
-        label: const Text('Pending'),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          side: BorderSide(color: Colors.grey[400]!),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-      );
-    }
-
-    if (_isOwner) {
-      return ElevatedButton.icon(
-        onPressed: () => _tabController.animateTo(2),
-        icon: const Icon(Icons.person_add_outlined, size: 18),
-        label: const Text('Invite'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: primaryColor,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-      );
-    }
-
-    // Not a member — Join
-    return ElevatedButton.icon(
-      onPressed: _joinGroup,
-      icon: const Icon(Icons.group_add_outlined, size: 18),
-      label: const Text('Join Group'),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: primaryColor,
-        foregroundColor: Colors.white,
+      return Container(
+        width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.grey[900] : Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.hourglass_top, size: 18, color: Colors.grey[500]),
+            const SizedBox(width: 8),
+            Text(
+              'Request pending',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Approved member — Invite (primary) + Chat + Share
+    if (_isMember) {
+      return Row(
+        children: [
+          Expanded(
+            child: _primaryButton(
+              icon: Icons.person_add_alt_1,
+              label: 'Invite',
+              color: primaryColor,
+              onTap: () => _tabController.animateTo(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _squareIconButton(
+            icon: Icons.chat_bubble_outline,
+            onTap: _openGroupChat,
+            isDark: isDark,
+            color: primaryColor,
+          ),
+          const SizedBox(width: 10),
+          _squareIconButton(
+            icon: Icons.share_outlined,
+            onTap: _shareGroup,
+            isDark: isDark,
+            color: mutedText,
+          ),
+        ],
+      );
+    }
+
+    // Not a member — Join / Request to Join
+    final isPrivate = (_group?['privacy'] as String? ?? 'public') != 'public';
+    return Row(
+      children: [
+        Expanded(
+          child: _primaryButton(
+            icon: isPrivate
+                ? Icons.lock_open_outlined
+                : Icons.group_add_outlined,
+            label: isPrivate ? 'Request to Join' : 'Join Group',
+            color: primaryColor,
+            onTap: _joinGroup,
+          ),
+        ),
+        const SizedBox(width: 10),
+        _squareIconButton(
+          icon: Icons.share_outlined,
+          onTap: _shareGroup,
+          isDark: isDark,
+          color: mutedText,
+        ),
+      ],
+    );
+  }
+
+  Widget _primaryButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 18),
+      label: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  Widget _squareIconButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    required bool isDark,
+    required Color color,
+  }) {
+    return Material(
+      color: isDark ? Colors.grey[850] : Colors.grey[100],
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 50,
+          height: 50,
+          alignment: Alignment.center,
+          child: Icon(icon, size: 21, color: color),
+        ),
       ),
     );
   }
@@ -1718,30 +1837,29 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   }
 
   Widget _defaultCoverGradient(Color primaryColor) {
+    final cover = GroupCover.forGroup(
+      category: _group?['category'] as String?,
+      seed: widget.groupId,
+    );
     return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            primaryColor.withOpacity(0.7),
-            primaryColor.withOpacity(0.3),
-          ],
-        ),
-      ),
+      decoration: BoxDecoration(gradient: cover.linear),
       child: Center(
         child: Icon(
           Icons.groups,
           size: 64,
-          color: Colors.white.withOpacity(0.2),
+          color: Colors.white.withValues(alpha: 0.22),
         ),
       ),
     );
   }
 
-  void _showOwnerMenu(BuildContext context) {
+  void _showActionsMenu(BuildContext context) {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1759,19 +1877,40 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit Group'),
-              onTap: () async {
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('Share Group'),
+              onTap: () {
                 Navigator.pop(ctx);
-                final didUpdate = await Navigator.push<bool>(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => EditGroupScreen(group: _group!),
-                  ),
-                );
-                if (didUpdate == true) await _loadAll();
+                _shareGroup();
               },
             ),
+            if (_isAdmin)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit Group'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final didUpdate = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => EditGroupScreen(group: _group!),
+                    ),
+                  );
+                  if (didUpdate == true) await _loadAll();
+                },
+              ),
+            if (_isMember && !_isOwner)
+              ListTile(
+                leading: Icon(Icons.logout, color: Colors.red[400]),
+                title: Text(
+                  'Leave Group',
+                  style: TextStyle(color: Colors.red[400]),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _leaveGroup();
+                },
+              ),
             if (_isOwner)
               ListTile(
                 leading: Icon(Icons.delete_outline, color: Colors.red[400]),
@@ -1784,6 +1923,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                   _deleteGroup();
                 },
               ),
+            const SizedBox(height: 8),
           ],
         ),
       ),

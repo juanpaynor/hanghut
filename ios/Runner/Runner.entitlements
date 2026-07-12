@@ -8,5 +8,10 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:hanghut.com</string>
+		<string>applinks:*.hanghut.com</string>
+	</array>
 </dict>
 </plist>

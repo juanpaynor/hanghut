@@ -2061,7 +2061,28 @@ class _EarningsTabState extends State<_EarningsTab> {
     Map<String, dynamic> summary,
     Map<String, dynamic> partner,
   ) async {
-    final availableBalance = (summary['available_balance'] as num?)?.toDouble() ?? 0.0;
+    // Source of truth for withdrawable funds is the Xendit sub-wallet balance,
+    // NOT the transactions ledger (team_comms #170). Summing organizer_payout
+    // drifts/overstates because the platform split + processing fee are
+    // deducted at settlement, so the sub-wallet IS the true net.
+    if (_walletLoading) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Still loading your wallet balance — try again in a moment.'),
+        ),
+      );
+      return;
+    }
+    if (_walletInfo == null || !_walletInfo!.containsKey('available_balance')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't load your wallet balance. Pull to refresh and try again."),
+        ),
+      );
+      return;
+    }
+    final availableBalance =
+        (_walletInfo!['available_balance'] as num?)?.toDouble() ?? 0.0;
 
     if (availableBalance <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(

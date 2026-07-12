@@ -13,6 +13,7 @@ class Event {
   final double ticketPrice;
   final int capacity;
   final int ticketsSold;
+  final int maxSeatsPerOrder;
   final String category;
   final String organizerId;
 
@@ -54,6 +55,7 @@ class Event {
     required this.ticketPrice,
     required this.capacity,
     required this.ticketsSold,
+    this.maxSeatsPerOrder = 10,
     required this.category,
     required this.organizerId,
     this.organizerName,
@@ -104,6 +106,12 @@ class Event {
       ticketPrice: (json['ticket_price'] as num).toDouble(),
       capacity: json['capacity'] as int,
       ticketsSold: json['tickets_sold'] as int? ?? 0,
+      // Floor at 1: callers use this as a clamp() upper bound, which throws
+      // if it ever came back 0 from a misconfigured row.
+      maxSeatsPerOrder: switch (json['max_seats_per_order'] as int? ?? 10) {
+        < 1 => 1,
+        final v => v,
+      },
       category: (json['category'] ?? json['event_type'] ?? '') as String,
       organizerId: (json['organizer_id'] as String?) ?? '',
       status: json['status'] as String? ?? 'active',
@@ -141,6 +149,7 @@ class Event {
       'ticket_price': ticketPrice,
       'capacity': capacity,
       'tickets_sold': ticketsSold,
+      'max_seats_per_order': maxSeatsPerOrder,
       'category': category,
       'organizer_id': organizerId,
       'organizer_name': organizerName,

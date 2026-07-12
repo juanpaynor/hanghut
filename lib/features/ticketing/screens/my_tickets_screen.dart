@@ -11,7 +11,10 @@ import 'package:bitemates/features/ticketing/widgets/pending_registration_card.d
 const int _kPageSize = 15;
 
 class MyTicketsScreen extends StatefulWidget {
-  const MyTicketsScreen({super.key});
+  /// When embedded inside another tab (e.g. the Explore "My Tickets" tab), the
+  /// screen drops its own Scaffold/AppBar so it doesn't double up on chrome.
+  final bool embedded;
+  const MyTicketsScreen({super.key, this.embedded = false});
 
   @override
   State<MyTicketsScreen> createState() => _MyTicketsScreenState();
@@ -152,14 +155,16 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final content = Column(
+      children: [
+        _buildFilterBar(),
+        Expanded(child: _buildBody()),
+      ],
+    );
+    if (widget.embedded) return content;
     return Scaffold(
       appBar: AppBar(title: const Text('My Tickets'), centerTitle: true),
-      body: Column(
-        children: [
-          _buildFilterBar(),
-          Expanded(child: _buildBody()),
-        ],
-      ),
+      body: content,
     );
   }
 

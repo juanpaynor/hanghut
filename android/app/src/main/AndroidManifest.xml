@@ -70,6 +70,17 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="com.hanghut.hang" android:host="login-callback" />
             </intent-filter>
+            <!-- App Links: open hanghut.com event links directly in the app.
+                 autoVerify makes Android check /.well-known/assetlinks.json on
+                 each host. Apex + wildcard subdomain (partner storefronts);
+                 wildcard does NOT cover the apex, so both are declared. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="hanghut.com" android:pathPrefix="/events" />
+                <data android:scheme="https" android:host="*.hanghut.com" android:pathPrefix="/events" />
+            </intent-filter>
         </activity>
 
         <!-- Configuring flutter_local_notifications -->

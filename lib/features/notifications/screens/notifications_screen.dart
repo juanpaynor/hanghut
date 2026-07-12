@@ -8,6 +8,12 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
+import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
+import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
+import 'package:bitemates/core/services/event_service.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -147,6 +153,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.flight_takeoff;
         iconColor = Colors.teal;
         break;
+      case 'group_join_request':
+      case 'group_invite':
+      case 'group_invite_suggestion':
+        iconData = Icons.groups;
+        iconColor = Colors.indigo;
+        break;
+      case 'group_approved':
+        iconData = Icons.groups;
+        iconColor = Colors.green;
+        break;
       default:
         iconData = Icons.notifications;
         iconColor = AppTheme.accentColor;
@@ -249,22 +265,98 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       } else if ([
         'join_request',
         'approved',
+        'declined',
         'invite',
         'table',
+        'table_join',
         'hangout_invite',
         'follower_hangout',
+        'friend_joined',
+        'member_joined',
+        'host_status_update',
       ].contains(type)) {
+        // Table / hangout — entity_id is the table id
         await _navigateToTable(entityId);
-      } else {
-        // Navigate to Post Detail
+      } else if ([
+        'ticket_confirmed',
+        'ticket_purchase',
+        'ticket_approved',
+        'ticket_rejected',
+      ].contains(type)) {
+        // Ticket notifications — open My Tickets (entity_id is an event/ticket
+        // id, NOT a post — this was the source of "Error fetching post").
         if (mounted) {
           Navigator.push(
             context,
+            MaterialPageRoute(builder: (_) => const MyTicketsScreen()),
+          );
+        }
+      } else if ([
+        'event_reminder',
+        'event_reminder_1h',
+        'event_reminder_24h',
+        'follower_event',
+        'new_event',
+      ].contains(type)) {
+        // Event notifications — entity_id (or metadata.event_id) is the event id
+        final eventId = (metadata['event_id'] ?? entityId)?.toString();
+        if (eventId != null) await _navigateToEvent(eventId);
+      } else if ([
+        'subscription_confirmed',
+        'subscription_expired',
+        'subscription_renewal_reminder',
+        'claim_fulfilled',
+      ].contains(type)) {
+        // Fan subscription — open My Memberships
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MyMembershipsScreen()),
+          );
+        }
+      } else if (type == 'new_follower') {
+        // entity_id (or metadata.follower_id) is the follower's user id
+        final userId = (metadata['follower_id'] ?? entityId)?.toString();
+        if (userId != null && mounted) {
+          Navigator.push(
+            context,
             MaterialPageRoute(
-              builder: (context) => PostDetailScreen(postId: entityId),
+              builder: (_) =>
+                  UserProfileScreen(userId: userId, isOwnProfile: false),
             ),
           );
         }
+      } else if (type == 'like' || type == 'comment' || type == 'mention') {
+        // Social — entity_id (or metadata.post_id) is the post id
+        final postId = (metadata['post_id'] ?? entityId)?.toString();
+        if (postId != null && mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PostDetailScreen(postId: postId),
+            ),
+          );
+        }
+      } else if ([
+        'group_join_request',
+        'group_approved',
+        'group_invite',
+        'group_invite_suggestion',
+        'group_detail',
+      ].contains(type)) {
+        // Group membership — entity_id (or metadata.group_id) is the group id
+        final groupId = (metadata['group_id'] ?? entityId)?.toString();
+        if (groupId != null && mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => GroupDetailScreen(groupId: groupId),
+            ),
+          );
+        }
+      } else {
+        // Unknown type — don't blindly open a post (it likely 404s). No-op.
+        debugPrint('⚠️ Unhandled notification type: $type');
       }
     } catch (e) {
       if (mounted) {
@@ -362,6 +454,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           builder: (context) =>
               TableCompactModal(table: table, matchData: const {}),
         );
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context); // Close loader
+      rethrow;
+    }
+  }
+
+  Future<void> _navigateToEvent(String eventId) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final event = await EventService().getEvent(eventId);
+      if (mounted) {
+        Navigator.pop(context); // Close loader
+        if (event != null) {
+          Navigator.pop(context); // Close notification panel
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => EventDetailModal(event: event)),
+          );
+        }
       }
     } catch (e) {
       if (mounted) Navigator.pop(context); // Close loader

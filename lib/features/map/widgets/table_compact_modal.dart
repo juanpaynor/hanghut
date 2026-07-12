@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
-import 'package:bitemates/core/services/tenor_service.dart';
+import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
@@ -152,13 +152,13 @@ class _TableCompactModalState extends State<TableCompactModal> {
         }
       }
 
-      final tenor = TenorService();
-      final results = await tenor.searchGifs(searchQuery, limit: 5);
+      final klipy = KlipyService();
+      final results = await klipy.searchGifs(searchQuery, limit: 5);
 
       if (results.isNotEmpty && mounted) {
         final randomIndex =
             DateTime.now().millisecondsSinceEpoch % results.length;
-        final gifUrl = tenor.getGifUrl(results[randomIndex]);
+        final gifUrl = klipy.getGifUrl(results[randomIndex]);
         if (gifUrl.isNotEmpty) {
           setState(() => _autoGifUrl = gifUrl);
         }
@@ -363,6 +363,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
     final bool heroIsGif =
         heroImageUrl != null &&
         (heroImageUrl.toLowerCase().contains('.gif') ||
+            heroImageUrl.toLowerCase().contains('klipy.com') ||
             heroImageUrl.toLowerCase().contains('tenor.com') ||
             heroImageUrl.toLowerCase().contains('giphy.com'));
 
@@ -1218,14 +1219,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
           _checkMembershipStatus();
           _fetchPendingCount();
         } else {
-          final venueName =
-              widget.table['venue_name'] ??
-              widget.table['title'] ??
-              widget.table['location_name'] ??
-              'Unknown Venue';
-
-          Navigator.pop(context, true);
-
+          // Keep the modal open while showing the dialog so `context` stays
+          // valid. Each button handles its own dismissal sequence.
           await showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
@@ -1258,7 +1253,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () => Navigator.pop(ctx),
+                        onPressed: () {
+                          Navigator.pop(ctx); // close dialog
+                          Navigator.pop(context, true); // close modal
+                        },
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.black54,
                           side: const BorderSide(color: Colors.black12),
@@ -1273,18 +1271,11 @@ class _TableCompactModalState extends State<TableCompactModal> {
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () {
+                          // Close the dialog first, then open chat.
+                          // context is still mounted here, so _openChat() can
+                          // safely pop the modal and show the chat sheet.
                           Navigator.pop(ctx);
-                          showModalBottomSheet(
-                            context: context,
-                            isScrollControlled: true,
-                            backgroundColor: Colors.transparent,
-                            enableDrag: true,
-                            builder: (context) => ChatScreen(
-                              channelId: 'table_${widget.table['id']}',
-                              tableId: widget.table['id'],
-                              tableTitle: venueName,
-                            ),
-                          );
+                          _openChat();
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Theme.of(

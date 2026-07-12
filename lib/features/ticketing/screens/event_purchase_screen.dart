@@ -13,8 +13,19 @@ import 'dart:async';
 import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/features/ticketing/widgets/registration_questions_form.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/core/services/seat_map_service.dart';
+import 'package:bitemates/features/ticketing/screens/seat_map_picker_screen.dart';
+import 'package:bitemates/features/ticketing/models/seat_map.dart';
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
 // import 'package:workmanager/workmanager.dart';
+
+/// Thrown when seats are taken between selection and payment (race).
+class _SeatsUnavailableException implements Exception {
+  final String message;
+  _SeatsUnavailableException(this.message);
+  @override
+  String toString() => message;
+}
 
 class EventPurchaseScreen extends StatefulWidget {
   final Event event;
@@ -57,6 +68,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   TicketTier? _selectedTier;
   bool _isLoadingTiers = true;
 
+  // Assigned-seating state. When the event has a seat map, the Ticket step
+  // swaps the quantity selector for a seat picker.
+  bool _hasSeatMap = false;
+  List<String> _selectedSeatIds = [];
+  List<Seat> _selectedSeats = [];
+  // True when the picker returned a GA (quantity-based) zone selection —
+  // seat_ids stays empty by design, so validation/UI must check this instead
+  // of _selectedSeatIds.isNotEmpty (team_comms #178).
+  bool _isGaSelection = false;
+
   final _promoCodeController = TextEditingController();
   bool _isCheckingPromo = false;
   String? _appliedPromoCode;
@@ -86,6 +107,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     _registrationId = widget.existingRegistrationId;
     _fetchUserProfile(); // Pre-fill if logged in
     _fetchTicketTiers();
+    _checkSeatMap();
     _checkEventDetails();
     _fetchRealAvailability();
     _loadSubscriberData();
@@ -94,6 +116,42 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     if (_registrationId == null) {
       _loadRegistrationQuestions();
     }
+  }
+
+  Future<void> _checkSeatMap() async {
+    final map = await SeatMapService().getEventSeatMap(widget.event.id);
+    if (mounted && map != null) {
+      setState(() => _hasSeatMap = true);
+    }
+  }
+
+  Future<void> _openSeatPicker() async {
+    final result = await Navigator.push<SeatSelectionResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatMapPickerScreen(
+          eventId: widget.event.id,
+          maxSeats: (_fullEvent ?? widget.event).maxSeatsPerOrder,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    // Nothing selected — GA returns quantity with empty seatIds by design, so
+    // only bail when BOTH are empty.
+    if (result.seatIds.isEmpty && !result.isGa) return;
+
+    setState(() {
+      _selectedSeatIds = result.seatIds;
+      _selectedSeats = result.seats;
+      _quantity = result.quantity;
+      _isGaSelection = result.isGa;
+      // Map the picked tier to a checkout tier for pricing, if it resolves.
+      if (result.tierId != null && _tiers.isNotEmpty) {
+        final match = _tiers.where((t) => t.id == result.tierId);
+        if (match.isNotEmpty) _selectedTier = match.first;
+      }
+      _recalculatePromo();
+    });
   }
 
   Future<void> _loadRegistrationQuestions() async {
@@ -597,6 +655,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       if (_registrationId != null) 'registration_id': _registrationId,
       if (_subscriberDiscount?['has_discount'] == true)
         'has_subscriber_discount': true,
+      // Assigned seating: count must equal quantity, all same tier.
+      if (_selectedSeatIds.isNotEmpty) 'seat_ids': _selectedSeatIds,
     };
 
     final response = await SupabaseConfig.client.functions.invoke(
@@ -608,8 +668,17 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       try {
         final err = response.data;
         if (err is Map && err['error'] != null) {
+          // Seat race: another buyer took a seat between pick and pay.
+          if (err['error']['code'] == 'SEATS_UNAVAILABLE') {
+            throw _SeatsUnavailableException(
+              err['error']['message']?.toString() ??
+                  'Some seats are no longer available.',
+            );
+          }
           throw Exception(err['error']['message']);
         }
+      } on _SeatsUnavailableException {
+        rethrow;
       } catch (_) {}
       throw Exception('Failed to create purchase intent: ${response.status}');
     }
@@ -639,6 +708,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     // Validate Tier
     if (_tiers.isNotEmpty && _selectedTier == null) {
       _showErrorDialog('Select Ticket', 'Please select a ticket type.');
+      return;
+    }
+
+    // Validate seats for assigned-seating events (GA selections carry no
+    // seat_ids by design — check _isGaSelection too).
+    if (_hasSeatMap && _selectedSeatIds.isEmpty && !_isGaSelection) {
+      _showErrorDialog('Select Seats', 'Please select your seats.');
       return;
     }
 
@@ -708,6 +784,21 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       // Start background polling for payment status
       if (mounted) {
         _startPaymentPolling();
+      }
+    } on _SeatsUnavailableException catch (e) {
+      // Seat race — reservation already rolled back server-side. Clear the
+      // stale selection, bounce the user to the Ticket step to re-pick.
+      if (mounted) {
+        setState(() {
+          _selectedSeatIds = [];
+          _selectedSeats = [];
+          _isGaSelection = false;
+          _currentStep = 0;
+        });
+        _showErrorDialog(
+          'Seats No Longer Available',
+          '${e.message}\n\nPlease pick your seats again.',
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -1034,6 +1125,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         _snack('Please select a ticket type.');
         return;
       }
+      if (_hasSeatMap && _selectedSeatIds.isEmpty && !_isGaSelection) {
+        _snack('Please select your seats.');
+        return;
+      }
     } else if (current == 'Details') {
       if (!(_formKey.currentState?.validate() ?? false)) return;
     } else if (current == 'Questions') {
@@ -1121,7 +1216,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         const SizedBox(height: 28),
         if (_isLoadingTiers)
           const Center(child: CircularProgressIndicator())
-        else if (_tiers.isNotEmpty) ...[
+        // For assigned-seating events the tier comes from the chosen seat, so
+        // we hide the manual tier picker and derive it in the seat picker.
+        else if (!_hasSeatMap && _tiers.isNotEmpty) ...[
           _sectionTitle('Select Ticket Type'),
           const SizedBox(height: 14),
           ..._tiers.map(
@@ -1141,19 +1238,92 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           ),
           const SizedBox(height: 28),
         ],
-        _sectionTitle('Quantity'),
-        const SizedBox(height: 14),
-        _QuantitySelector(
-          quantity: _quantity,
-          max: (_selectedTier != null)
-              ? _selectedTier!.quantityAvailable.clamp(1, 10)
-              : _realTicketsAvailable.clamp(1, 10),
-          onChanged: (qty) => setState(() {
-            _quantity = qty;
-            _recalculatePromo();
-          }),
-        ),
+        if (_hasSeatMap) ...[
+          _sectionTitle('Seats'),
+          const SizedBox(height: 14),
+          _buildSeatPickerCard(),
+        ] else ...[
+          _sectionTitle('Quantity'),
+          const SizedBox(height: 14),
+          _QuantitySelector(
+            quantity: _quantity,
+            max: (_selectedTier != null)
+                ? _selectedTier!.quantityAvailable
+                    .clamp(1, (_fullEvent ?? widget.event).maxSeatsPerOrder)
+                : _realTicketsAvailable
+                    .clamp(1, (_fullEvent ?? widget.event).maxSeatsPerOrder),
+            onChanged: (qty) => setState(() {
+              _quantity = qty;
+              _recalculatePromo();
+            }),
+          ),
+        ],
       ],
+    );
+  }
+
+  Widget _buildSeatPickerCard() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasSeats = _selectedSeatIds.isNotEmpty || _isGaSelection;
+    return InkWell(
+      onTap: _openSeatPicker,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: hasSeats
+                ? AppTheme.primaryColor
+                : (isDark ? Colors.white24 : Colors.grey.shade300),
+            width: hasSeats ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.event_seat,
+              color: hasSeats ? AppTheme.primaryColor : Colors.grey,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _isGaSelection
+                        ? '$_quantity General Admission'
+                        : hasSeats
+                            ? '${_selectedSeatIds.length} seat${_selectedSeatIds.length == 1 ? '' : 's'} selected'
+                            : 'Choose your seats',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _isGaSelection
+                        ? (_selectedTier?.name ?? 'General Admission zone')
+                        : hasSeats
+                            ? _selectedSeats.map((s) => s.label).join(', ')
+                            : 'Tap to open the seat map',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              hasSeats ? 'Change' : 'Select',
+              style: const TextStyle(
+                color: AppTheme.primaryColor,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

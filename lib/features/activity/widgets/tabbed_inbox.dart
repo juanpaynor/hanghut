@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 import 'package:bitemates/features/groups/screens/create_group_screen.dart';
 import 'package:bitemates/features/groups/screens/discover_groups_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
@@ -710,18 +711,27 @@ class _GroupsTabState extends State<_GroupsTab> {
                   ),
                 )
               else
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.teal.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Center(
-                    child: iconEmoji != null && iconEmoji.isNotEmpty
-                        ? Text(iconEmoji, style: const TextStyle(fontSize: 24))
-                        : const Icon(Icons.groups, color: Colors.teal, size: 24),
-                  ),
+                Builder(
+                  builder: (_) {
+                    final cover = GroupCover.forGroup(
+                      category: chat['icon_key'] as String?,
+                      seed: chat['chat_id'] as String?,
+                    );
+                    return Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: cover.accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(
+                        child: iconEmoji != null && iconEmoji.isNotEmpty
+                            ? Text(iconEmoji,
+                                style: const TextStyle(fontSize: 24))
+                            : Icon(Icons.groups, color: cover.accent, size: 24),
+                      ),
+                    );
+                  },
                 ),
               const SizedBox(width: 16),
               // Details

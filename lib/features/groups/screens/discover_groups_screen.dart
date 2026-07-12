@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:bitemates/core/services/group_service.dart';
 import 'package:bitemates/core/services/group_member_service.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 
 /// Browse & search public and private groups to join.
 class DiscoverGroupsScreen extends StatefulWidget {
@@ -244,11 +245,10 @@ class _DiscoverGroupsScreenState extends State<DiscoverGroupsScreen> {
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(16)),
                 gradient: coverUrl == null
-                    ? LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Colors.teal[400]!, Colors.teal[700]!],
-                      )
+                    ? GroupCover.forGroup(
+                        category: group['category'] as String?,
+                        seed: group['id'] as String?,
+                      ).linear
                     : null,
                 image: coverUrl != null
                     ? DecorationImage(

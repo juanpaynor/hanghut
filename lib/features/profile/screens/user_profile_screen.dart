@@ -25,7 +25,6 @@ import 'package:bitemates/core/services/report_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:bitemates/features/gamification/models/gamification_stats.dart';
 import 'package:bitemates/features/gamification/models/badge.dart' as gm;
 import 'package:bitemates/features/gamification/models/user_badge.dart';
 import 'package:bitemates/features/gamification/services/badge_service.dart';
@@ -58,7 +57,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _hasMorePostImages = true;
   bool _isLoadingMorePostImages = false;
 
-  GamificationStats? _gamificationStats;
   List<gm.Badge> _allBadges = [];
   List<UserBadge> _earnedBadges = [];
   String? _errorMessage;
@@ -266,12 +264,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             .limit(5),
         // Photos
         supabase.from('user_photos').select().eq('user_id', widget.userId),
-        // Gamification stats (XP + level)
-        supabase
-            .from('user_gamification_stats')
-            .select()
-            .eq('user_id', widget.userId)
-            .maybeSingle(),
         // Interests
         supabase
             .from('user_interests')
@@ -284,8 +276,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final followersCount = results[2] as int;
       final followingCount = results[3] as int;
       final photosResponse = results[6] as List<dynamic>;
-      final gamificationResult = results[7] as Map<String, dynamic>?;
-      final interestsResponse = results[8] as List<dynamic>;
+      final interestsResponse = results[7] as List<dynamic>;
 
       final List<Map<String, dynamic>> photos = List<Map<String, dynamic>>.from(
         photosResponse,
@@ -327,9 +318,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               _userInterests = legacyTags.map((t) => t.toString()).toList();
             }
           }
-          _gamificationStats = gamificationResult != null
-              ? GamificationStats.fromJson(gamificationResult)
-              : null;
           _isLoading = false;
         });
       }
@@ -921,18 +909,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ),
               ),
             ),
-
-            // XP Level Bar
-            if (_gamificationStats != null)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-                  child: _XpLevelBar(
-                    stats: _gamificationStats!,
-                    isDark: isDark,
-                  ).animate().fadeIn(duration: 500.ms, delay: 400.ms),
-                ),
-              ),
 
             // Badges Showcase
             if (_allBadges.isNotEmpty)
@@ -2040,156 +2016,6 @@ class _MyMembershipsCompact extends StatelessWidget {
   }
 }
 
-// ─── XP Level Bar ─────────────────────────────────────────────────────────────
-
-class _XpLevelBar extends StatelessWidget {
-  final GamificationStats stats;
-  final bool isDark;
-
-  const _XpLevelBar({required this.stats, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final level = stats.level;
-    final xp = stats.totalXp;
-    final progress = levelProgress(xp).clamp(0.0, 1.0);
-    final isMaxLevel = level >= kLevelThresholds.length;
-    final xpForNext = isMaxLevel
-        ? kLevelThresholds.last
-        : kLevelThresholds[level]; // next level threshold
-    final xpInCurrentLevel = isMaxLevel ? xp : xp - kLevelThresholds[level - 1];
-    final xpNeeded = isMaxLevel ? 0 : xpForNext - kLevelThresholds[level - 1];
-
-    // Hanghut brand indigo — consistent across all levels.
-    const barColor = AppTheme.primaryColor; // 0xFF6B7FFF
-    const barColorLight = Color(0xFFA5B0FF);
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: isDark
-                  ? [
-                      Colors.white.withValues(alpha: 0.12),
-                      Colors.white.withValues(alpha: 0.06),
-                    ]
-                  : [
-                      Colors.white.withValues(alpha: 0.92),
-                      Colors.white.withValues(alpha: 0.7),
-                    ],
-            ),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.white.withValues(alpha: 0.7),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: barColor.withValues(alpha: 0.12),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [barColorLight, barColor],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: barColor.withValues(alpha: 0.4),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '$level',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Level $level${isMaxLevel ? ' · MAX' : ''}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                                color: barColor,
-                              ),
-                            ),
-                            Text(
-                              isMaxLevel
-                                  ? '$xp XP total'
-                                  : '$xpInCurrentLevel / $xpNeeded XP',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey[500],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 7),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: isMaxLevel ? 1.0 : progress,
-                            minHeight: 7,
-                            backgroundColor: isDark
-                                ? Colors.white.withValues(alpha: 0.1)
-                                : barColor.withValues(alpha: 0.12),
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              barColor,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Organizer Public Profile Section ────────────────────────────────────────
 
 class _OrganizerSection extends StatelessWidget {
   final Map<String, dynamic> profile;

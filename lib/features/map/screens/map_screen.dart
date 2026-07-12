@@ -30,6 +30,9 @@ import 'package:bitemates/features/camera/screens/location_story_viewer_screen.d
 import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
+import 'package:bitemates/core/services/coach_mark_service.dart';
+import 'package:bitemates/core/services/event_category_service.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
 // Filter enum for toggling marker visibility
 enum MapFilter { all, hangouts, events, experiences, stories }
@@ -75,6 +78,11 @@ class MapScreenState extends State<MapScreen>
 
   // Filter toggle
   MapFilter _currentFilter = MapFilter.all;
+  // Event category sub-filter (null = all categories). Only meaningful while
+  // _currentFilter == MapFilter.events.
+  String? _selectedEventCategory;
+  // Server-driven category list (team_comms #174). Empty until fetched.
+  List<EventCategoryItem> _eventCategories = [];
 
   // Optimization: Track added images to avoid re-uploading
   final Set<String> _addedImages = {};
@@ -95,6 +103,13 @@ class MapScreenState extends State<MapScreen>
   // Mystery tables — separate list, only rendered when isochrone pulse is active
   List<Map<String, dynamic>> _mysteryTables = [];
 
+  // Coach mark target keys for map-screen-specific elements
+  final GlobalKey _keyFilterChips = GlobalKey();
+  final GlobalKey _keyLocationBtn  = GlobalKey();
+  final GlobalKey _keyNearbyBtn    = GlobalKey();
+
+  static const _mapTourKey = 'map_screen_tour_v1';
+
   @override
   bool get wantKeepAlive => true;
 
@@ -111,6 +126,13 @@ class MapScreenState extends State<MapScreen>
     _loadCurrentUserData();
     _startHeartbeat();
     _subscribeToFeed();
+    _loadEventCategories();
+  }
+
+  /// Loads the server-driven event category list for the Events sub-filter.
+  Future<void> _loadEventCategories() async {
+    final cats = await EventCategoryService().getCategories();
+    if (mounted) setState(() => _eventCategories = cats);
   }
 
   void _subscribeToFeed() {
@@ -439,6 +461,118 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
+  /// Public so MainNavigationScreen can chain it from the navbar tour's onFinish.
+  /// Also self-triggers after the cloud intro for users who already saw the
+  /// navbar tour (app updates / reinstalls with data restored).
+  ///
+  /// Pass [requireNavbarSeen] = true when calling from the cloud-intro callback
+  /// so we don't race with the navbar tour. When called from onFinish, pass
+  /// false — the navbar tour is done by definition.
+  Future<void> maybeShowMapCoachMarks({bool requireNavbarSeen = false}) async {
+    if (!mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_mapTourKey) ?? false) return;
+    if (requireNavbarSeen &&
+        !(prefs.getBool(CoachMarkService.seenKey) ?? false)) {
+      // Navbar tour hasn't finished yet — it will chain us via onFinish.
+      return;
+    }
+
+    // Poll until the keyed widgets are laid out (filter chips + buttons).
+    final keys = [_keyFilterChips, _keyLocationBtn, _keyNearbyBtn];
+    var attempts = 0;
+    while (mounted && attempts < 25 && keys.any((k) => k.currentContext == null)) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      attempts++;
+    }
+    if (!mounted) return;
+
+    final targets = <TargetFocus>[];
+
+    void _addTarget(
+      GlobalKey key,
+      String title,
+      String body,
+      ContentAlign align,
+    ) {
+      if (key.currentContext == null) return;
+      targets.add(TargetFocus(
+        identify: key.toString(),
+        keyTarget: key,
+        shape: ShapeLightFocus.RRect,
+        radius: 16,
+        paddingFocus: 8,
+        enableOverlayTab: true,
+        contents: [
+          TargetContent(
+            align: align,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(body,
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 13, height: 1.4)),
+                  const SizedBox(height: 12),
+                  const Text('Tap anywhere to continue →',
+                      style: TextStyle(color: Colors.white38, fontSize: 12)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ));
+    }
+
+    _addTarget(
+      _keyFilterChips,
+      'Filter the Map',
+      'Switch between Hangouts, Events, Experiences, and more to focus on what matters to you.',
+      ContentAlign.bottom,
+    );
+    _addTarget(
+      _keyLocationBtn,
+      'Find Your Location',
+      'Tap to instantly center the map on where you are right now.',
+      ContentAlign.left,
+    );
+    _addTarget(
+      _keyNearbyBtn,
+      'Discover Nearby',
+      'See everything reachable in 15 minutes — hangouts, events, and people around you.',
+      ContentAlign.left,
+    );
+
+    if (targets.isEmpty || !mounted) return;
+
+    TutorialCoachMark(
+      targets: targets,
+      colorShadow: Colors.black,
+      opacityShadow: 0.85,
+      textSkip: 'SKIP',
+      focusAnimationDuration: const Duration(milliseconds: 400),
+      unFocusAnimationDuration: const Duration(milliseconds: 300),
+      pulseAnimationDuration: const Duration(milliseconds: 500),
+      onFinish: () async {
+        final p = await SharedPreferences.getInstance();
+        await p.setBool(_mapTourKey, true);
+      },
+      onSkip: () {
+        SharedPreferences.getInstance()
+            .then((p) => p.setBool(_mapTourKey, true));
+        return true;
+      },
+    ).show(context: context);
+  }
+
   Future<void> _playIntroAnimation() async {
     // Wait for user location to be available (up to 5 seconds)
     int waited = 0;
@@ -647,48 +781,60 @@ class MapScreenState extends State<MapScreen>
               ),
             ),
 
-          // Filter Chips Row
+          // Filter Chips Row (+ contextual category sub-row for Events)
           if (!_isTableModalOpen)
             Positioned(
               top: 100,
               left: 0,
               right: 0, // No constraint needed — buttons are lower now
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: MapFilter.values.map((filter) {
-                    final isSelected = _currentFilter == filter;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(_filterLabel(filter)),
-                        avatar: isSelected
-                            ? null
-                            : Icon(
-                                _filterIcon(filter),
-                                size: 16,
-                                color: Colors.black54,
-                              ),
-                        selected: isSelected,
-                        onSelected: (_) => _onFilterChanged(filter),
-                        selectedColor: Theme.of(context).primaryColor,
-                        backgroundColor: Colors.white,
-                        labelStyle: TextStyle(
-                          color: isSelected ? Colors.white : Colors.black87,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        elevation: 2,
-                        pressElevation: 4,
-                        showCheckmark: false,
-                      ),
-                    );
-                  }).toList(),
-                ),
+              child: Column(
+                key: _keyFilterChips,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: MapFilter.values.map((filter) {
+                        final isSelected = _currentFilter == filter;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(_filterLabel(filter)),
+                            avatar: isSelected
+                                ? null
+                                : Icon(
+                                    _filterIcon(filter),
+                                    size: 16,
+                                    color: Colors.black54,
+                                  ),
+                            selected: isSelected,
+                            onSelected: (_) => _onFilterChanged(filter),
+                            selectedColor: Theme.of(context).primaryColor,
+                            backgroundColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color: isSelected ? Colors.white : Colors.black87,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            elevation: 2,
+                            pressElevation: 4,
+                            showCheckmark: false,
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  // Category sub-row — only when Events is the active filter
+                  if (_currentFilter == MapFilter.events)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: _buildCategorySubRow(),
+                    ),
+                ],
               ),
             ),
 
@@ -696,7 +842,9 @@ class MapScreenState extends State<MapScreen>
           if (!_isTableModalOpen)
             Positioned(
               right: 16,
-              top: 180, // Lowered to avoid overlapping filter chips
+              // Lowered to clear the filter chips; drops further when the
+              // Events category sub-row is showing.
+              top: _currentFilter == MapFilter.events ? 224 : 180,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -711,30 +859,36 @@ class MapScreenState extends State<MapScreen>
                   const SizedBox(height: 12),
 
                   // Focus Location Button
-                  _mapControlButton(
-                    heroTag: 'map_focus_btn',
-                    icon: Icons.my_location,
-                    label: 'Location',
-                    onPressed: _onFocusLocationTapped,
-                    isDarkMode: isDarkMode,
+                  KeyedSubtree(
+                    key: _keyLocationBtn,
+                    child: _mapControlButton(
+                      heroTag: 'map_focus_btn',
+                      icon: Icons.my_location,
+                      label: 'Location',
+                      onPressed: _onFocusLocationTapped,
+                      isDarkMode: isDarkMode,
+                    ),
                   ),
                   const SizedBox(height: 12),
 
                   // Isochrone Toggle
-                  _mapControlButton(
-                    heroTag: 'map_isochrone_btn',
-                    icon: Icons.radar,
-                    label: 'Nearby',
-                    onPressed: _showIsochrone
-                        ? _toggleIsochrone
-                        : _showIsochroneExplainer,
-                    isDarkMode: isDarkMode,
-                    backgroundColor: _showIsochrone
-                        ? Colors.indigo
-                        : Colors.white,
-                    foregroundColor: _showIsochrone
-                        ? Colors.white
-                        : Colors.black87,
+                  KeyedSubtree(
+                    key: _keyNearbyBtn,
+                    child: _mapControlButton(
+                      heroTag: 'map_isochrone_btn',
+                      icon: Icons.radar,
+                      label: 'Nearby',
+                      onPressed: _showIsochrone
+                          ? _toggleIsochrone
+                          : _showIsochroneExplainer,
+                      isDarkMode: isDarkMode,
+                      backgroundColor: _showIsochrone
+                          ? Colors.indigo
+                          : Colors.white,
+                      foregroundColor: _showIsochrone
+                          ? Colors.white
+                          : Colors.black87,
+                    ),
                   ),
                 ],
               ),
@@ -752,6 +906,13 @@ class MapScreenState extends State<MapScreen>
                 onAnimationComplete: () {
                   if (mounted) {
                     setState(() => _showCloudIntro = false);
+                    // Show map tour for users who already completed the navbar
+                    // tour (e.g. returning users after an app update).
+                    // Fresh installs are handled via MainNavigationScreen's
+                    // onFinish chain instead.
+                    Future.delayed(const Duration(milliseconds: 800), () {
+                      maybeShowMapCoachMarks(requireNavbarSeen: true);
+                    });
                   }
                 },
               ),
@@ -847,6 +1008,64 @@ class MapScreenState extends State<MapScreen>
     return '$count 👀';
   }
 
+  /// Contextual category chips shown beneath the primary filter row while the
+  /// Events filter is active. Leading "All" clears the narrowing.
+  Widget _buildCategorySubRow() {
+    final primary = Theme.of(context).primaryColor;
+
+    Widget chip({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(label),
+          selected: selected,
+          onSelected: (_) => onTap(),
+          selectedColor: primary,
+          backgroundColor: Colors.white,
+          labelStyle: TextStyle(
+            color: selected ? Colors.white : Colors.black87,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: primary.withValues(alpha: 0.35)),
+          ),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          elevation: 1,
+          pressElevation: 3,
+          showCheckmark: false,
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          chip(
+            label: 'All',
+            selected: _selectedEventCategory == null,
+            onTap: () => _onCategoryChanged(null),
+          ),
+          ..._eventCategories.map(
+            (c) => chip(
+              label: c.display,
+              selected: _selectedEventCategory == c.key,
+              onTap: () => _onCategoryChanged(c.key),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _filterLabel(MapFilter filter) {
     switch (filter) {
       case MapFilter.all:
@@ -879,7 +1098,17 @@ class MapScreenState extends State<MapScreen>
 
   void _onFilterChanged(MapFilter filter) {
     if (_currentFilter == filter) return;
-    setState(() => _currentFilter = filter);
+    setState(() {
+      _currentFilter = filter;
+      // Leaving Events clears any category narrowing.
+      if (filter != MapFilter.events) _selectedEventCategory = null;
+    });
+    _rebuildMapSource();
+  }
+
+  void _onCategoryChanged(String? category) {
+    if (_selectedEventCategory == category) return;
+    setState(() => _selectedEventCategory = category);
     _rebuildMapSource();
   }
 
@@ -905,7 +1134,21 @@ class MapScreenState extends State<MapScreen>
           if (type == 'mystery') return true;
           return false;
         case MapFilter.events:
-          return type == 'event' || type == 'stack';
+          if (type == 'event') {
+            // Apply category narrowing when one is picked.
+            if (_selectedEventCategory != null) {
+              final index = f['properties']?['index'] as int?;
+              if (index != null && index < _events.length) {
+                return _events[index].category == _selectedEventCategory;
+              }
+              return false;
+            }
+            return true;
+          }
+          // Stacks (same-venue clusters) are only present on the initial render;
+          // a rebuild flattens them to single 'event' markers. Keep them visible
+          // so a matching event inside a stack is never hidden.
+          return type == 'stack';
         case MapFilter.experiences:
           // Tables that ARE experiences
           if (type == 'table') {

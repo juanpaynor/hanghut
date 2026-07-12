@@ -363,7 +363,8 @@ class HostService {
     // 2. Fetch Event Earnings
     final eventResponse = await _supabase
         .from('transactions')
-        .select('gross_amount, platform_fee, organizer_payout, status')
+        .select(
+            'gross_amount, platform_fee, payment_processing_fee, organizer_payout, status')
         .eq('partner_id', partnerId)
         .eq('status', 'completed');
 
@@ -390,8 +391,16 @@ class HostService {
 
     for (final t in eventTransactions) {
       totalGross += (t['gross_amount'] as num?)?.toDouble() ?? 0;
-      totalFees += (t['platform_fee'] as num?)?.toDouble() ?? 0;
-      totalPayout += (t['organizer_payout'] as num?)?.toDouble() ?? 0;
+      // Partner's true deductions = platform fee + the Xendit processing fee
+      // they absorb at settlement (team_comms #170).
+      final platformFee = (t['platform_fee'] as num?)?.toDouble() ?? 0;
+      final procFee = (t['payment_processing_fee'] as num?)?.toDouble() ?? 0;
+      totalFees += platformFee + procFee;
+      // organizer_payout does NOT exclude the processing fee, so subtract it
+      // here to get what actually lands in the partner wallet. Historical rows
+      // (pre webhook v77) have procFee = 0, so they're unaffected.
+      final payout = (t['organizer_payout'] as num?)?.toDouble() ?? 0;
+      totalPayout += payout - procFee;
     }
 
     // 4. Sum all payouts that are completed or in-progress
@@ -430,7 +439,7 @@ class HostService {
     // Fetch event transactions with event title
     final eventResponse = await _supabase
         .from('transactions')
-        .select('id, gross_amount, platform_fee, organizer_payout, status, created_at, purchase_intent_id, event:events!event_id(title)')
+        .select('id, gross_amount, platform_fee, payment_processing_fee, organizer_payout, status, created_at, purchase_intent_id, event:events!event_id(title)')
         .eq('partner_id', partnerId)
         .inFilter('status', ['completed', 'refunded'])
         .order('created_at', ascending: false)
@@ -456,10 +465,13 @@ class HostService {
     }
 
     for (final t in eventTransactions) {
+      // Net to wallet excludes the processing fee the partner absorbs (#170).
+      final payout = (t['organizer_payout'] as num?)?.toDouble() ?? 0;
+      final procFee = (t['payment_processing_fee'] as num?)?.toDouble() ?? 0;
       all.add({
         'id': t['id'],
         'title': (t['event'] as Map<String, dynamic>?)?['title'] ?? 'Event',
-        'amount': (t['organizer_payout'] as num?)?.toDouble() ?? 0,
+        'amount': payout - procFee,
         'gross_amount': (t['gross_amount'] as num?)?.toDouble() ?? 0,
         'platform_fee': (t['platform_fee'] as num?)?.toDouble() ?? 0,
         'status': t['status'],

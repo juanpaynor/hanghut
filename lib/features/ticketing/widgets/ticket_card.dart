@@ -137,6 +137,28 @@ class TicketCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // Seat / tier chip — only shown for seated/tiered tickets
+                  if (ticket.seatLabel != null || ticket.tierLabel != null) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        if (ticket.seatLabel != null)
+                          _MetaChip(
+                            icon: Icons.event_seat,
+                            label: ticket.seatSection != null
+                                ? '${ticket.seatSection} • ${ticket.seatLabel}'
+                                : ticket.seatLabel!,
+                          ),
+                        if (ticket.tierLabel != null)
+                          _MetaChip(
+                            icon: Icons.local_activity_outlined,
+                            label: ticket.tierLabel!,
+                          ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -280,6 +302,24 @@ class _TicketDetailModal extends StatelessWidget {
                     value: ticket.eventVenue,
                   ),
                   const SizedBox(height: 16),
+                  if (ticket.seatLabel != null) ...[
+                    _DetailRow(
+                      icon: Icons.event_seat,
+                      label: 'Seat',
+                      value: ticket.seatSection != null
+                          ? '${ticket.seatSection}\n${ticket.seatLabel}'
+                          : ticket.seatLabel!,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (ticket.tierLabel != null) ...[
+                    _DetailRow(
+                      icon: Icons.local_activity_outlined,
+                      label: 'Ticket Type',
+                      value: ticket.tierLabel!,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   _DetailRow(
                     icon: Icons.calendar_today,
                     label: 'Date & Time',
@@ -394,6 +434,42 @@ class _TicketDetailModal extends StatelessWidget {
       return 'This ticket is no longer valid.';
     }
     return 'Show this QR code at the event entrance.';
+  }
+}
+
+/// Small pill used on the compact ticket card to surface seat / tier.
+class _MetaChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _MetaChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

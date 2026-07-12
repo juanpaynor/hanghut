@@ -34,15 +34,29 @@ class EventService {
     }
   }
 
-  /// Fetch upcoming events for Feed carousel
-  Future<List<Event>> getUpcomingEvents({int limit = 10}) async {
+  /// Fetch upcoming events for Feed carousel / Discover.
+  ///
+  /// Optional [startDate]/[endDate] filter by `start_datetime` (inclusive of the
+  /// whole end day — pass the day's 23:59:59). When [startDate] is omitted the
+  /// lower bound defaults to now (only future events).
+  ///
+  /// Pagination: pass [offset] to fetch the next page ([limit] rows per page),
+  /// ordered by start_datetime then id (stable). Caller stops when fewer than
+  /// [limit] rows come back.
+  Future<List<Event>> getUpcomingEvents({
+    int limit = 20,
+    int offset = 0,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
     try {
-      final response = await SupabaseConfig.client
+      var query = SupabaseConfig.client
           .from('events')
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, status, created_at,
+            capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
+            max_seats_per_order,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
             subscriber_early_access_hours, is_subscriber_only,
@@ -55,9 +69,16 @@ class EventService {
           .eq('status', 'active')
           .eq('is_subscriber_only', false)
           .neq('invite_only', true)
-          .gte('start_datetime', DateTime.now().toIso8601String())
+          .gte('start_datetime', (startDate ?? DateTime.now()).toIso8601String());
+
+      if (endDate != null) {
+        query = query.lte('start_datetime', endDate.toIso8601String());
+      }
+
+      final response = await query
           .order('start_datetime', ascending: true)
-          .limit(limit);
+          .order('id', ascending: true)
+          .range(offset, offset + limit - 1);
 
       if (response == null) return [];
 
@@ -80,7 +101,8 @@ class EventService {
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, status, created_at,
+            capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
+            max_seats_per_order,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
             subscriber_early_access_hours, is_subscriber_only,
@@ -116,7 +138,8 @@ class EventService {
           .select('''
             id, title, description, venue_name, address, latitude, longitude,
             start_datetime, end_datetime, cover_image_url, ticket_price,
-            capacity, tickets_sold, event_type, organizer_id, status, created_at,
+            capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
+            max_seats_per_order,
             is_external, external_ticket_url, external_provider_name,
             require_approval, hide_venue_until_registered,
             subscriber_early_access_hours, is_subscriber_only,

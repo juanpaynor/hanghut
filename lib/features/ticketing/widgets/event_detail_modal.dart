@@ -8,6 +8,7 @@ import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:bitemates/features/ticketing/screens/partner_storefront_screen.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -211,20 +212,20 @@ class _EventDetailModalState extends State<EventDetailModal> {
           child: _buildBuyButton(),
         ),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: Stack(
         children: [
-          // Hero Image (full-width, taller on full-screen)
-          _buildHeroImage(categoryConfig),
-
-          // Scrollable content
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Invite Only badge for hidden events
+          // Hero scrolls away with the content (not pinned).
+          SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildHeroImage(categoryConfig),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Invite Only badge for hidden events
                   if (widget.event.isHidden) ...[
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -275,91 +276,99 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     overflow: TextOverflow.ellipsis,
                   ),
 
-                  // Venue
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.location_on,
-                        size: 14,
-                        color: widget.event.hideVenueUntilRegistered &&
-                                !_userHasTicket
-                            ? Colors.grey[400]
-                            : Colors.grey,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: widget.event.hideVenueUntilRegistered &&
-                                !_userHasTicket
-                            ? Row(
-                                children: [
-                                  Text(
-                                    'Register to see venue',
-                                    style: TextStyle(
-                                      color: Colors.grey[400],
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Icon(
-                                    Icons.lock_outline_rounded,
-                                    size: 12,
-                                    color: Colors.grey[400],
-                                  ),
-                                ],
-                              )
-                            : Text(
-                                widget.event.venueName,
-                                style: const TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                      ),
-                    ],
-                  ),
+                  const SizedBox(height: 16),
 
-                  const SizedBox(height: 12),
-
-                  // Date & Time
-                  _buildDateTimeBox(),
-
-                  const SizedBox(height: 12),
-
-                  // Price & Availability
-                  _buildPriceRow(),
+                  // At-a-glance: date · venue · price grouped in one card
+                  _buildInfoCard(),
 
                   // Friends Going
-                  if (!widget.event.isExternal)
+                  if (!widget.event.isExternal) ...[
+                    const SizedBox(height: 4),
                     FriendsGoingRow(
                       entityType: 'event',
                       entityId: widget.event.id,
                     ),
+                  ],
 
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 20),
 
-                  // Organizer Card
-                  _buildOrganizerCard(),
-
-                  // More from this organizer carousel
-                  _buildMoreFromOrganizer(),
-
-                  const SizedBox(height: 16),
-
-                  // Description
-                  _buildDescription(),
+                  // About (the actual event content — before any cross-sell)
+                  _buildAboutSection(),
 
                   // Additional Images
                   _buildImageGallery(),
 
-                  const SizedBox(height: 16),
-                ],
-              ),
+                  const SizedBox(height: 20),
+
+                  // Organizer — compact one-liner
+                  _buildOrganizerInline(),
+
+                  // More from this organizer — quiet, at the very bottom
+                  _buildMoreFromOrganizer(),
+
+                  const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Fixed top nav (back/share/report) — stays put while the hero
+          // image scrolls away.
+          _buildTopActions(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopActions() {
+    final top = MediaQuery.of(context).padding.top + 8;
+    Widget circleBtn({
+      required IconData icon,
+      required Color iconColor,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.white,
+        elevation: 2,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+        ),
+      );
+    }
+
+    return Positioned(
+      top: top,
+      left: 12,
+      right: 12,
+      child: Row(
+        children: [
+          circleBtn(
+            icon: Icons.arrow_back,
+            iconColor: Colors.black87,
+            onTap: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+          circleBtn(
+            icon: Icons.share,
+            iconColor: Colors.black87,
+            onTap: _onShare,
+          ),
+          const SizedBox(width: 8),
+          circleBtn(
+            icon: Icons.flag_outlined,
+            iconColor: Colors.grey,
+            onTap: () => ReportModal.show(
+              context,
+              targetType: 'post',
+              targetId: widget.event.id,
+              targetName: widget.event.title,
             ),
           ),
         ],
@@ -417,73 +426,8 @@ class _EventDetailModalState extends State<EventDetailModal> {
               ),
             ),
 
-            // Back Button (top-left, status-bar aware)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              left: 12,
-              child: Material(
-                color: Colors.white,
-                elevation: 2,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  onTap: () => Navigator.pop(context),
-                  customBorder: const CircleBorder(),
-                  child: const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: Icon(Icons.arrow_back, color: Colors.black87, size: 20),
-                  ),
-                ),
-              ),
-            ),
-
-            // Share Button
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              right: 56,
-              child: Material(
-                color: Colors.white,
-                elevation: 2,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  onTap: _onShare,
-                  customBorder: const CircleBorder(),
-                  child: const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: Icon(Icons.share, color: Colors.black87, size: 20),
-                  ),
-                ),
-              ),
-            ),
-
-            // Report Button (top-right)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              right: 12,
-              child: Material(
-                color: Colors.white,
-                elevation: 2,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  onTap: () {
-                    ReportModal.show(
-                      context,
-                      targetType: 'post',
-                      targetId: widget.event.id,
-                      targetName: widget.event.title,
-                    );
-                  },
-                  customBorder: const CircleBorder(),
-                  child: const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: Icon(
-                      Icons.flag_outlined,
-                      color: Colors.grey,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            // Back/share/report live in the fixed overlay (_buildTopActions)
+            // so they stay put while the hero scrolls away.
 
             // Category Badge
             Positioned(
@@ -510,7 +454,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      widget.event.category.toUpperCase(),
+                      widget.event.category
+                          .replaceAll('_', ' ')
+                          .toUpperCase(),
                       style: const TextStyle(
                         color: Colors.black87,
                         fontSize: 11,
@@ -624,108 +570,133 @@ class _EventDetailModalState extends State<EventDetailModal> {
     );
   }
 
-  Widget _buildDateTimeBox() {
+  /// Grouped "at a glance" card: date · venue · price+availability as three
+  /// clean rows in a single container (replaces the old scattered boxes).
+  Widget _buildInfoCard() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final venueLocked =
+        widget.event.hideVenueUntilRegistered && !_userHasTicket;
+    final divider = Divider(
+      height: 20,
+      thickness: 1,
+      color: isDark ? Colors.grey[800] : Colors.grey[200],
+    );
+
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: isDark ? Colors.grey[850] : Colors.grey[100],
-        borderRadius: BorderRadius.circular(12),
+        color: isDark ? Colors.grey[850] : Colors.grey[50],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isDark ? Colors.grey[800]! : Colors.grey[200]!),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Icon(
-            Icons.calendar_today,
-            size: 16,
-            color: isDark ? Colors.grey[400] : Colors.grey[800],
+          _infoRow(
+            Icons.calendar_today_rounded,
+            DateFormat('EEEE, MMM d  •  h:mm a')
+                .format(widget.event.startDatetime),
           ),
-          const SizedBox(width: 12),
-          Text(
-            DateFormat(
-              'EEEE, MMM d  •  h:mm a',
-            ).format(widget.event.startDatetime),
-            style: TextStyle(
-              color: isDark ? Colors.grey[200] : Colors.grey[800],
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-            ),
+          divider,
+          _infoRow(
+            venueLocked ? Icons.lock_outline_rounded : Icons.location_on_rounded,
+            venueLocked ? 'Register to see venue' : widget.event.venueName,
+            muted: venueLocked,
           ),
+          divider,
+          _buildPriceInfoRow(isDark),
         ],
       ),
     );
   }
 
-  Widget _buildPriceRow() {
+  Widget _infoRow(IconData icon, String text, {bool muted = false}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: isDark ? Colors.grey[400] : Colors.grey[700]),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: muted
+                  ? Colors.grey[500]
+                  : (isDark ? Colors.grey[100] : Colors.grey[900]),
+              fontSize: 14.5,
+              fontWeight: FontWeight.w600,
+              fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Price row within the info card — preserves subscriber-discount, external
+  /// "From ₱", availability, and external-provider styling.
+  Widget _buildPriceInfoRow(bool isDark) {
     final hasDiscount = _subscriberDiscount?['has_discount'] == true;
     final discountedPrice = hasDiscount
         ? (_subscriberDiscount!['discounted_price'] as num).toDouble()
         : null;
     final originalPrice = widget.event.ticketPrice;
+    final priceColor = isDark ? Colors.white : Colors.black87;
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Icon(
-              Icons.confirmation_number,
-              size: 16,
-              color: isDark ? Colors.grey[400] : Colors.grey[800],
-            ),
-            const SizedBox(width: 8),
-            if (hasDiscount) ...[
-              Text(
-                '₱${discountedPrice!.toStringAsFixed(0)}',
-                style: TextStyle(
-                  color: isDark ? Colors.white : Colors.black87,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
+        Icon(Icons.confirmation_number_rounded,
+            size: 18, color: isDark ? Colors.grey[400] : Colors.grey[700]),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (hasDiscount) ...[
+                Text('₱${discountedPrice!.toStringAsFixed(0)}',
+                    style: TextStyle(color: priceColor, fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(width: 6),
+                Text('₱${originalPrice.toStringAsFixed(0)}',
+                    style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 14,
+                        decoration: TextDecoration.lineThrough)),
+                const SizedBox(width: 6),
+                const Icon(Icons.workspace_premium_rounded, size: 16, color: Color(0xFFFFD700)),
+              ] else
+                Text(
+                  originalPrice <= 0
+                      ? 'Free'
+                      : widget.event.isExternal
+                          ? 'From ₱${originalPrice.toStringAsFixed(0)}'
+                          : '₱${originalPrice.toStringAsFixed(0)}',
+                  style: TextStyle(color: priceColor, fontSize: 20, fontWeight: FontWeight.w800),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                '₱${originalPrice.toStringAsFixed(0)}',
-                style: TextStyle(
-                  color: Colors.grey[500],
-                  fontSize: 14,
-                  decoration: TextDecoration.lineThrough,
-                ),
-              ),
-              const SizedBox(width: 6),
-              const Icon(
-                Icons.workspace_premium_rounded,
-                size: 16,
-                color: Color(0xFFFFD700),
-              ),
-            ] else
-              Text(
-                widget.event.isExternal
-                    ? 'From ₱${originalPrice.toStringAsFixed(0)}'
-                    : '₱${originalPrice.toStringAsFixed(0)}',
-                style: TextStyle(
-                  color: isDark ? Colors.white : Colors.black87,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
         if (!widget.event.isExternal)
-          Text(
-            _isSoldOut ? 'Sold Out' : 'Available',
-            style: TextStyle(
-              color: _isSoldOut ? Colors.red : Colors.green[700],
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: (_isSoldOut ? Colors.red : Colors.green).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              _isSoldOut ? 'Sold Out' : 'Available',
+              style: TextStyle(
+                color: _isSoldOut ? Colors.red : Colors.green[700],
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           )
         else if (widget.event.externalProviderName != null)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
+              color: Colors.blue.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -733,14 +704,8 @@ class _EventDetailModalState extends State<EventDetailModal> {
               children: [
                 const Icon(Icons.open_in_new, size: 12, color: Colors.blue),
                 const SizedBox(width: 4),
-                Text(
-                  widget.event.externalProviderName!,
-                  style: const TextStyle(
-                    color: Colors.blue,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Text(widget.event.externalProviderName!,
+                    style: const TextStyle(color: Colors.blue, fontSize: 12, fontWeight: FontWeight.w600)),
               ],
             ),
           ),
@@ -754,13 +719,25 @@ class _EventDetailModalState extends State<EventDetailModal> {
     final displayName =
         widget.event.organizerName ?? _organizerDisplayName ?? 'organizer';
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const SizedBox(height: 24),
+        Divider(
+          height: 1,
+          thickness: 1,
+          color: isDark ? Colors.grey[850] : Colors.grey[200],
+        ),
         const SizedBox(height: 16),
+        // Quiet secondary header — a footnote cross-sell, not a primary section.
         Text(
-          'More from $displayName',
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          'More events by $displayName',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey[600],
+          ),
         ),
         const SizedBox(height: 10),
         SizedBox(
@@ -781,15 +758,39 @@ class _EventDetailModalState extends State<EventDetailModal> {
     );
   }
 
-  Widget _buildOrganizerCard() {
-    final displayName =
-        widget.event.organizerName ??
+  /// About section: a header + the (expandable) description. Hidden entirely
+  /// when the event has no description.
+  Widget _buildAboutSection() {
+    if (widget.event.description.isEmpty) return const SizedBox.shrink();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'About',
+          style: TextStyle(
+            color: isDark ? Colors.white : Colors.black87,
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildDescription(),
+      ],
+    );
+  }
+
+  /// Compact one-line organizer row ("Hosted by X ✓ ›") — replaces the old
+  /// boxed card that competed with the primary content mid-scroll.
+  Widget _buildOrganizerInline() {
+    final displayName = widget.event.organizerName ??
         _organizerDisplayName ??
         'Event Organizer';
     final photoUrl = widget.event.organizerPhotoUrl ?? _organizerAvatarUrl;
-
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final hasOrganizer = widget.event.hasOrganizer;
+
     return GestureDetector(
       onTap: hasOrganizer
           ? () => Navigator.push(
@@ -801,74 +802,41 @@ class _EventDetailModalState extends State<EventDetailModal> {
                 ),
               )
           : null,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isDark ? Colors.grey[850] : Colors.grey[50],
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 16,
+            backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+            backgroundColor: Colors.grey[300],
+            child: photoUrl == null
+                ? const Icon(Icons.business, color: Colors.white, size: 16)
+                : null,
           ),
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
-              backgroundColor: Colors.grey[300],
-              child: photoUrl == null
-                  ? const Icon(Icons.business, color: Colors.white, size: 20)
-                  : null,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          displayName,
-                          style: TextStyle(
-                            color: isDark ? Colors.white : Colors.black87,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (widget.event.organizerVerified) ...[
-                        const SizedBox(width: 4),
-                        const Icon(
-                          Icons.verified,
-                          size: 16,
-                          color: Colors.blue,
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Event Organizer',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
+          const SizedBox(width: 10),
+          Text(
+            'Hosted by ',
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+          ),
+          Flexible(
+            child: Text(
+              displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            if (hasOrganizer)
-              Icon(
-                Icons.chevron_right,
-                size: 22,
-                color: isDark ? Colors.grey[500] : Colors.grey[400],
-              ),
+          ),
+          if (widget.event.organizerVerified) ...[
+            const SizedBox(width: 4),
+            const Icon(Icons.verified, size: 15, color: Colors.blue),
           ],
-        ),
+          if (hasOrganizer)
+            Icon(Icons.chevron_right, size: 20, color: Colors.grey[400]),
+        ],
       ),
     );
   }
@@ -877,11 +845,19 @@ class _EventDetailModalState extends State<EventDetailModal> {
     if (widget.event.description.isEmpty) return const SizedBox.shrink();
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    // Preserve the organizer's paragraph breaks: normalize CRLF/CR to LF so
+    // line breaks render, and collapse 3+ blank lines into a single blank line.
+    final description = widget.event.description
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          widget.event.description,
+          description,
           style: TextStyle(
             color: isDark ? Colors.grey[400] : Colors.grey[700],
             fontSize: 14,
@@ -890,7 +866,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
           maxLines: _isExpanded ? null : 3,
           overflow: _isExpanded ? null : TextOverflow.ellipsis,
         ),
-        if (widget.event.description.length > 150)
+        if (description.length > 150)
           TextButton(
             onPressed: () => setState(() => _isExpanded = !_isExpanded),
             style: TextButton.styleFrom(
@@ -943,6 +919,19 @@ class _EventDetailModalState extends State<EventDetailModal> {
       );
     }
 
+    // Price shown on the button so it stays visible after the user scrolls
+    // past the info card.
+    final hasDiscount = _subscriberDiscount?['has_discount'] == true;
+    final price = hasDiscount
+        ? (_subscriberDiscount!['discounted_price'] as num).toDouble()
+        : widget.event.ticketPrice;
+    final priceLabel = price <= 0 ? '' : '  ·  ₱${price.toStringAsFixed(0)}';
+    final label = _isSoldOut
+        ? 'Sold Out'
+        : price <= 0
+            ? 'Get Free Ticket'
+            : 'Buy Tickets$priceLabel';
+
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
@@ -959,11 +948,11 @@ class _EventDetailModalState extends State<EventDetailModal> {
           disabledForegroundColor: Colors.grey[600],
         ),
         child: Text(
-          _isSoldOut ? 'Sold Out' : 'Buy Tickets',
+          label,
           style: const TextStyle(
             fontSize: 16,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
           ),
         ),
       ),
@@ -971,13 +960,26 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   void _onShare() {
-    Share.share(
-      '🎟️ ${widget.event.title}\n'
-      '📅 ${DateFormat('EEEE, MMM d at h:mm a').format(widget.event.startDatetime)}\n'
-      '📍 ${widget.event.venueName}\n'
-      '💰 ₱${widget.event.ticketPrice.toStringAsFixed(0)}\n\n'
-      'Get your tickets on HangHut!',
-      subject: widget.event.title,
+    final e = widget.event;
+    final price = e.ticketPrice <= 0
+        ? 'Free'
+        : '₱${e.ticketPrice.toStringAsFixed(0)}';
+    final link = AppConstants.eventUrl(e.id);
+
+    SharePlus.instance.share(
+      ShareParams(
+        // Link is embedded in the text (ShareParams.text and .uri are mutually
+        // exclusive). The URL is a Universal/App Link, so tapping it opens the
+        // event in the app when installed, or the web page otherwise.
+        text:
+            '🎟️ ${e.title}\n'
+            '📅 ${DateFormat('EEEE, MMM d · h:mm a').format(e.startDatetime)}\n'
+            '📍 ${e.venueName}\n'
+            '💰 $price\n\n'
+            'Get tickets on HangHut 👇\n'
+            '$link',
+        subject: e.title,
+      ),
     );
   }
 

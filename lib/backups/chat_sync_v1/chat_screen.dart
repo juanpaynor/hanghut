@@ -6,7 +6,7 @@ import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:intl/intl.dart';
@@ -1267,7 +1267,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => TenorGifPicker(
+      builder: (context) => KlipyGifPicker(
         onGifSelected: (gifUrl) {
           _sendMessage(gifUrl: gifUrl);
         },

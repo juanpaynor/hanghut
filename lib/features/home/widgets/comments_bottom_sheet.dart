@@ -9,7 +9,7 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/home/widgets/mention_overlay.dart';
 import 'package:bitemates/features/home/widgets/mention_text.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 
 class CommentsBottomSheet extends StatefulWidget {
@@ -280,7 +280,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => TenorGifPicker(
+      builder: (context) => KlipyGifPicker(
         onGifSelected: (gifUrl) {
           setState(() {
             _selectedGifUrl = gifUrl;

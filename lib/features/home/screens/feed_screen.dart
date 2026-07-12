@@ -804,49 +804,6 @@ class FeedScreenState extends State<FeedScreen>
                     ),
                     actionsPadding: const EdgeInsets.only(right: 9),
                     actions: [
-                      // Stories pill button
-                      GestureDetector(
-                        onTap: () => setState(
-                          () => _showStoriesOnly = !_showStoriesOnly,
-                        ),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _showStoriesOnly
-                                ? Theme.of(context).primaryColor
-                                : const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.auto_awesome,
-                                size: 14,
-                                color: _showStoriesOnly
-                                    ? Colors.white
-                                    : Colors.black87,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Stories',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: _showStoriesOnly
-                                      ? Colors.white
-                                      : Colors.black87,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
                       // Filter icon button
                       Stack(
                         children: [
@@ -857,29 +814,39 @@ class FeedScreenState extends State<FeedScreen>
                             shape: const CircleBorder(),
                             clipBehavior: Clip.antiAlias,
                             child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 36,
+                                height: 36,
+                              ),
                               icon: Icon(
                                 Icons.tune_rounded,
                                 color: _hasActiveFilters
                                     ? Colors.white
                                     : Colors.black87,
-                                size: 22,
+                                size: 18,
                               ),
                               onPressed: _showFilterSheet,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 6),
                       // Search Icon
                       Material(
                         color: const Color(0xFFF1F5F9),
                         shape: const CircleBorder(),
                         clipBehavior: Clip.antiAlias,
                         child: IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 36,
+                            height: 36,
+                          ),
                           icon: const Icon(
                             Icons.search,
                             color: Colors.black87,
-                            size: 24,
+                            size: 19,
                           ),
                           onPressed: () {
                             Navigator.push(
@@ -892,7 +859,7 @@ class FeedScreenState extends State<FeedScreen>
                           },
                         ),
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 6),
                       StreamBuilder<int>(
                         stream: NotificationService().unreadCountStream,
                         initialData: 0,
@@ -907,10 +874,15 @@ class FeedScreenState extends State<FeedScreen>
                                   shape: const CircleBorder(),
                                   clipBehavior: Clip.antiAlias,
                                   child: IconButton(
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 36,
+                                      height: 36,
+                                    ),
                                     icon: const Icon(
                                       Icons.notifications_outlined,
                                       color: Colors.black87,
-                                      size: 24,
+                                      size: 19,
                                     ),
                                     onPressed: () {
                                       Navigator.of(context).push(

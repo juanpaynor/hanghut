@@ -11,6 +11,7 @@ import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
+import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -164,6 +165,17 @@ class PushNotificationService {
             tableTitle =
                 data['sender_name'] ?? data['actor_name'] ?? 'Direct Message';
             entityId = chatId;
+          } else if (chatType == 'group') {
+            // Group chat — channel is group_<id>; look up the group name.
+            channelId = 'group_$entityId';
+            final group = await SupabaseConfig.client
+                .from('groups')
+                .select('name')
+                .eq('id', entityId)
+                .maybeSingle();
+            if (group != null) {
+              tableTitle = group['name'] ?? tableTitle;
+            }
           } else {
             // Table / Hangout — look up title from DB
             final table = await SupabaseConfig.client
@@ -194,6 +206,25 @@ class PushNotificationService {
               tableId: entityId!,
               tableTitle: tableTitle,
               chatType: normalizedChatType,
+            ),
+          );
+        }
+      }
+    } else if (data['type'] == 'group_join_request' ||
+        data['type'] == 'group_approved' ||
+        data['type'] == 'group_invite' ||
+        data['type'] == 'group_invite_suggestion' ||
+        data['type'] == 'group_detail') {
+      // Group membership notifications — open the group detail screen.
+      // entity_id (or explicit group_id) carries the group id.
+      final groupId =
+          data['group_id']?.toString() ?? data['entity_id']?.toString();
+      if (groupId != null) {
+        final navContext = navigatorKey.currentContext;
+        if (navContext != null) {
+          Navigator.of(navContext).push(
+            MaterialPageRoute(
+              builder: (_) => GroupDetailScreen(groupId: groupId),
             ),
           );
         }

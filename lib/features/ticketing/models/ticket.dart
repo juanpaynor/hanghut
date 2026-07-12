@@ -15,6 +15,8 @@ class Ticket {
   final bool isUsed;
   final DateTime? usedAt;
   final DateTime createdAt;
+  final String? tier;
+  final Map<String, dynamic>? seatInfo; // { section, row, seat, label }
 
   Ticket({
     required this.id,
@@ -31,6 +33,8 @@ class Ticket {
     required this.isUsed,
     this.usedAt,
     required this.createdAt,
+    this.tier,
+    this.seatInfo,
   });
 
   factory Ticket.fromJson(Map<String, dynamic> json) {
@@ -65,7 +69,46 @@ class Ticket {
           ? DateTime.parse(json['checked_in_at'].toString())
           : null,
       createdAt: DateTime.parse(json['purchase_date'].toString()),
+      tier: (json['tier'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : json['tier'] as String?,
+      seatInfo: json['seat_info'] is Map
+          ? Map<String, dynamic>.from(json['seat_info'] as Map)
+          : null,
     );
+  }
+
+  /// Human-readable seat label. Web pre-builds `label` (e.g. "AA1"); fall back
+  /// to composing section · row · seat if it's ever missing (team_comms #163).
+  String? get seatLabel {
+    final info = seatInfo;
+    if (info == null || info.isEmpty) return null;
+    final label = info['label'];
+    if (label != null && label.toString().trim().isNotEmpty) {
+      return label.toString();
+    }
+    final parts = [info['section'], info['row'], info['seat']]
+        .where((p) => p != null && p.toString().trim().isNotEmpty)
+        .map((p) => p.toString())
+        .toList();
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// Section name when present (shown alongside the seat label on the card).
+  String? get seatSection {
+    final s = seatInfo?['section'];
+    return (s != null && s.toString().trim().isNotEmpty) ? s.toString() : null;
+  }
+
+  /// Nicely-cased tier for display (e.g. "general_admission" -> "General Admission").
+  String? get tierLabel {
+    final t = tier;
+    if (t == null || t.trim().isEmpty) return null;
+    return t
+        .split(RegExp(r'[_\s]+'))
+        .where((w) => w.isNotEmpty)
+        .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
+        .join(' ');
   }
 
   // Status getters

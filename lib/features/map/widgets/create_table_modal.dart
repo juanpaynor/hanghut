@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
-import 'package:bitemates/core/services/tenor_service.dart';
+import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -483,7 +483,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
     'mall': 'shopping mall fun', 'thrift': 'thrift shopping vintage',
   };
 
-  /// Search Tenor for a GIF based on the activity text
+  /// Search KLIPY for a GIF based on the activity text
   Future<String?> _getAutoGifUrl(String activityText) async {
     try {
       final lowerText = activityText.toLowerCase();
@@ -497,15 +497,15 @@ class _CreateTableModalState extends State<CreateTableModal> {
         }
       }
 
-      print('🎬 AUTO-GIF: Searching Tenor for "$searchQuery" (from: "$activityText")');
+      print('🎬 AUTO-GIF: Searching KLIPY for "$searchQuery" (from: "$activityText")');
 
-      final tenor = TenorService();
-      final results = await tenor.searchGifs(searchQuery, limit: 5);
+      final klipy = KlipyService();
+      final results = await klipy.searchGifs(searchQuery, limit: 5);
 
       if (results.isNotEmpty) {
         // Pick a random one from top 5 for variety
         final randomIndex = DateTime.now().millisecondsSinceEpoch % results.length;
-        final gifUrl = tenor.getGifUrl(results[randomIndex]);
+        final gifUrl = klipy.getGifUrl(results[randomIndex]);
         if (gifUrl.isNotEmpty) {
           print('✅ AUTO-GIF: Found GIF: $gifUrl');
           return gifUrl;
@@ -1098,7 +1098,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                       const SizedBox(height: 16),
                       SizedBox(
                         height: 450,
-                        child: TenorGifPicker(
+                        child: KlipyGifPicker(
                           isEmbedded: true,
                           onGifSelected: (url) {
                             setState(() {

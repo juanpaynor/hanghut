@@ -489,6 +489,9 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     if (_imageLoaded) return; // guard against double-call
     _imageLoaded = true;
     if (!mounted || _isPaused) return;
+    // Ensure the duration is set — the image can finish painting after a
+    // reset/navigation cleared it, and forward() throws without one.
+    _progressController.duration = _imageDuration;
     _progressController.addStatusListener(_onProgressComplete);
     _progressController.forward();
   }

@@ -6,6 +6,14 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
+/// Formats a date as "MMM d", appending the year only when it isn't the
+/// current year — otherwise a far-future/past date (e.g. next year) is
+/// indistinguishable from a stale one at a glance.
+String _smartDate(DateTime dt, {String pattern = 'MMM d'}) {
+  final isCurrentYear = dt.year == DateTime.now().year;
+  return DateFormat(isCurrentYear ? pattern : '$pattern, y').format(dt);
+}
+
 class DiscoverSearchScreen extends StatefulWidget {
   const DiscoverSearchScreen({super.key});
 
@@ -737,7 +745,7 @@ class _HangoutCard extends StatelessWidget {
                   if (dt != null) ...[
                     const SizedBox(height: 5),
                     Text(
-                      DateFormat('EEE, MMM d').format(dt),
+                      _smartDate(dt, pattern: 'EEE, MMM d'),
                       style: const TextStyle(
                         fontSize: 11,
                         color: Colors.white60,
@@ -760,7 +768,7 @@ class _HangoutCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
-                  DateFormat('MMM d').format(dt),
+                  _smartDate(dt),
                   style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
@@ -896,7 +904,7 @@ class _HangoutRow extends StatelessWidget {
               children: [
                 if (dt != null)
                   Text(
-                    DateFormat('MMM d').format(dt),
+                    _smartDate(dt),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,

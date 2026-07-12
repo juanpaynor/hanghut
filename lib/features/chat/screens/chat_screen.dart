@@ -13,7 +13,7 @@ import 'package:bitemates/core/services/chat_database.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/chat/widgets/invite_member_sheet.dart';
 import 'package:bitemates/core/services/user_cache.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/features/chat/widgets/create_poll_sheet.dart';
 import 'package:bitemates/features/chat/widgets/rsvp_banner.dart';
 import 'package:bitemates/features/chat/widgets/checkin_banner.dart';
@@ -2266,7 +2266,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => TenorGifPicker(
+      builder: (context) => KlipyGifPicker(
         onGifSelected: (gifUrl) {
           _sendMessage(gifUrl: gifUrl);
         },

@@ -13,6 +13,8 @@ import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/legal/screens/terms_of_service_screen.dart';
 import 'package:bitemates/features/settings/screens/blocked_users_screen.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
+import 'package:bitemates/core/services/scanner_service.dart';
+import 'package:bitemates/features/ticketing/screens/scan_entry_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -35,10 +37,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Privacy
   bool _hideActivityFromFriends = false;
 
+  // Organizer ticket scanning (gated)
+  bool _canScan = false;
+
   @override
   void initState() {
     super.initState();
     _loadNotificationPreferences();
+    _checkScanEligibility();
+  }
+
+  Future<void> _checkScanEligibility() async {
+    final partnerIds = await ScannerService().getScannablePartnerIds();
+    if (mounted && partnerIds.isNotEmpty) {
+      setState(() => _canScan = true);
+    }
   }
 
   Future<void> _loadNotificationPreferences() async {
@@ -125,6 +138,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
+          // Organizer Section — only for users who can scan tickets
+          if (_canScan) ...[
+            SettingsSection(
+              title: 'ORGANIZER',
+              children: [
+                ListTile(
+                  leading: Icon(
+                    Icons.qr_code_scanner,
+                    color: Theme.of(context).iconTheme.color,
+                  ),
+                  title: const Text('Scan Tickets'),
+                  subtitle: const Text('Check in guests at your events'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ScanEntryScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const Divider(),
+          ],
+
           // Account Section
           SettingsSection(
             title: 'ACCOUNT',

@@ -3,9 +3,10 @@ import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/mention_overlay.dart';
 import 'package:video_player/video_player.dart';
 
@@ -29,15 +30,27 @@ class _CreatePostModalState extends State<CreatePostModal> {
   String? _selectedGifUrl;
   bool _isPosting = false;
   Position? _currentPosition;
+  bool _locationEnabled = true;
+
+  // Author (for the composer header)
+  String? _authorName;
+  String? _authorAvatar;
 
   // Mention state
   String? _mentionQuery;
   bool _showMentionOverlay = false;
 
+  bool get _hasContent =>
+      _textController.text.trim().isNotEmpty ||
+      _selectedImages.isNotEmpty ||
+      _selectedVideo != null ||
+      _selectedGifUrl != null;
+
   @override
   void initState() {
     super.initState();
     _checkLocation();
+    _loadAuthor();
     _textController.addListener(_onTextChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _textFocus.requestFocus();
@@ -48,6 +61,37 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final position = await LocationService().getCurrentLocation();
     if (mounted) {
       setState(() => _currentPosition = position);
+    }
+  }
+
+  Future<void> _loadAuthor() async {
+    final uid = SupabaseConfig.client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final row = await SupabaseConfig.client
+          .from('users')
+          .select('display_name, avatar_url, user_photos(photo_url, is_primary)')
+          .eq('id', uid)
+          .maybeSingle();
+      if (mounted && row != null) {
+        // Most users have no users.avatar_url — the photo lives in user_photos
+        // (primary). Prefer avatar_url, fall back to the primary/first photo.
+        final photos = row['user_photos'] as List? ?? [];
+        String? photo;
+        if (photos.isNotEmpty) {
+          final primary = photos.firstWhere(
+            (p) => p['is_primary'] == true,
+            orElse: () => photos.first,
+          );
+          photo = primary['photo_url'] as String?;
+        }
+        setState(() {
+          _authorName = row['display_name'] as String?;
+          _authorAvatar = (row['avatar_url'] as String?) ?? photo;
+        });
+      }
+    } catch (_) {
+      // Non-critical — header just falls back to a generic avatar.
     }
   }
 
@@ -73,15 +117,17 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final beforeCursor = text.substring(0, cursorPos);
     final mentionMatch = RegExp(r'@([a-zA-Z0-9_]*)$').firstMatch(beforeCursor);
 
-    if (mentionMatch != null) {
-      final query = mentionMatch.group(1) ?? '';
-      setState(() {
+    // Always rebuild so the character counter and Post-button enabled state
+    // track the text live.
+    setState(() {
+      if (mentionMatch != null) {
         _showMentionOverlay = true;
-        _mentionQuery = query;
-      });
-    } else {
-      _hideMentionOverlay();
-    }
+        _mentionQuery = mentionMatch.group(1) ?? '';
+      } else {
+        _showMentionOverlay = false;
+        _mentionQuery = null;
+      }
+    });
   }
 
   void _hideMentionOverlay() {
@@ -242,7 +288,7 @@ class _CreatePostModalState extends State<CreatePostModal> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => TenorGifPicker(
+      builder: (context) => KlipyGifPicker(
         onGifSelected: (gifUrl) {
           setState(() {
             _selectedGifUrl = gifUrl;
@@ -293,8 +339,8 @@ class _CreatePostModalState extends State<CreatePostModal> {
         imageFiles: _selectedImages.isNotEmpty ? _selectedImages : null,
         videoFile: _selectedVideo,
         gifUrl: _selectedGifUrl,
-        latitude: _currentPosition?.latitude,
-        longitude: _currentPosition?.longitude,
+        latitude: _locationEnabled ? _currentPosition?.latitude : null,
+        longitude: _locationEnabled ? _currentPosition?.longitude : null,
         mentionedUserIds: mentionedUserIds,
       );
 
@@ -320,102 +366,53 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final hasVideo = _selectedVideo != null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
-      child: Container(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
-          maxWidth: 600,
-          minHeight: 400,
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+      appBar: AppBar(
+        backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0.5,
+        centerTitle: true,
+        leading: IconButton(
+          icon: Icon(
+            Icons.close_rounded,
+            size: 24,
+            color: isDark ? Colors.grey[300] : Colors.grey[700],
+          ),
+          onPressed: () => Navigator.pop(context),
         ),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.4 : 0.15),
-              blurRadius: 24,
-              offset: const Offset(0, 8),
-            ),
-          ],
+        title: const Text(
+          'New Post',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.3,
+          ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Center(child: _buildPostButton()),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
+            // Author row
             Padding(
-              padding: const EdgeInsets.fromLTRB(6, 12, 12, 12),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      Icons.close_rounded,
-                      size: 22,
-                      color: isDark ? Colors.grey[400] : Colors.grey[600],
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    padding: const EdgeInsets.all(8),
-                    constraints: const BoxConstraints(),
-                  ),
-                  const Expanded(
-                    child: Text(
-                      'New Post',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: _isPosting
-                        ? const SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: Padding(
-                              padding: EdgeInsets.all(6),
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
-                              ),
-                            ),
-                          )
-                        : Material(
-                            color: AppTheme.primaryColor,
-                            borderRadius: BorderRadius.circular(20),
-                            child: InkWell(
-                              onTap: _post,
-                              borderRadius: BorderRadius.circular(20),
-                              child: const Padding(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 8,
-                                ),
-                                child: Text(
-                                  'Post',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 14,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                  ),
-                ],
-              ),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: _buildAuthorRow(isDark),
             ),
-
             Divider(
               height: 1,
-              color: isDark ? Colors.grey[800] : Colors.grey[200],
+              color: isDark ? Colors.grey[850] : Colors.grey[200],
             ),
 
             // Content
-            Flexible(
+            Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
                 child: Column(
@@ -448,6 +445,16 @@ class _CreatePostModalState extends State<CreatePostModal> {
                         query: _mentionQuery!,
                         onUserSelected: _onMentionSelected,
                       ),
+
+                    // Media toolbar — sits right under the composer, not
+                    // pinned to the screen bottom.
+                    const SizedBox(height: 4),
+                    _buildToolbar(
+                      isDark,
+                      hasImages,
+                      hasVideo,
+                      _textController.text.characters.length,
+                    ),
 
                     // Image Preview Grid
                     if (hasImages) ...[
@@ -619,51 +626,218 @@ class _CreatePostModalState extends State<CreatePostModal> {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
 
-            // Action Bar
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1A1A1A) : Colors.grey[50],
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
-                    width: 1,
+  /// Post button — dimmed & inert until there's something to post.
+  Widget _buildPostButton() {
+    if (_isPosting) {
+      return const SizedBox(
+        width: 32,
+        height: 32,
+        child: Padding(
+          padding: EdgeInsets.all(6),
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
+    final enabled = _hasContent;
+    return Opacity(
+      opacity: enabled ? 1 : 0.4,
+      child: Material(
+        color: AppTheme.primaryColor,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          onTap: enabled ? _post : null,
+          borderRadius: BorderRadius.circular(20),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Text(
+              'Post',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// "You, posting" identity row. Audience is Public-only today (the feed RPCs
+  /// don't surface 'followers' posts), so it's shown as a static label.
+  Widget _buildAuthorRow(bool isDark) {
+    final hasAvatar = _authorAvatar != null && _authorAvatar!.isNotEmpty;
+    final initial = (_authorName != null && _authorName!.isNotEmpty)
+        ? _authorName![0].toUpperCase()
+        : '?';
+    return Row(
+      children: [
+        CircleAvatar(
+          radius: 18,
+          backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
+          backgroundImage: hasAvatar ? NetworkImage(_authorAvatar!) : null,
+          child: hasAvatar
+              ? null
+              : Text(
+                  initial,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.grey[300] : Colors.grey[600],
                   ),
                 ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _authorName ?? 'You',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                ),
               ),
-              child: Row(
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  _MediaButton(
-                    icon: Icons.photo_library_rounded,
-                    label: hasImages
-                        ? '${_selectedImages.length} Photo${_selectedImages.length > 1 ? 's' : ''}'
-                        : 'Photo',
-                    isActive: hasImages,
-                    onPressed:
-                        _selectedVideo == null && _selectedImages.length < 4
-                        ? _pickImage
-                        : null,
-                  ),
-                  const SizedBox(width: 10),
-                  _MediaButton(
-                    icon: Icons.videocam_rounded,
-                    label: hasVideo ? '1 Video' : 'Video',
-                    isActive: hasVideo,
-                    onPressed: !hasVideo && _selectedImages.isEmpty
-                        ? _pickVideo
-                        : null,
-                  ),
-                  const SizedBox(width: 10),
-                  _MediaButton(
-                    icon: Icons.gif_rounded,
-                    label: _selectedGifUrl != null ? '1 GIF' : 'GIF',
-                    isActive: _selectedGifUrl != null,
-                    onPressed: _selectedGifUrl == null && !hasVideo
-                        ? _pickGif
-                        : null,
+                  Icon(Icons.public, size: 12, color: Colors.grey[500]),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Public',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[500],
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToolbar(
+    bool isDark,
+    bool hasImages,
+    bool hasVideo,
+    int textLen,
+  ) {
+    const maxLen = 500;
+    final nearLimit = textLen >= maxLen - 60;
+    return Container(
+      padding: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.grey[850]! : Colors.grey[200]!,
+            width: 1,
+          ),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              _buildLocationChip(isDark),
+              const Spacer(),
+              if (nearLimit)
+                Text(
+                  '$textLen/$maxLen',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: textLen > maxLen ? Colors.red : Colors.grey[500],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _MediaButton(
+                icon: Icons.photo_library_rounded,
+                label: hasImages
+                    ? '${_selectedImages.length} Photo${_selectedImages.length > 1 ? 's' : ''}'
+                    : 'Photo',
+                isActive: hasImages,
+                onPressed: _selectedVideo == null && _selectedImages.length < 4
+                    ? _pickImage
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              _MediaButton(
+                icon: Icons.videocam_rounded,
+                label: hasVideo ? '1 Video' : 'Video',
+                isActive: hasVideo,
+                onPressed: !hasVideo && _selectedImages.isEmpty
+                    ? _pickVideo
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              _MediaButton(
+                icon: Icons.gif_rounded,
+                label: _selectedGifUrl != null ? '1 GIF' : 'GIF',
+                isActive: _selectedGifUrl != null,
+                onPressed: _selectedGifUrl == null && !hasVideo
+                    ? _pickGif
+                    : null,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Location geotag toggle — makes the silent geotag visible & optional.
+  Widget _buildLocationChip(bool isDark) {
+    final hasLoc = _currentPosition != null;
+    final on = _locationEnabled && hasLoc;
+    return InkWell(
+      onTap: hasLoc
+          ? () => setState(() => _locationEnabled = !_locationEnabled)
+          : null,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: on
+              ? AppTheme.primaryColor.withValues(alpha: 0.12)
+              : (isDark ? Colors.grey[850] : Colors.grey[200]),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              on ? Icons.location_on : Icons.location_off,
+              size: 15,
+              color: on ? AppTheme.primaryColor : Colors.grey[500],
+            ),
+            const SizedBox(width: 5),
+            Text(
+              !hasLoc
+                  ? 'Locating…'
+                  : (on ? 'Location on' : 'Location off'),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: on ? AppTheme.primaryColor : Colors.grey[500],
               ),
             ),
           ],

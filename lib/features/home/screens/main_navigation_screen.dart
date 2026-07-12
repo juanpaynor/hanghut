@@ -25,6 +25,8 @@ import 'package:bitemates/core/services/connectivity_service.dart';
 import 'package:bitemates/core/widgets/offline_banner.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
+import 'package:bitemates/core/services/coach_mark_service.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -68,6 +70,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   // the full screen; only the navbar's ValueListenableBuilder rebuilds.
   final ValueNotifier<bool> navCompactNotifier = ValueNotifier(false);
   double _scrollAccum = 0;
+
+  // Coach mark target keys — one per landmark widget in the navbar
+  final GlobalKey _keyNavMap     = GlobalKey();
+  final GlobalKey _keyNavFeed    = GlobalKey();
+  final GlobalKey _keyFab        = GlobalKey();
+  final GlobalKey _keyNavExplore = GlobalKey();
+  final GlobalKey _keyNavProfile = GlobalKey();
 
   @override
   void initState() {
@@ -128,6 +137,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     // Check for Admin Popups on Startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAdminPopups();
+      _maybeShowCoachMarks();
     });
   }
 
@@ -145,6 +155,121 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         ),
       );
     }
+  }
+
+  Future<void> _maybeShowCoachMarks() async {
+    final service = CoachMarkService();
+    if (!await service.shouldShowOnboarding()) return;
+    final steps = await service.fetchOnboardingSteps();
+    if (steps.isEmpty || !mounted) return;
+
+    final keyLookup = <String, GlobalKey>{
+      'nav_map': _keyNavMap,
+      'nav_feed': _keyNavFeed,
+      'fab': _keyFab,
+      'nav_explore': _keyNavExplore,
+      'nav_profile': _keyNavProfile,
+    };
+
+    // Wait until the target widgets are actually laid out (their context is
+    // non-null). On slower devices — or while the Map screen is still doing its
+    // heavy first-frame init — the nav bar can lag, which previously made the
+    // tour skip targets and show nothing. Poll up to ~3s before giving up so it
+    // shows reliably instead of "sometimes". (Not marking it seen on failure
+    // means it still retries next launch.)
+    final neededKeys = steps
+        .map((s) => keyLookup[s['target_key']])
+        .whereType<GlobalKey>()
+        .toList();
+    var attempts = 0;
+    while (mounted &&
+        attempts < 25 &&
+        neededKeys.any((k) => k.currentContext == null)) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      attempts++;
+    }
+    if (!mounted) return;
+
+    final targets = <TargetFocus>[];
+    for (final step in steps) {
+      final targetKey = step['target_key'] as String;
+      final key = keyLookup[targetKey];
+      if (key == null || key.currentContext == null) continue;
+
+      final isFab = targetKey == 'fab';
+
+      targets.add(TargetFocus(
+        identify: targetKey,
+        keyTarget: key,
+        // FAB is circular; nav items get a rounded rect that fits the pill bar
+        shape: isFab ? ShapeLightFocus.Circle : ShapeLightFocus.RRect,
+        radius: isFab ? null : 16,
+        paddingFocus: isFab ? 10 : 6,
+        enableOverlayTab: true,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    step['title'] as String,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    step['body'] as String,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Tap anywhere to continue →',
+                    style: TextStyle(color: Colors.white38, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ));
+    }
+
+    if (targets.isEmpty) return;
+
+    TutorialCoachMark(
+      targets: targets,
+      colorShadow: Colors.black,
+      opacityShadow: 0.85,
+      textSkip: 'SKIP',
+      // Cut default 600ms transitions down to feel snappy
+      focusAnimationDuration: const Duration(milliseconds: 400),
+      unFocusAnimationDuration: const Duration(milliseconds: 300),
+      pulseAnimationDuration: const Duration(milliseconds: 500),
+      onFinish: () {
+        service.markOnboardingSeen();
+        // Chain straight into the map-screen tour now that the navbar tour
+        // is done and the user is already on the Map tab.
+        Future.delayed(const Duration(milliseconds: 600), () {
+          _mapScreenKey.currentState?.maybeShowMapCoachMarks();
+        });
+      },
+      onSkip: () {
+        service.markOnboardingSeen();
+        // Also chain on skip so users who bail out of the navbar tour still
+        // see the map tour (they're already on the map).
+        Future.delayed(const Duration(milliseconds: 400), () {
+          _mapScreenKey.currentState?.maybeShowMapCoachMarks();
+        });
+        return true;
+      },
+    ).show(context: context);
   }
 
   Future<void> _openEventFromNotification(String eventId) async {
@@ -517,15 +642,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           _buildSpeedDialButtons(context),
 
           // ── Floating Nav Bar ──
-          // RepaintBoundary isolates the blur repaint from the rest of the
-          // screen; ValueListenableBuilder means only this subtree rebuilds
-          // when compact state changes — the IndexedStack never repaints.
-          RepaintBoundary(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: navCompactNotifier,
-              builder: (context, navCompact, _) =>
-                  _buildFloatingNavBar(context, navCompact),
-            ),
+          // ValueListenableBuilder means only the navbar subtree rebuilds when
+          // compact state changes — the IndexedStack never repaints.
+          // Positioned must stay a direct Stack child, so RepaintBoundary lives
+          // inside _buildFloatingNavBar around the inner content instead.
+          ValueListenableBuilder<bool>(
+            valueListenable: navCompactNotifier,
+            builder: (context, navCompact, _) =>
+                _buildFloatingNavBar(context, navCompact),
           ),
         ],
         ),
@@ -587,7 +711,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       left: 16,
       right: 16,
       height: stackHeight,
-      child: Stack(
+      child: RepaintBoundary(
+        child: Stack(
         clipBehavior: Clip.none,
         children: [
           // Frosted glass bar — at the bottom of the stack
@@ -643,11 +768,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map', navCompact),
-                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed', navCompact),
+                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map', navCompact, itemKey: _keyNavMap),
+                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed', navCompact, itemKey: _keyNavFeed),
                         const SizedBox(width: fabSize), // placeholder keeps spacing
-                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore', navCompact),
-                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile', navCompact),
+                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore', navCompact, itemKey: _keyNavExplore),
+                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile', navCompact, itemKey: _keyNavProfile),
                       ],
                     ),
                   ),
@@ -663,6 +788,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             child: GestureDetector(
               onTap: _toggleDial,
               child: Container(
+                key: _keyFab,
                 height: fabSize,
                 width: fabSize,
                 decoration: BoxDecoration(
@@ -694,6 +820,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -821,14 +948,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     IconData iconOutlined,
     IconData iconFilled,
     String label,
-    bool navCompact,
-  ) {
+    bool navCompact, {
+    Key? itemKey,
+  }) {
     final isSelected = _selectedIndex == index;
     final activeColor = Theme.of(context).primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final inactiveColor = isDark ? Colors.white70 : Colors.grey[700]!;
 
     return InkWell(
+      key: itemKey,
       onTap: () => _onItemTapped(index),
       borderRadius: BorderRadius.circular(16),
       child: AnimatedPadding(

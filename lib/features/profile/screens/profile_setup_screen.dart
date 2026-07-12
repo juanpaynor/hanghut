@@ -180,6 +180,10 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   }
 
   void _nextPage() async {
+    // Steps after Identity/About have no text field, so a focused keyboard
+    // from those steps would otherwise stay pinned open (scrolled off-screen
+    // but never unfocused) as the PageView advances.
+    FocusManager.instance.primaryFocus?.unfocus();
     if (_currentStep == 0 && _selectedPhoto != null && _uploadedPhotoUrl == null) {
       setState(() => _isLoading = true);
       _uploadedPhotoUrl = await _uploadPhoto();
@@ -212,6 +216,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   }
 
   void _previousPage() {
+    FocusManager.instance.primaryFocus?.unfocus();
     if (_currentStep > 0) {
       _pageController.previousPage(duration: const Duration(milliseconds: 450), curve: Curves.easeInOutCubic);
       setState(() => _currentStep--);
@@ -253,7 +258,10 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         colorScheme: ColorScheme.fromSeed(seedColor: theme.accent, primary: theme.accent, brightness: Brightness.light),
       ),
       child: Scaffold(
-        body: Stack(
+        body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          child: Stack(
           children: [
             _buildBackground(theme),
             SafeArea(
@@ -287,6 +295,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                 ),
               ),
           ],
+          ),
         ),
       ),
     );

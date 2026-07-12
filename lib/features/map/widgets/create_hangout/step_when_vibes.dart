@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
-import 'package:bitemates/features/chat/widgets/tenor_gif_picker.dart';
+import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'create_hangout_flow.dart';
 
 /// Step 2: Date, time, GIF vibe, map marker emoji/image.
@@ -146,7 +146,7 @@ class _StepWhenVibesState extends State<StepWhenVibes> {
               const SizedBox(height: 16),
               SizedBox(
                 height: 400,
-                child: TenorGifPicker(
+                child: KlipyGifPicker(
                   isEmbedded: true,
                   onGifSelected: (url) {
                     flow.selectedGifUrl = url;

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:bitemates/core/services/group_service.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 
 /// Create a new group — category, name, description, privacy, optional cover.
 class CreateGroupScreen extends StatefulWidget {
@@ -149,12 +150,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               child: Container(
                 height: 160,
                 decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.1),
+                  gradient: _coverImage == null
+                      ? GroupCover.forGroup(category: _selectedCategory).linear
+                      : null,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: primaryColor.withOpacity(0.3),
-                    style: BorderStyle.solid,
-                  ),
                   image: _coverImage != null
                       ? DecorationImage(
                           image: FileImage(_coverImage!),
@@ -166,16 +165,31 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     ? Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.add_photo_alternate_outlined,
-                              size: 40, color: primaryColor.withOpacity(0.6)),
-                          const SizedBox(height: 8),
-                          Text('Add Cover Image',
+                          Text(
+                            _selectedEmoji ??
+                                _categories[_selectedCategory]?['emoji']
+                                    as String? ??
+                                '🌟',
+                            style: const TextStyle(fontSize: 40),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.add_photo_alternate_outlined,
+                                  size: 18, color: Colors.white),
+                              const SizedBox(width: 6),
+                              Text('Tap to add a cover photo',
+                                  style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.95),
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13)),
+                            ],
+                          ),
+                          Text('Optional — a theme is applied automatically',
                               style: TextStyle(
-                                  color: primaryColor.withOpacity(0.8),
-                                  fontWeight: FontWeight.w500)),
-                          Text('(Optional)',
-                              style: TextStyle(
-                                  color: Colors.grey[400], fontSize: 12)),
+                                  color: Colors.white.withValues(alpha: 0.8),
+                                  fontSize: 11)),
                         ],
                       )
                     : null,

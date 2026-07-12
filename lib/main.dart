@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/providers/auth_provider.dart';
-import 'package:bitemates/features/auth/screens/login_screen.dart';
+import 'package:bitemates/features/auth/screens/welcome_screen.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/features/splash/screens/social_magnet_splash_screen.dart';
@@ -25,6 +25,7 @@ import 'firebase_options.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/app_location_service.dart';
+import 'package:bitemates/core/services/deep_link_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
@@ -132,6 +133,10 @@ Future<void> main() async {
     // await GeofenceEngine().init();
     // GeofenceEngine().syncGeofences();
 
+    // Universal Links / App Links. Init after first frame so navigatorKey is
+    // mounted before any cold-start link tries to navigate.
+    DeepLinkService.instance.init();
+
     AppLocationService().updateLocationIfNeeded().catchError((e) {
       print("⚠️ Location update failed (non-critical): $e");
     });
@@ -198,7 +203,7 @@ class _AuthGateState extends State<AuthGate> {
           // Use a separate widget to hold the Future state
           return SessionHandler(session: session);
         } else {
-          return const LoginScreen();
+          return const WelcomeScreen();
         }
       },
     );
