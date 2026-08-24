@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/features/activity/widgets/my_hangouts_list.dart';
 import 'package:bitemates/features/activity/widgets/my_tickets_tab.dart';
 import 'package:bitemates/features/activity/widgets/discover_tab.dart';
+import 'package:bitemates/features/activity/widgets/hangouts_tab.dart';
 
 class ActivityScreen extends StatefulWidget {
   final void Function(String tableId)? onHangoutTap;
@@ -15,7 +16,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
@@ -25,9 +26,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
           title: Text(
             'Explore',
             style: TextStyle(
-              color: Theme.of(context).textTheme.bodyLarge?.color,
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
+              color: Theme.of(context).primaryColor,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
               letterSpacing: -0.5,
             ),
           ),
@@ -40,6 +41,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
             tabAlignment: TabAlignment.start,
             tabs: const [
               Tab(text: 'Discover'),
+              Tab(text: 'Hangouts'),
               Tab(text: 'My Tickets'),
               Tab(text: 'My Hangouts'),
             ],
@@ -48,6 +50,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
         body: TabBarView(
           children: [
             DiscoverTab(onHangoutTap: widget.onHangoutTap),
+            HangoutsTab(onHangoutTap: widget.onHangoutTap),
             const MyTicketsTab(),
             const MyHangoutsList(),
           ],

@@ -59,6 +59,7 @@ class AblyService {
     String contentType = 'text',
     String? messageId, // Add message ID
     String? replyToId, // Add reply reference
+    bool isForwarded = false,
   }) async {
     if (_realtime == null) await init();
 
@@ -75,6 +76,7 @@ class AblyService {
           'senderPhotoUrl': senderPhotoUrl,
           'timestamp': DateTime.now().toIso8601String(),
           if (replyToId != null) 'replyToId': replyToId,
+          if (isForwarded) 'isForwarded': true,
         },
       );
       print('✅ ABLY: Message published to $channelName');

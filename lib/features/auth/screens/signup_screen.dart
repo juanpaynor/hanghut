@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/main.dart' show SessionHandler;
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/profile_setup_screen.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:flutter/gestures.dart';
@@ -82,13 +84,44 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
+  Future<void> _handleGoogleSignup() async {
+    final authProvider = context.read<AuthProvider>();
+    try {
+      final success = await authProvider.signInWithGoogle();
+      if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(authProvider.errorMessage ?? 'Google sign in failed'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _handleAppleSignup() async {
     final authProvider = context.read<AuthProvider>();
     try {
       final success = await authProvider.signInWithApple();
       if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+          MaterialPageRoute(
+            builder: (_) => session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
+          ),
         );
       }
     } catch (e) {
@@ -429,7 +462,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         children: [
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () {},
+                              onPressed: _handleGoogleSignup,
                               icon: const Icon(
                                 Icons.g_mobiledata,
                                 size: 28,

@@ -4,6 +4,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:bitemates/core/services/places_service.dart';
+
 class InferredLocation {
   final String name;
   final String? tableId;
@@ -121,35 +123,23 @@ class LocationInferenceService {
       // RPC might not exist yet, fallback to Google Places
     }
 
-    // 3. Fallback: Google Places API (Nearby Search)
+    // 3. Fallback: Google Places API (New) — nearest establishment
     try {
-      final apiKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-      if (apiKey.isEmpty) throw Exception('No Google Places API Key');
-
-      final url =
-          'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
-          '?location=$lat,$lng'
-          '&radius=50'
-          '&type=establishment'
-          '&key=$apiKey';
-
-      final response = await http.get(Uri.parse(url));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK' &&
-            data['results'] != null &&
-            data['results'].isNotEmpty) {
-          final bestMatch = data['results'][0]; // Get the closest/first result
-
-          return InferredLocation(
-            name: bestMatch['name'],
-            externalPlaceId: bestMatch['place_id'],
-            latitude: lat,
-            longitude: lng,
-            city: city, // Fallback city
-          );
-        }
+      final results = await PlacesService.instance.nearbySearch(
+        lat: lat,
+        lng: lng,
+        radiusMeters: 50,
+        maxResults: 1,
+      );
+      if (results.isNotEmpty) {
+        final best = results.first; // nearest
+        return InferredLocation(
+          name: best.name,
+          externalPlaceId: best.placeId,
+          latitude: lat,
+          longitude: lng,
+          city: city, // Fallback city
+        );
       }
     } catch (e) {
       print('Google Places Error: $e');

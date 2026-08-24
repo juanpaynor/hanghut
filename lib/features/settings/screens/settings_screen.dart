@@ -15,6 +15,11 @@ import 'package:bitemates/features/settings/screens/blocked_users_screen.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/scanner_service.dart';
 import 'package:bitemates/features/ticketing/screens/scan_entry_screen.dart';
+import 'package:bitemates/core/services/host_service.dart';
+import 'package:bitemates/core/services/weather_effects_preference.dart';
+import 'package:bitemates/features/host/screens/host_apply_screen.dart';
+import 'package:bitemates/features/host/screens/host_pending_screen.dart';
+import 'package:bitemates/features/host/screens/host_dashboard_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -37,6 +42,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Privacy
   bool _hideActivityFromFriends = false;
 
+  // Map weather visuals (client-side only)
+  bool _weatherEffects = WeatherEffectsPreference.enabled;
+
   // Organizer ticket scanning (gated)
   bool _canScan = false;
 
@@ -45,6 +53,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadNotificationPreferences();
     _checkScanEligibility();
+    _loadWeatherEffectsPref();
+  }
+
+  Future<void> _loadWeatherEffectsPref() async {
+    final enabled = await WeatherEffectsPreference.load();
+    if (mounted) setState(() => _weatherEffects = enabled);
   }
 
   Future<void> _checkScanEligibility() async {
@@ -138,6 +152,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
+          // Host Section — become a host / switch to host mode
+          SettingsSection(
+            title: 'HOST',
+            children: [const _HostModeTile()],
+          ),
+          const Divider(),
+
           // Organizer Section — only for users who can scan tickets
           if (_canScan) ...[
             SettingsSection(
@@ -300,6 +321,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 value: themeProvider.isDarkMode,
                 onChanged: (value) => themeProvider.toggleTheme(value),
               ),
+              SettingsSwitchTile(
+                icon: Icons.grain,
+                title: 'Weather effects on map',
+                subtitle: 'Show live rain on the map when it\'s raining nearby',
+                value: _weatherEffects,
+                onChanged: (val) async {
+                  setState(() => _weatherEffects = val);
+                  await WeatherEffectsPreference.setEnabled(val);
+                },
+              ),
             ],
           ),
 
@@ -416,12 +447,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
 
               if (shouldLogout == true && context.mounted) {
+                final auth = context.read<AuthProvider>();
                 Navigator.of(
                   context,
                 ).popUntil((route) => route.isFirst); // Clear stack
-                await SupabaseConfig.client.auth.signOut();
+                // Route through AuthProvider → AuthService.signOut(), which
+                // clears this device's FCM token BEFORE signing out. Calling
+                // auth.signOut() directly first would null the session and skip
+                // the token clear, leaving this account receiving pushes here.
+                await auth.signOut();
                 if (context.mounted) {
-                  context.read<AuthProvider>().signOut();
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(
                       builder: (context) => const LoginScreen(),
@@ -535,6 +570,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 40),
         ],
       ),
+    );
+  }
+}
+
+// ─── Host Mode Entry Point Tile ─────────────────────────────────────────────
+
+class _HostModeTile extends StatefulWidget {
+  const _HostModeTile();
+
+  @override
+  State<_HostModeTile> createState() => _HostModeTileState();
+}
+
+class _HostModeTileState extends State<_HostModeTile> {
+  final _hostService = HostService();
+  Map<String, dynamic>? _partner;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPartner();
+  }
+
+  Future<void> _loadPartner() async {
+    final partner = await _hostService.getMyPartnerProfile();
+    if (mounted) {
+      setState(() {
+        _partner = partner;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _onTap() {
+    if (_partner == null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HostApplyScreen()),
+      ).then((_) => _loadPartner());
+    } else if (_partner!['status'] == 'approved') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => HostDashboardScreen(partner: _partner!),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HostPendingScreen()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const ListTile(
+        leading: SizedBox(
+          width: 24,
+          height: 24,
+          child: Padding(
+            padding: EdgeInsets.all(2.0),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+        title: Text('Loading host status…'),
+      );
+    }
+
+    final isApproved = _partner?['status'] == 'approved';
+    final isPending = _partner != null && !isApproved;
+    final primary = Theme.of(context).primaryColor;
+
+    final icon = isApproved
+        ? Icons.storefront_outlined
+        : isPending
+        ? Icons.hourglass_top_rounded
+        : Icons.add_business_outlined;
+    final color = isApproved
+        ? primary
+        : isPending
+        ? Colors.orange[700]
+        : Theme.of(context).iconTheme.color;
+    final title = isApproved
+        ? 'Switch to Host Mode'
+        : isPending
+        ? 'Application Under Review'
+        : 'Become a Host';
+    final subtitle = isApproved
+        ? 'Manage your experiences and events'
+        : isPending
+        ? 'We\'ll notify you once it\'s reviewed'
+        : 'Host experiences or events on HangHut';
+
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: isApproved
+              ? primary
+              : isPending
+              ? Colors.orange[700]
+              : null,
+        ),
+      ),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: _onTap,
     );
   }
 }

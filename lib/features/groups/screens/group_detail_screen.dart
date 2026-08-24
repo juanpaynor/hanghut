@@ -5,12 +5,12 @@ import 'package:bitemates/core/services/group_service.dart';
 import 'package:bitemates/core/services/group_member_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
-import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/groups/screens/edit_group_screen.dart';
+import 'package:bitemates/features/groups/screens/group_chat_screen.dart';
 import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 
 /// Minimal group detail: cover → meta → tabs (Chat | Members | About)
@@ -54,7 +54,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _loadAll();
   }
 
@@ -174,16 +174,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   Future<void> _openGroupChat() async {
     if (!_isMember) return;
-    await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      enableDrag: true,
-      builder: (context) => ChatScreen(
-        channelId: 'group_${widget.groupId}',
-        tableId: widget.groupId,
-        tableTitle: _group?['name'] ?? 'Group Chat',
-        chatType: 'group',
+    final metadata = _group?['metadata'];
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupChatScreen(
+          groupId: widget.groupId,
+          groupName: _group?['name'],
+          groupImageUrl: (_group?['icon_image_url'] as String?) ??
+              _group?['cover_image_url'],
+          iconEmoji: (metadata is Map ? metadata['icon_emoji'] : null) ??
+              _group?['icon_emoji'],
+        ),
       ),
     );
   }
@@ -285,7 +287,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          _groupAvatar(iconEmoji, category),
+                          _groupAvatar(iconEmoji, category,
+                              imageUrl: group['icon_image_url'] as String?),
                           const SizedBox(width: 14),
                           Expanded(
                             child: Column(
@@ -386,7 +389,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     fontSize: 14,
                   ),
                   tabs: [
-                    const Tab(text: 'Chat'),
                     Tab(
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -463,7 +465,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         body: TabBarView(
           controller: _tabController,
           children: [
-            _buildChatTab(),
             _buildActivitiesTab(),
             _buildMembersTab(),
             _buildAboutTab(),
@@ -534,7 +535,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     ),
   );
 
-  Widget _groupAvatar(String? emoji, String category) {
+  Widget _groupAvatar(String? emoji, String category, {String? imageUrl}) {
+    // Prefer an uploaded group photo; fall back to the category emoji, then the
+    // category icon.
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
     return Container(
       width: 58,
       height: 58,
@@ -549,18 +553,32 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           ),
         ],
       ),
-      child: Center(
-        child: emoji != null && emoji.isNotEmpty
-            ? Text(emoji, style: const TextStyle(fontSize: 28))
-            : Icon(
-                _getCategoryIcon(category),
-                size: 28,
-                color: GroupCover.forGroup(
-                  category: category,
-                  seed: widget.groupId,
-                ).accent,
-              ),
-      ),
+      clipBehavior: Clip.antiAlias,
+      child: hasImage
+          ? Image.network(
+              imageUrl,
+              width: 58,
+              height: 58,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) =>
+                  _avatarGlyph(emoji, category),
+            )
+          : _avatarGlyph(emoji, category),
+    );
+  }
+
+  Widget _avatarGlyph(String? emoji, String category) {
+    return Center(
+      child: emoji != null && emoji.isNotEmpty
+          ? Text(emoji, style: const TextStyle(fontSize: 28))
+          : Icon(
+              _getCategoryIcon(category),
+              size: 28,
+              color: GroupCover.forGroup(
+                category: category,
+                seed: widget.groupId,
+              ).accent,
+            ),
     );
   }
 
@@ -593,24 +611,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
       );
     }
 
-    // Approved member — Invite (primary) + Chat + Share
+    // Approved member — Open Chat (primary) + Share. Inviting lives on the
+    // Members tab ("Invite People" / "Suggest an Invite"), so it isn't duplicated
+    // here as a shortcut that only switched tabs.
     if (_isMember) {
       return Row(
         children: [
           Expanded(
             child: _primaryButton(
-              icon: Icons.person_add_alt_1,
-              label: 'Invite',
+              icon: Icons.chat_bubble_outline_rounded,
+              label: 'Open Chat',
               color: primaryColor,
-              onTap: () => _tabController.animateTo(2),
+              onTap: _openGroupChat,
             ),
-          ),
-          const SizedBox(width: 10),
-          _squareIconButton(
-            icon: Icons.chat_bubble_outline,
-            onTap: _openGroupChat,
-            isDark: isDark,
-            color: primaryColor,
           ),
           const SizedBox(width: 10),
           _squareIconButton(
@@ -690,81 +703,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           child: Icon(icon, size: 21, color: color),
         ),
       ),
-    );
-  }
-
-  // ─── Chat Tab ──────────────────────────────────
-
-  Widget _buildChatTab() {
-    if (_membership?['status'] == 'pending') {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.hourglass_top, size: 48, color: Colors.orange[400]),
-            const SizedBox(height: 16),
-            Text(
-              'Awaiting Approval',
-              style: TextStyle(
-                color: Colors.orange[400],
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Your join request is being reviewed\nby the group admin.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 14,
-                height: 1.5,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (!_isMember) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.lock_outline, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              'Join the group to access the chat',
-              style: TextStyle(color: Colors.grey[500], fontSize: 15),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _joinGroup,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text('Join Group'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ChatScreen(
-      channelId: 'group_${widget.groupId}',
-      tableId: widget.groupId,
-      tableTitle: _group?['name'] ?? 'Group Chat',
-      chatType: 'group',
-      embedded: true,
     );
   }
 

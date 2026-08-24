@@ -8,6 +8,13 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback? onSearch;
   final List<Widget>? extraActions;
 
+  /// Optional status line (e.g. "Active now" / "last seen 5m ago"). When null,
+  /// the default "Tap for info" hint is shown.
+  final String? statusText;
+
+  /// When true, the status line is prefixed with a green "online" dot.
+  final bool isOnline;
+
   const ChatHeader({
     super.key,
     required this.title,
@@ -16,6 +23,8 @@ class ChatHeader extends StatelessWidget {
     required this.onInfoTap,
     this.onSearch,
     this.extraActions,
+    this.statusText,
+    this.isOnline = false,
   });
 
   @override
@@ -56,14 +65,42 @@ class ChatHeader extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        'Tap for info',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).primaryColor,
-                          fontWeight: FontWeight.w600,
+                      if (statusText != null)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isOnline) ...[
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF22C55E),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                            ],
+                            Text(
+                              statusText!,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isOnline
+                                    ? const Color(0xFF22C55E)
+                                    : Colors.grey[500],
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Text(
+                          'Tap for info',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).primaryColor,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),

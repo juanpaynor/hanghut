@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/event_analytics_service.dart';
 import 'package:bitemates/features/ticketing/screens/ticket_success_screen.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
@@ -126,6 +127,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   }
 
   Future<void> _openSeatPicker() async {
+    EventAnalyticsService.instance.logPickSeats(widget.event.id);
     final result = await Navigator.push<SeatSelectionResult>(
       context,
       MaterialPageRoute(
@@ -644,6 +646,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     final body = {
       'event_id': widget.event.id,
       'quantity': quantity,
+      // Provenance so web can tell app sales from web sales (team_comms #240).
+      // Backend whitelists this; anything unrecognised is stored NULL, not 'web'.
+      'source': 'app',
       // 'amount' is calculated by backend now
       'guest_details': guestDetails,
       'success_url': 'https://hanghut.com/checkout/success',
@@ -658,6 +663,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       // Assigned seating: count must equal quantity, all same tier.
       if (_selectedSeatIds.isNotEmpty) 'seat_ids': _selectedSeatIds,
     };
+
+    EventAnalyticsService.instance.logCheckoutStarted(widget.event.id);
 
     final response = await SupabaseConfig.client.functions.invoke(
       'create-purchase-intent',
@@ -895,16 +902,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   Widget build(BuildContext context) {
     final event = _fullEvent ?? widget.event;
 
-    // Fee Logic (Match Backend)
-    double baseUnitPrice = _selectedTier?.price ?? event.ticketPrice;
+    // ── Pricing (mirror backend create-purchase-intent / web computePassedFees) ──
+    final double baseUnitPrice = _selectedTier?.price ?? event.ticketPrice;
     final bool isFree = baseUnitPrice == 0;
-
-    double feeAmount = 0;
-    if (event.passFeesToCustomer == true && !isFree) {
-      feeAmount = event.fixedFeePerTicket ?? 15.00;
-    }
-    double displayUnitPrice = baseUnitPrice + feeAmount;
-    double displaySubtotal = displayUnitPrice * _quantity;
 
     // Subscriber discount (server-verified — flag sent to edge function)
     double subscriberDiscountAmount = 0;
@@ -915,9 +915,28 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       subscriberDiscountAmount = (baseUnitPrice - discountedBase) * _quantity;
     }
 
-    double displayDiscount = _promoDiscountAmount + subscriberDiscountAmount;
-    double total = displaySubtotal - displayDiscount;
-    if (total < 0) total = 0;
+    final double subtotal = baseUnitPrice * _quantity; // base only, no fee
+    final double displayDiscount =
+        _promoDiscountAmount + subscriberDiscountAmount;
+    double net = subtotal - displayDiscount;
+    if (net < 0) net = 0;
+
+    // Booking fee = the passed-through platform take. Two independent toggles;
+    // charged on the POST-discount net, each component rounded SEPARATELY (never
+    // the sum, or it drifts ₱1 on fractional fees). Shown as ONE "Booking Fee"
+    // line — the % portion is charged but not itemised (team_comms #234/#235).
+    final double pct = event.customPercentage ?? 2.0;
+    final double fixedFee = event.fixedFeePerTicket ?? 15.0;
+    final bool passPct = event.passPercentageToCustomer ?? false;
+    final bool passFixed = event.passFixedToCustomer ?? true;
+    double pctPortion = 0;
+    double fixedPortion = 0;
+    if (net > 0) {
+      if (passPct) pctPortion = (net * pct / 100).roundToDouble();
+      if (passFixed) fixedPortion = (fixedFee * _quantity).roundToDouble();
+    }
+    final double bookingFee = pctPortion + fixedPortion;
+    final double total = net + bookingFee;
 
     // Early access + subscriber-only gate
     final earlyAccessHours = event.subscriberEarlyAccessHours;
@@ -977,12 +996,12 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     final isLast = step == lastStep;
 
     final stepBodies = <Widget>[
-      _buildTicketStep(feeAmount),
+      _buildTicketStep(),
       _buildDetailsStep(),
       if (hasQuestions) _buildQuestionsStep(),
       _buildReviewStep(
-        displayUnitPrice: displayUnitPrice,
-        displaySubtotal: displaySubtotal,
+        subtotal: subtotal,
+        bookingFee: bookingFee,
         subscriberDiscountAmount: subscriberDiscountAmount,
         total: total,
       ),
@@ -1208,7 +1227,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   }
 
   // ── STEP 1: Ticket type + quantity ──
-  Widget _buildTicketStep(double feeAmount) {
+  Widget _buildTicketStep() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1224,7 +1243,6 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           ..._tiers.map(
             (tier) => _TierOption(
               tier: tier,
-              feeAmount: feeAmount,
               isSelected: _selectedTier?.id == tier.id,
               onTap: () {
                 if (!tier.isSoldOut) {
@@ -1405,8 +1423,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
   // ── STEP 4: Review, promo, newsletter, price breakdown ──
   Widget _buildReviewStep({
-    required double displayUnitPrice,
-    required double displaySubtotal,
+    required double subtotal,
+    required double bookingFee,
     required double subscriberDiscountAmount,
     required double total,
   }) {
@@ -1505,10 +1523,11 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           ),
 
         _PriceBreakdown(
-          unitPrice: displayUnitPrice,
+          subtotal: subtotal,
           quantity: _quantity,
-          subtotal: displaySubtotal,
+          bookingFee: bookingFee,
           promoDiscount: _promoDiscountAmount,
+          promoCode: _appliedPromoCode,
           subscriberDiscount: subscriberDiscountAmount,
           total: total,
         ),
@@ -1584,13 +1603,11 @@ class _StepProgressBar extends StatelessWidget {
 
 class _TierOption extends StatelessWidget {
   final TicketTier tier;
-  final double feeAmount;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _TierOption({
     required this.tier,
-    this.feeAmount = 0,
     required this.isSelected,
     required this.onTap,
   });
@@ -1599,7 +1616,8 @@ class _TierOption extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = AppTheme.primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final price = tier.price + feeAmount;
+    // Base ticket price only — the booking fee is shown once in the summary.
+    final price = tier.price;
     final baseColor =
         isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white;
     final borderColor =
@@ -1760,7 +1778,7 @@ class _EventSummaryCard extends StatelessWidget {
                   icon: Icons.calendar_today,
                   text: DateFormat(
                     'MMM d, y • h:mm a',
-                  ).format(event.startDatetime),
+                  ).format(event.startLocal),
                 ),
               ],
             ),
@@ -1906,18 +1924,20 @@ class _QuantitySelector extends StatelessWidget {
 }
 
 class _PriceBreakdown extends StatelessWidget {
-  final double unitPrice;
-  final int quantity;
   final double subtotal;
+  final int quantity;
+  final double bookingFee;
   final double promoDiscount;
+  final String? promoCode;
   final double subscriberDiscount;
   final double total;
 
   const _PriceBreakdown({
-    required this.unitPrice,
-    required this.quantity,
     required this.subtotal,
+    required this.quantity,
+    required this.bookingFee,
     this.promoDiscount = 0,
+    this.promoCode,
     this.subscriberDiscount = 0,
     required this.total,
   });
@@ -1942,15 +1962,22 @@ class _PriceBreakdown extends StatelessWidget {
       child: Column(
         children: [
           _PriceRow(
-            label: 'Ticket Price',
-            value: '₱${unitPrice.toStringAsFixed(2)}',
+            label: 'Tickets (${quantity}x)',
+            value: '₱${subtotal.toStringAsFixed(2)}',
           ),
-          const SizedBox(height: 8),
-          _PriceRow(label: 'Quantity', value: '× $quantity'),
+          if (bookingFee > 0) ...[
+            const SizedBox(height: 8),
+            _PriceRow(
+              label: 'Booking Fee',
+              value: '+₱${bookingFee.toStringAsFixed(2)}',
+              info:
+                  'A small per-ticket fee that helps run the platform and cover secure payment processing.',
+            ),
+          ],
           if (subscriberDiscount > 0) ...[
             const SizedBox(height: 8),
             _PriceRow(
-              label: '👑 Member discount',
+              label: 'Subscriber discount',
               value: '-₱${subscriberDiscount.toStringAsFixed(2)}',
               color: Colors.green,
             ),
@@ -1958,7 +1985,7 @@ class _PriceBreakdown extends StatelessWidget {
           if (promoDiscount > 0) ...[
             const SizedBox(height: 8),
             _PriceRow(
-              label: 'Promo code',
+              label: promoCode != null ? 'Promo ($promoCode)' : 'Promo',
               value: '-₱${promoDiscount.toStringAsFixed(2)}',
               color: Colors.green,
             ),
@@ -2025,11 +2052,13 @@ class _PriceRow extends StatelessWidget {
   final String label;
   final String value;
   final Color? color;
+  final String? info;
 
   const _PriceRow({
     required this.label,
     required this.value,
     this.color,
+    this.info,
   });
 
   @override
@@ -2040,12 +2069,35 @@ class _PriceRow extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14.5,
-            color: color ?? labelColor,
-            fontWeight: FontWeight.w500,
+        Flexible(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    color: color ?? labelColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (info != null) ...[
+                const SizedBox(width: 5),
+                Tooltip(
+                  message: info!,
+                  triggerMode: TooltipTriggerMode.tap,
+                  showDuration: const Duration(seconds: 4),
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    Icons.info_outline,
+                    size: 15,
+                    color: isDark ? Colors.white38 : Colors.grey[500],
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         Text(

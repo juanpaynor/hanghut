@@ -6,6 +6,8 @@ import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/auth/screens/login_screen.dart';
 import 'package:bitemates/features/auth/screens/signup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/main.dart' show SessionHandler;
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -89,8 +91,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final success = await auth.signInWithGoogle();
       if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
         Navigator.of(context).pushReplacement(
-          _fadeRoute(const MainNavigationScreen(), duration: 600),
+          _fadeRoute(
+            session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
+            duration: 600,
+          ),
         );
       }
     } catch (e) {
@@ -111,8 +119,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     try {
       final success = await auth.signInWithApple();
       if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
         Navigator.of(context).pushReplacement(
-          _fadeRoute(const MainNavigationScreen(), duration: 600),
+          _fadeRoute(
+            session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
+            duration: 600,
+          ),
         );
       }
     } catch (e) {

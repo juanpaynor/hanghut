@@ -163,81 +163,365 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.groups;
         iconColor = Colors.green;
         break;
+      case 'group_admin_promoted':
+        // military_tech is already bundled elsewhere; avoids a tree-shake "?"
+        // glyph if this ever ships in a patch-only build.
+        iconData = Icons.military_tech;
+        iconColor = Colors.amber;
+        break;
       default:
         iconData = Icons.notifications;
         iconColor = AppTheme.accentColor;
     }
 
-    return Container(
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final ringColor = isDark ? const Color(0xFF1A1A1A) : Colors.white;
+    final titleColor =
+        theme.textTheme.bodyLarge?.color ??
+        (isDark ? Colors.white : Colors.black87);
+    final bodyColor = isDark ? Colors.grey[400] : Colors.grey[700];
+    final body = item['body']?.toString() ?? '';
+
+    final content = Material(
       color: isRead
           ? Colors.transparent
-          : AppTheme.accentColor.withOpacity(0.05),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Stack(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.grey[200],
-              backgroundImage: (photoUrl != null)
-                  ? CachedNetworkImageProvider(photoUrl)
-                  : null,
-              child: (photoUrl == null)
-                  ? const Icon(Icons.person, size: 20)
-                  : null,
-            ),
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                ),
-                child: Container(
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: iconColor,
-                  ),
-                  child: Icon(iconData, size: 8, color: Colors.white),
-                ),
-              ),
-            ),
-          ],
-        ),
-        title: RichText(
-          text: TextSpan(
-            style: TextStyle(color: Colors.black, fontSize: 13),
+          : AppTheme.accentColor.withValues(alpha: isDark ? 0.16 : 0.06),
+      child: InkWell(
+        onTap: () => _handleNotificationTap(item),
+        onLongPress: () => _showItemMenu(item),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              TextSpan(
-                text: item['title'] ?? 'New Notification',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: isDark
+                        ? Colors.grey[800]
+                        : Colors.grey[200],
+                    backgroundImage: (photoUrl != null)
+                        ? CachedNetworkImageProvider(photoUrl)
+                        : null,
+                    child: (photoUrl == null)
+                        ? Icon(
+                            Icons.person,
+                            size: 22,
+                            color: isDark ? Colors.grey[500] : Colors.grey[600],
+                          )
+                        : null,
+                  ),
+                  Positioned(
+                    right: -1,
+                    bottom: -1,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: ringColor,
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: iconColor,
+                        ),
+                        child: Icon(iconData, size: 9, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item['title'] ?? 'New Notification',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: titleColor,
+                        height: 1.25,
+                      ),
+                    ),
+                    if (body.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          body,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: bodyColor,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 5),
+                    Text(
+                      timeago.format(createdAt),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? Colors.grey[600] : Colors.grey[500],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _buildTrailing(item, isRead, isDark),
             ],
           ),
         ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (item['body'] != null && item['body'].toString().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 2, bottom: 4),
-                child: Text(
-                  item['body'],
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+      ),
+    );
+
+    final id = item['id']?.toString();
+    if (id == null) return content;
+
+    // Swipe left to delete, with an Undo snackbar (the DB delete is deferred
+    // until the snackbar closes, so Undo is instant and needs no re-insert).
+    return Dismissible(
+      key: ValueKey('notif_$id'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: Colors.red.shade600,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: const Icon(Icons.delete_outline, color: Colors.white, size: 24),
+      ),
+      onDismissed: (_) => _deleteNotification(item),
+      child: content,
+    );
+  }
+
+  /// Long-press menu for a single notification (discoverable alternative to
+  /// the swipe gesture).
+  void _showItemMenu(Map<String, dynamic> item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        final isRead = item['is_read'] == true;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            Text(
-              timeago.format(createdAt),
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              const SizedBox(height: 8),
+              if (!isRead)
+                ListTile(
+                  leading: const Icon(Icons.done_all),
+                  title: const Text('Mark as read'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _service.markAsRead(item['id']);
+                    setState(() => item['is_read'] = true);
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text(
+                  'Delete notification',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _deleteNotification(item);
+                },
+              ),
+              const SizedBox(height: 4),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Removes a notification optimistically and shows an Undo snackbar. The
+  /// actual DB delete is deferred until the snackbar closes without an undo.
+  Future<void> _deleteNotification(Map<String, dynamic> item) async {
+    final id = item['id']?.toString();
+    if (id == null) return;
+
+    final index = _notifications.indexOf(item);
+    if (index != -1) {
+      setState(() => _notifications.removeAt(index));
+    }
+
+    var undone = false;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    final controller = messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Notification deleted'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            undone = true;
+            if (mounted) {
+              setState(() {
+                final i = index == -1
+                    ? _notifications.length
+                    : index.clamp(0, _notifications.length);
+                _notifications.insert(i, item);
+              });
+            }
+          },
+        ),
+      ),
+    );
+
+    await controller.closed;
+    if (!undone) {
+      await _service.deleteNotification(id);
+    }
+  }
+
+  /// Right-side accessory: post thumbnail preview (like Instagram) when the
+  /// notification points at a post, otherwise an unread dot.
+  Widget _buildTrailing(Map<String, dynamic> item, bool isRead, bool isDark) {
+    final preview = item['preview_image_url']?.toString();
+    final dot = isRead
+        ? null
+        : Container(
+            width: 9,
+            height: 9,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppTheme.accentColor,
+            ),
+          );
+
+    if (preview != null && preview.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 10, top: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (dot != null)
+              Padding(padding: const EdgeInsets.only(right: 8), child: dot),
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                color: isDark ? Colors.grey[850] : Colors.grey[200],
+                image: DecorationImage(
+                  image: CachedNetworkImageProvider(preview),
+                  fit: BoxFit.cover,
+                ),
+              ),
             ),
           ],
         ),
-        onTap: () => _handleNotificationTap(item),
+      );
+    }
+
+    if (dot != null) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 8, top: 6),
+        child: dot,
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  /// Time bucket a notification falls into, for section headers.
+  String _bucketFor(DateTime d) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = today.difference(day).inDays;
+    if (diff <= 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    if (diff < 7) return 'This week';
+    return 'Earlier';
+  }
+
+  /// Flatten notifications into rows: section-header strings interleaved with
+  /// notification maps (list is already sorted newest-first).
+  List<dynamic> _buildRows() {
+    final rows = <dynamic>[];
+    String? bucket;
+    for (final n in _notifications) {
+      final b = _bucketFor(DateTime.parse(n['created_at']));
+      if (b != bucket) {
+        bucket = b;
+        rows.add(b);
+      }
+      rows.add(n);
+    }
+    return rows;
+  }
+
+  Widget _buildEmptyState(bool isDark) {
+    // ListView so pull-to-refresh still works when there's nothing yet.
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        SizedBox(height: MediaQuery.of(context).size.height * 0.15),
+        Icon(
+          Icons.notifications_none_rounded,
+          size: 52,
+          color: isDark ? Colors.grey[700] : Colors.grey[300],
+        ),
+        const SizedBox(height: 12),
+        Center(
+          child: Text(
+            "You're all caught up",
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Center(
+          child: Text(
+            'New activity will show up here',
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.grey[600] : Colors.grey[400],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String label) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: isDark ? Colors.grey[500] : Colors.grey[500],
+        ),
       ),
     );
   }
@@ -257,7 +541,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     try {
-      if (type == 'chat') {
+      if (type == 'chat' ||
+          // Chat mentions carry a chat_type → open the chat, not a post.
+          (type == 'mention' && metadata['chat_type'] != null)) {
         _navigateToChat(entityId, metadata);
       } else if (type == 'trip_match') {
         // Trip match: entity_id is the chat_id, metadata has channel_id
@@ -342,6 +628,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         'group_approved',
         'group_invite',
         'group_invite_suggestion',
+        'group_admin_promoted',
         'group_detail',
       ].contains(type)) {
         // Group membership — entity_id (or metadata.group_id) is the group id
@@ -490,6 +777,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     // Transparent Scaffold to allow background to show through (dimmed by ModalRoute)
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -503,14 +791,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
           // 2. The Anchored Bubble
           Positioned(
-            top: MediaQuery.of(context).padding.top + 60,
-            right: 16,
-            left: 16,
-            height: MediaQuery.of(context).size.height * 0.6,
+            top: MediaQuery.of(context).padding.top + 48,
+            right: 8,
+            left: 8,
+            height: MediaQuery.of(context).size.height * 0.78,
             child: Hero(
               tag: 'notification_bell',
               child: Material(
-                color: Colors.white,
+                color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
                 elevation: 8,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -526,19 +814,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         // Header
                         Container(
                           padding: const EdgeInsets.all(16),
-                          decoration: const BoxDecoration(
+                          decoration: BoxDecoration(
                             border: Border(
-                              bottom: BorderSide(color: Color(0xFFF1F5F9)),
+                              bottom: BorderSide(
+                                color: isDark
+                                    ? const Color(0xFF2A2A2A)
+                                    : const Color(0xFFF1F5F9),
+                              ),
                             ),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
-                                'Notifications',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                              Flexible(
+                                child: Text(
+                                  'Notifications',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: isDark
+                                        ? Colors.white
+                                        : Colors.black87,
+                                  ),
                                 ),
                               ),
                               Row(
@@ -589,40 +888,41 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           child: RefreshIndicator(
                             onRefresh: _handleRefresh,
                             child: _notifications.isEmpty && !_isLoading
-                                ? Center(
-                                    child: Text(
-                                      'No notifications',
-                                      style: TextStyle(color: Colors.grey[400]),
-                                    ),
-                                  )
-                                : ListView.separated(
-                                    controller: _scrollController,
-                                    padding: EdgeInsets.zero,
-                                    itemCount:
-                                        _notifications.length +
-                                        (_hasMore ? 1 : 0),
-                                    separatorBuilder: (_, __) => const Divider(
-                                      height: 1,
-                                      indent: 16,
-                                      endIndent: 16,
-                                    ),
-                                    itemBuilder: (context, index) {
-                                      if (index == _notifications.length) {
-                                        return const Padding(
-                                          padding: EdgeInsets.all(16.0),
-                                          child: Center(
-                                            child: SizedBox(
-                                              width: 20,
-                                              height: 20,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
+                                ? _buildEmptyState(isDark)
+                                : Builder(
+                                    builder: (context) {
+                                      final rows = _buildRows();
+                                      return ListView.builder(
+                                        controller: _scrollController,
+                                        padding: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        itemCount:
+                                            rows.length + (_hasMore ? 1 : 0),
+                                        itemBuilder: (context, index) {
+                                          if (index == rows.length) {
+                                            return const Padding(
+                                              padding: EdgeInsets.all(16.0),
+                                              child: Center(
+                                                child: SizedBox(
+                                                  width: 20,
+                                                  height: 20,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
+                                                ),
                                               ),
-                                            ),
-                                          ),
-                                        );
-                                      }
-                                      return _buildNotificationItem(
-                                        _notifications[index],
+                                            );
+                                          }
+                                          final row = rows[index];
+                                          if (row is String) {
+                                            return _buildSectionHeader(row);
+                                          }
+                                          return _buildNotificationItem(
+                                            row as Map<String, dynamic>,
+                                          );
+                                        },
                                       );
                                     },
                                   ),

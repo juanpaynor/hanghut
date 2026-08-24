@@ -6,10 +6,9 @@ import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/core/services/event_category_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
-import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
-import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
@@ -26,7 +25,7 @@ class _DiscoverTabState extends State<DiscoverTab>
     with AutomaticKeepAliveClientMixin {
   final TableService _tableService = TableService();
 
-  List<Map<String, dynamic>> _hangouts = [];
+  List<Map<String, dynamic>> _experiences = [];
   List<Event> _events = [];
   bool _isLoading = true;
   Position? _userPosition;
@@ -38,8 +37,7 @@ class _DiscoverTabState extends State<DiscoverTab>
   bool _hasMoreEvents = true;
 
   // Filters
-  String _sectionFilter = 'All'; // 'All' | 'Events' | 'Hangouts'
-  final Set<String> _vibeFilters = {};
+  String _sectionFilter = 'All'; // 'All' | 'Events' | 'Experiences'
 
   // Event date-range filter (applies to events only).
   DateTime? _rangeStart;
@@ -47,6 +45,8 @@ class _DiscoverTabState extends State<DiscoverTab>
 
   // Search + sort + category (events).
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  bool _searchExpanded = false;
   Timer? _searchDebounce;
   String _query = '';
   String _sort = 'soonest'; // soonest | price_low | nearest | popular
@@ -70,7 +70,7 @@ class _DiscoverTabState extends State<DiscoverTab>
 
   // Frosted sticky header — measured so content can pad below it.
   final GlobalKey _headerKey = GlobalKey();
-  double _headerHeight = 220;
+  double _headerHeight = 130;
 
   void _measureHeader() {
     final ctx = _headerKey.currentContext;
@@ -80,16 +80,6 @@ class _DiscoverTabState extends State<DiscoverTab>
       setState(() => _headerHeight = h);
     }
   }
-
-  static const List<Map<String, String>> _vibes = [
-    {'label': 'Chill 😌', 'key': 'chill'},
-    {'label': 'Foodie 🍜', 'key': 'food'},
-    {'label': 'Active 🏃', 'key': 'sports'},
-    {'label': 'Social 🗣️', 'key': 'social'},
-    {'label': 'Late Night 🌙', 'key': 'nightlife'},
-    {'label': 'Coffee ☕', 'key': 'coffee'},
-    {'label': 'Outdoors 🌿', 'key': 'outdoor'},
-  ];
 
   @override
   bool get wantKeepAlive => true;
@@ -112,6 +102,7 @@ class _DiscoverTabState extends State<DiscoverTab>
     _scrollController.dispose();
     _searchDebounce?.cancel();
     _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -128,6 +119,46 @@ class _DiscoverTabState extends State<DiscoverTab>
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (mounted) setState(() => _query = value);
     });
+  }
+
+  // Section visibility (drives both the default rails and the filtered results).
+  bool get _showEvents =>
+      _sectionFilter == 'All' || _sectionFilter == 'Events';
+  bool get _showExperiences =>
+      _sectionFilter == 'All' || _sectionFilter == 'Experiences';
+
+  void _toggleSearch() {
+    setState(() => _searchExpanded = !_searchExpanded);
+    if (_searchExpanded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocus.requestFocus();
+      });
+    } else {
+      _searchFocus.unfocus();
+      _searchDebounce?.cancel();
+      _searchController.clear();
+      setState(() => _query = '');
+    }
+  }
+
+  /// Experiences matching the current text query (title).
+  List<Map<String, dynamic>> get _searchExperiences {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return [];
+    return _experiences
+        .where((t) => (t['title'] ?? '').toString().toLowerCase().contains(q))
+        .toList();
+  }
+
+  void _openExperience(Map<String, dynamic> exp) {
+    // Opaque full route (not a bottom sheet) — a sheet strips the top safe-area
+    // padding, pushing the close/flag icons up under the status bar.
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            ExperienceDetailModal(experience: exp, matchData: const {}),
+      ),
+    );
   }
 
   // ── Filtered / sorted events ───────────────────────────────────────────────
@@ -201,27 +232,21 @@ class _DiscoverTabState extends State<DiscoverTab>
       if (mounted) setState(() => _userPosition = position);
     } catch (_) {}
 
-    await Future.wait([_loadHangouts(), _loadEvents()]);
+    await Future.wait([_loadEvents(), _loadExperiences()]);
 
     if (mounted) setState(() => _isLoading = false);
   }
 
-  Future<void> _loadHangouts() async {
+  Future<void> _loadExperiences() async {
     try {
-      final tables = await _tableService.getMapReadyTables(
+      final exps = await _tableService.getExperiences(
         userLat: _userPosition?.latitude,
         userLng: _userPosition?.longitude,
-        limit: 10,
+        limit: 20,
       );
-      final filtered = tables
-          .where(
-            (t) => t['visibility'] != 'mystery' && t['is_experience'] != true,
-          )
-          .toList();
-      final enriched = await _tableService.enrichTablesWithMembers(filtered);
-      if (mounted) setState(() => _hangouts = enriched);
+      if (mounted) setState(() => _experiences = exps);
     } catch (e) {
-      print('❌ DiscoverTab: error loading hangouts: $e');
+      print('❌ DiscoverTab: error loading experiences: $e');
     }
   }
 
@@ -411,14 +436,6 @@ class _DiscoverTabState extends State<DiscoverTab>
     return '${fmt.format(_rangeStart!)} – ${fmt.format(_rangeEnd!)}';
   }
 
-  List<Map<String, dynamic>> get _filteredHangouts {
-    if (_vibeFilters.isEmpty) return _hangouts;
-    return _hangouts.where((t) {
-      final type = (t['activity_type'] as String? ?? '').toLowerCase();
-      return _vibeFilters.any((v) => type.contains(v));
-    }).toList();
-  }
-
   Widget _buildEventsGrid() {
     final items = _visibleEvents;
     // Split into two columns, alternating tall/short for a staggered feel
@@ -472,52 +489,80 @@ class _DiscoverTabState extends State<DiscoverTab>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Section chips + date/sort pills (same scrollable row)
-        SizedBox(
-          height: 40,
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            scrollDirection: Axis.horizontal,
-            children: [
-              ...['All', 'Events', 'Hangouts'].map((s) {
-                final selected = _sectionFilter == s;
-                return GestureDetector(
-                  onTap: () => setState(() {
-                    _sectionFilter = s;
-                    if (s != 'Hangouts') _vibeFilters.clear();
-                  }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    decoration: _glassPill(active: selected),
-                    child: Center(
-                      child: Text(
-                        s,
-                        style: TextStyle(
-                          color: _glassText(selected),
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
+        // Section chips + date/sort pills (scrollable) with a pinned search icon.
+        Row(
+          children: [
+            Expanded(
+              // Fade the right edge so chips dissolve instead of being hard-cut
+              // by the search icon (also signals "scroll for more").
+              child: ShaderMask(
+                shaderCallback: (rect) => const LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [Colors.black, Colors.black, Colors.transparent],
+                  stops: [0.0, 0.88, 1.0],
+                ).createShader(rect),
+                blendMode: BlendMode.dstIn,
+                child: SizedBox(
+                  height: 40,
+                  child: ListView(
+                    padding: const EdgeInsets.only(left: 16, right: 20),
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                    ...['All', 'Events', 'Experiences'].map((s) {
+                      final selected = _sectionFilter == s;
+                      return GestureDetector(
+                        onTap: () => setState(() => _sectionFilter = s),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          decoration: _glassPill(active: selected),
+                          child: Center(
+                            child: Text(
+                              s,
+                              style: TextStyle(
+                                color: _glassText(selected),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-              // Date + sort live on this same row (events only)
-              if (_sectionFilter == 'All' || _sectionFilter == 'Events') ...[
-                _datePill(),
-                const SizedBox(width: 8),
-                _sortPill(),
-              ],
-            ],
-          ),
+                      );
+                    }),
+                    // Date + sort live on this same row (events only)
+                    if (_showEvents) ...[
+                      _datePill(),
+                      const SizedBox(width: 8),
+                      _sortPill(),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            ),
+            _searchIconButton(),
+            const SizedBox(width: 12),
+          ],
+        ),
+        // Inline search field — morphs open/closed under the section row.
+        AnimatedSize(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: _searchExpanded
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                  child: _buildInlineSearchField(),
+                )
+              : const SizedBox(width: double.infinity, height: 0),
         ),
         // Category chips
-        if (_sectionFilter == 'All' || _sectionFilter == 'Events') ...[
+        if (_showEvents) ...[
           const SizedBox(height: 8),
           SizedBox(
             height: 34,
@@ -528,68 +573,6 @@ class _DiscoverTabState extends State<DiscoverTab>
                 _categoryChip('All', null),
                 ..._categories.map((c) => _categoryChip(c.display, c.key)),
               ],
-            ),
-          ),
-        ],
-
-        // Vibe chips (Hangouts only)
-        if (_sectionFilter == 'Hangouts') ...[
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 36,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              scrollDirection: Axis.horizontal,
-              children: _vibes.map((v) {
-                final selected = _vibeFilters.contains(v['key']);
-                return GestureDetector(
-                  onTap: () => setState(() {
-                    if (selected) {
-                      _vibeFilters.remove(v['key']);
-                    } else {
-                      _vibeFilters.add(v['key']!);
-                    }
-                  }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? const Color(0xFF6C63FF).withValues(alpha: 0.20)
-                          : (Theme.of(context).brightness == Brightness.dark
-                              ? Colors.white.withValues(alpha: 0.10)
-                              : Colors.black.withValues(alpha: 0.04)),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: selected
-                            ? const Color(0xFF6C63FF)
-                            : (Theme.of(context).brightness == Brightness.dark
-                                ? Colors.white.withValues(alpha: 0.16)
-                                : Colors.black.withValues(alpha: 0.08)),
-                        width: selected ? 1.5 : 1,
-                      ),
-                    ),
-                    child: Text(
-                      v['label']!,
-                      style: TextStyle(
-                        color: selected
-                            ? const Color(0xFF8E88FF)
-                            : (Theme.of(context).brightness == Brightness.dark
-                                ? Colors.white
-                                : Colors.black87),
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
             ),
           ),
         ],
@@ -796,7 +779,6 @@ class _DiscoverTabState extends State<DiscoverTab>
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 10),
-              _buildSearchBar(),
               _buildFilterRow(),
               const SizedBox(height: 4),
             ],
@@ -808,16 +790,11 @@ class _DiscoverTabState extends State<DiscoverTab>
 
   // ── Default (curated) view ─────────────────────────────────────────────────
   List<Widget> _buildDefaultView() {
-    final showEvents =
-        _sectionFilter == 'All' || _sectionFilter == 'Events';
-    final showHangouts =
-        _sectionFilter == 'All' || _sectionFilter == 'Hangouts';
-
-    final hasContent = _events.isNotEmpty || _hangouts.isNotEmpty;
+    final hasContent = _events.isNotEmpty || _experiences.isNotEmpty;
     if (!hasContent) return [_buildGlobalEmpty()];
 
     return [
-      if (showEvents && _events.isNotEmpty) ...[
+      if (_showEvents && _events.isNotEmpty) ...[
         _buildEventRail('🔥 Trending', _trendingEvents),
         _buildEventRail('📅 This Weekend', _thisWeekendEvents),
         _buildEventRail('🎟️ Free', _freeEvents),
@@ -828,22 +805,51 @@ class _DiscoverTabState extends State<DiscoverTab>
         ),
         const SizedBox(height: 8),
       ],
-      if (showHangouts && _hangouts.isNotEmpty) ...[
-        _buildSectionHeader('Hangouts'),
-        _buildHangoutsGrid(),
+      if (_showExperiences && _experiences.isNotEmpty) ...[
+        _buildSectionHeader('✨ Experiences'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _buildExperiencesGrid(_experiences),
+        ),
         const SizedBox(height: 12),
       ],
+      // Section chosen but nothing to show for it.
+      if (_sectionFilter == 'Experiences' && _experiences.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 60),
+          child: _buildEmpty('No experiences available yet'),
+        ),
     ];
+  }
+
+  Widget _buildExperiencesGrid(List<Map<String, dynamic>> items) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        childAspectRatio: 0.72,
+      ),
+      itemCount: items.length,
+      itemBuilder: (_, i) => _ActivityTile(
+        item: items[i],
+        tall: false,
+        onTap: () => _openExperience(items[i]),
+      ),
+    );
   }
 
   // ── Filtered / search results ──────────────────────────────────────────────
   List<Widget> _buildFilteredView() {
-    final events = _visibleEvents;
-    // Hangouts join the results only when text-searching (category/date/sort
-    // controls are event-specific). Otherwise it's an events-only filter.
     final searching = _query.trim().isNotEmpty;
-    final hangouts = searching ? _searchHangouts : <Map<String, dynamic>>[];
-    final total = events.length + hangouts.length;
+    // Respect the active section chip. Experiences only join when
+    // text-searching (category/date/sort controls are event-specific).
+    final events = _showEvents ? _visibleEvents : <Event>[];
+    final experiences =
+        (_showExperiences && searching) ? _searchExperiences : <Map<String, dynamic>>[];
+    final total = events.length + experiences.length;
 
     if (total == 0) {
       return [
@@ -888,96 +894,14 @@ class _DiscoverTabState extends State<DiscoverTab>
           ),
         ),
       ],
-      if (searching && hangouts.isNotEmpty) ...[
-        _buildSectionHeader('Hangouts'),
+      if (experiences.isNotEmpty) ...[
+        _buildSectionHeader('Experiences'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              childAspectRatio: 0.85,
-            ),
-            itemCount: hangouts.length,
-            itemBuilder: (_, i) {
-              final table = hangouts[i];
-              return OpenHangoutCard(
-                table: table,
-                onTap: () {
-                  final id = table['id']?.toString();
-                  if (id != null && widget.onHangoutTap != null) {
-                    widget.onHangoutTap!(id);
-                  } else {
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) =>
-                          TableCompactModal(table: table, matchData: const {}),
-                    );
-                  }
-                },
-              );
-            },
-          ),
+          child: _buildExperiencesGrid(experiences),
         ),
       ],
     ];
-  }
-
-  /// Hangouts matching the current text query (title).
-  List<Map<String, dynamic>> get _searchHangouts {
-    final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return [];
-    return _hangouts
-        .where((t) => (t['title'] ?? '').toString().toLowerCase().contains(q))
-        .toList();
-  }
-
-  Widget _buildHangoutsGrid() {
-    if (_filteredHangouts.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: _buildEmpty('No hangouts match your vibe.'),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 0.85,
-        ),
-        itemCount: _filteredHangouts.length,
-        itemBuilder: (context, index) {
-          final table = _filteredHangouts[index];
-          return OpenHangoutCard(
-            table: table,
-            onTap: () {
-              final id = table['id']?.toString();
-              if (id != null && widget.onHangoutTap != null) {
-                widget.onHangoutTap!(id);
-              } else {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) =>
-                      TableCompactModal(table: table, matchData: const {}),
-                );
-              }
-            },
-          );
-        },
-      ),
-    );
   }
 
   // ── Curated event rail (horizontal) ────────────────────────────────────────
@@ -1032,58 +956,88 @@ class _DiscoverTabState extends State<DiscoverTab>
     return active ? Colors.white : (isDark ? Colors.white : Colors.black87);
   }
 
-  // ── Search bar ─────────────────────────────────────────────────────────────
-  Widget _buildSearchBar() {
+  // ── Search (top-right icon → inline expanding field) ────────────────────────
+  Widget _searchIconButton() {
+    final active = _searchExpanded || _query.trim().isNotEmpty;
+    return GestureDetector(
+      onTap: _toggleSearch,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: active
+              ? const Color(0xFF6C63FF)
+              : (Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white.withValues(alpha: 0.10)
+                  : Colors.black.withValues(alpha: 0.04)),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: active
+                ? const Color(0xFF6C63FF)
+                : (Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white.withValues(alpha: 0.16)
+                    : Colors.black.withValues(alpha: 0.08)),
+          ),
+        ),
+        child: Icon(
+          _searchExpanded ? Icons.close : Icons.search,
+          size: 20,
+          color: _glassText(active),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInlineSearchField() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: TextField(
-        controller: _searchController,
-        onChanged: _onSearchChanged,
-        textInputAction: TextInputAction.search,
-        style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        decoration: InputDecoration(
-          hintText: 'Search events, hangouts',
-          hintStyle: TextStyle(
-            color: isDark ? Colors.white54 : Colors.grey[500],
+    return TextField(
+      controller: _searchController,
+      focusNode: _searchFocus,
+      onChanged: _onSearchChanged,
+      textInputAction: TextInputAction.search,
+      style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+      decoration: InputDecoration(
+        hintText: 'Search events, experiences',
+        hintStyle: TextStyle(
+          color: isDark ? Colors.white54 : Colors.grey[500],
+        ),
+        prefixIcon: Icon(
+          Icons.search,
+          color: isDark ? Colors.white60 : Colors.grey[600],
+        ),
+        suffixIcon: _query.isNotEmpty
+            ? IconButton(
+                icon: Icon(
+                  Icons.clear,
+                  color: isDark ? Colors.white60 : Colors.grey[600],
+                ),
+                onPressed: () {
+                  _searchDebounce?.cancel();
+                  _searchController.clear();
+                  setState(() => _query = '');
+                },
+              )
+            : null,
+        filled: true,
+        fillColor: isDark
+            ? Colors.white.withValues(alpha: 0.10)
+            : Colors.black.withValues(alpha: 0.04),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.16)
+                : Colors.black.withValues(alpha: 0.08),
           ),
-          prefixIcon: Icon(
-            Icons.search,
-            color: isDark ? Colors.white60 : Colors.grey[600],
-          ),
-          suffixIcon: _query.isNotEmpty
-              ? IconButton(
-                  icon: Icon(
-                    Icons.clear,
-                    color: isDark ? Colors.white60 : Colors.grey[600],
-                  ),
-                  onPressed: () {
-                    _searchDebounce?.cancel();
-                    _searchController.clear();
-                    setState(() => _query = '');
-                  },
-                )
-              : null,
-          filled: true,
-          fillColor: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.04),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.16)
-                  : Colors.black.withValues(alpha: 0.08),
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.16)
-                  : Colors.black.withValues(alpha: 0.08),
-            ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.16)
+                : Colors.black.withValues(alpha: 0.08),
           ),
         ),
       ),
@@ -1330,6 +1284,39 @@ class _ActivityTileState extends State<_ActivityTile> {
                 ),
               ),
 
+              // Price pill (events only — experiences/hangouts have no ticket price)
+              if (widget.item is Event)
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: Builder(
+                    builder: (_) {
+                      final event = widget.item as Event;
+                      final isFree = event.displayFromPrice <= 0;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isFree
+                              ? const Color(0xFF22A06B)
+                              : Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          isFree ? 'FREE' : event.priceLabel(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
               // Badge + Title
               Positioned(
                 bottom: 10,
@@ -1409,8 +1396,8 @@ class _EventRailCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startDatetime);
-    final isFree = event.ticketPrice <= 0;
+    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
+    final isFree = event.displayFromPrice <= 0;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return GestureDetector(
@@ -1464,7 +1451,7 @@ class _EventRailCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        isFree ? 'FREE' : '₱${event.ticketPrice.toStringAsFixed(0)}',
+                        isFree ? 'FREE' : event.priceLabel(),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,

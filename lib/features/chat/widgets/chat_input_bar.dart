@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ChatInputBar extends StatefulWidget {
   final TextEditingController controller;
@@ -215,6 +216,47 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           ),
                         ),
                         const SizedBox(width: 12),
+                        // Thumbnail when replying to an image/gif (image & gif
+                        // messages store their URL in `content`).
+                        Builder(
+                          builder: (context) {
+                            final type = widget.replyingTo!['contentType'];
+                            final url = widget.replyingTo!['content']?.toString();
+                            final isMedia = (type == 'image' || type == 'gif');
+                            if (!isMedia ||
+                                url == null ||
+                                !url.startsWith('http')) {
+                              return const SizedBox.shrink();
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 10),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: CachedNetworkImage(
+                                  imageUrl: url,
+                                  width: 36,
+                                  height: 36,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => Container(
+                                    width: 36,
+                                    height: 36,
+                                    color: isDark
+                                        ? Colors.grey[800]
+                                        : Colors.grey[200],
+                                  ),
+                                  errorWidget: (_, __, ___) => Container(
+                                    width: 36,
+                                    height: 36,
+                                    color: isDark
+                                        ? Colors.grey[800]
+                                        : Colors.grey[200],
+                                    child: const Icon(Icons.image, size: 18),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -353,6 +395,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
                             ),
                           ),
                           textCapitalization: TextCapitalization.sentences,
+                          autocorrect: true,
+                          enableSuggestions: true,
+                          // Native spell check with the red misspelling underline.
+                          spellCheckConfiguration: SpellCheckConfiguration(
+                            misspelledTextStyle:
+                                TextField.materialMisspelledTextStyle,
+                          ),
                           minLines: 1,
                           maxLines: 6,
                           keyboardType: TextInputType.multiline,

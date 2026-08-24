@@ -209,7 +209,7 @@ class _EventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startDatetime);
+    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
 
     return GestureDetector(
       onTap: () {
@@ -376,7 +376,7 @@ class _EventCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (event.ticketPrice > 0)
+                      if (event.displayFromPrice > 0)
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 3),
@@ -385,7 +385,7 @@ class _EventCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            '₱${event.ticketPrice.toStringAsFixed(0)}',
+                            event.priceLabel(),
                             style: GoogleFonts.inter(
                               color: Colors.white,
                               fontSize: 12,

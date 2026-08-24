@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:ui';
-import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:shimmer/shimmer.dart';
 
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
-import 'package:bitemates/features/home/widgets/create_post_modal.dart';
-import 'package:bitemates/features/home/widgets/friends_moments_tray.dart';
+import 'package:bitemates/features/home/widgets/spotlight_stories_tray.dart';
+import 'package:bitemates/features/home/widgets/zoom_from_rect_route.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
@@ -22,6 +21,8 @@ import 'package:bitemates/features/notifications/screens/notifications_screen.da
 import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
 
 import 'package:bitemates/features/search/screens/discover_search_screen.dart';
+import 'package:provider/provider.dart';
+import 'package:bitemates/providers/theme_provider.dart';
 
 class FeedScreen extends StatefulWidget {
   final Function(String)? onJoinTable;
@@ -80,8 +81,14 @@ class FeedScreenState extends State<FeedScreen>
   ];
 
   Position? _userPosition;
-  String? _currentUserAvatarUrl;
   final List<StreamSubscription> _ablySubscriptions = [];
+
+  // Realtime posts that arrived while the user was scrolled down. Mutating the
+  // visible list mid-scroll shifts the viewport (feed "snaps" up/down), so we
+  // buffer inserts/deletes here and flush them when the user is back at the top
+  // or refreshes — where a list change can't disturb what they're reading.
+  final List<Map<String, dynamic>> _pendingInserts = [];
+  final Set<String> _pendingDeletes = {};
 
   Timer? _scrollDebounce;
   String? _errorMessage;
@@ -114,7 +121,6 @@ class FeedScreenState extends State<FeedScreen>
     _tabController.addListener(_onTabChanged);
     _scrollController.addListener(_onScroll);
     _getUserLocation();
-    _fetchCurrentUserAvatar();
 
     // Start listening for notifications (Realtime Red Dot)
     NotificationService().subscribeToNotifications();
@@ -164,26 +170,28 @@ class FeedScreenState extends State<FeedScreen>
     }
   }
 
-  Future<void> _fetchCurrentUserAvatar() async {
-    try {
-      final userId = SupabaseConfig.client.auth.currentUser?.id;
-      if (userId == null) return;
+  // Essentially at the top of the feed — safe to apply realtime list changes
+  // because prepending/removing there doesn't move what the user is reading.
+  bool get _isNearTop =>
+      !_scrollController.hasClients ||
+      _scrollController.position.pixels <= 50;
 
-      final data = await SupabaseConfig.client
-          .from('user_photos')
-          .select('photo_url')
-          .eq('user_id', userId)
-          .eq('is_primary', true)
-          .maybeSingle();
-
-      if (mounted && data != null && data['photo_url'] != null) {
-        setState(() {
-          _currentUserAvatarUrl = data['photo_url'];
-        });
+  /// Apply any realtime posts/deletions that were buffered while the user was
+  /// scrolled down. Called once they return to the top.
+  void _flushPendingRealtime() {
+    if (_pendingInserts.isEmpty && _pendingDeletes.isEmpty) return;
+    setState(() {
+      if (_pendingDeletes.isNotEmpty) {
+        _socialPosts.removeWhere((p) => _pendingDeletes.contains(p['id']));
       }
-    } catch (e) {
-      print('❌ Error fetching current user avatar: $e');
-    }
+      // reversed → newest (last buffered) ends up on top after the prepend.
+      final toAdd = _pendingInserts.reversed
+          .where((post) => !_socialPosts.any((p) => p['id'] == post['id']))
+          .toList();
+      if (toAdd.isNotEmpty) _socialPosts.insertAll(0, toAdd);
+      _pendingInserts.clear();
+      _pendingDeletes.clear();
+    });
   }
 
   void _onScroll() {
@@ -192,6 +200,12 @@ class FeedScreenState extends State<FeedScreen>
 
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
+
+    // Back at the top → drain any buffered realtime updates.
+    if (currentScroll <= 10 &&
+        (_pendingInserts.isNotEmpty || _pendingDeletes.isNotEmpty)) {
+      _flushPendingRealtime();
+    }
 
     // Trigger when 70% down (earlier pre-fetching) or 500px from bottom trying to be smoother
     if (currentScroll >= maxScroll * 0.7) {
@@ -219,20 +233,34 @@ class FeedScreenState extends State<FeedScreen>
 
         if (message.name == 'post_created') {
           final postData = message.data as Map<String, dynamic>;
-          // Avoid duplicates
-          if (_socialPosts.any((p) => p['id'] == postData['id'])) return;
+          final id = postData['id'];
+          // Avoid duplicates (already visible or already buffered)
+          if (_socialPosts.any((p) => p['id'] == id)) return;
+          if (_pendingInserts.any((p) => p['id'] == id)) return;
 
-          setState(() {
-            _socialPosts.insert(0, postData);
-            _lastFetchTime = null; // ✅ Invalidate cache on new post
-          });
+          _lastFetchTime = null; // ✅ Invalidate cache on new post
+          if (_isNearTop) {
+            // At the top — show it immediately; no scroll disturbance.
+            setState(() => _socialPosts.insert(0, postData));
+          } else {
+            // Scrolled down — buffer it so the list doesn't shift under the
+            // user. Flushed when they scroll back to the top.
+            _pendingInserts.add(postData);
+          }
         } else if (message.name == 'post_deleted') {
           final data = message.data as Map<String, dynamic>;
           final postId = data['post_id'];
-          setState(() {
-            _socialPosts.removeWhere((post) => post['id'] == postId);
-            _lastFetchTime = null; // ✅ Invalidate cache on deletion
-          });
+          _lastFetchTime = null; // ✅ Invalidate cache on deletion
+          _pendingInserts.removeWhere((p) => p['id'] == postId);
+          if (_isNearTop) {
+            setState(
+              () => _socialPosts.removeWhere((post) => post['id'] == postId),
+            );
+          } else {
+            // Defer removal — removing an off-screen post above the viewport
+            // would yank the feed upward mid-scroll.
+            if (postId != null) _pendingDeletes.add(postId);
+          }
           // Also refresh the friends stories tray since deleted post might be a story
           _loadFriendsStories();
         }
@@ -318,6 +346,9 @@ class FeedScreenState extends State<FeedScreen>
           _nextCursor = result['nextCursor'] as String?;
           _nextCursorId = result['nextCursorId'] as String?;
           _lastFetchTime = DateTime.now(); // ✅ Set cache timestamp
+          // Fresh list supersedes any buffered realtime updates.
+          _pendingInserts.clear();
+          _pendingDeletes.clear();
         });
       }
     } catch (e) {
@@ -371,49 +402,6 @@ class FeedScreenState extends State<FeedScreen>
     } catch (e) {
       print('❌ Error loading more posts: $e');
       if (mounted) setState(() => _isLoadingMore = false);
-    }
-  }
-
-  void _showCreatePost() async {
-    final result = await Navigator.of(context).push<Map<String, dynamic>?>(
-      PageRouteBuilder(
-        opaque: false,
-        barrierDismissible: true,
-        barrierColor: Colors.black54,
-        transitionDuration: const Duration(milliseconds: 500),
-        reverseTransitionDuration: const Duration(milliseconds: 400),
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return const CreatePostModal();
-        },
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          // Buttery smooth liquid morph effect
-          final scaleCurve = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutQuint,
-            reverseCurve: Curves.easeInQuint,
-          );
-
-          final fadeCurve = CurvedAnimation(
-            parent: animation,
-            curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
-            reverseCurve: Curves.easeIn,
-          );
-
-          return ScaleTransition(
-            scale: Tween<double>(begin: 0.8, end: 1.0).animate(scaleCurve),
-            child: FadeTransition(opacity: fadeCurve, child: child),
-          );
-        },
-      ),
-    );
-
-    // Optimistic update: Add post immediately to UI
-    if (result != null && mounted) {
-      setState(() {
-        _socialPosts.insert(0, result);
-      });
-      // Refresh to get the actual post with all data from server
-      _loadSocialPosts();
     }
   }
 
@@ -684,7 +672,11 @@ class FeedScreenState extends State<FeedScreen>
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       // FAB Removed: Handled by MainNavigationScreen
-      body: _isLoading
+      // Only show the skeleton on the FIRST load (no posts yet). Once we have
+      // posts, a background refetch must NOT swap the whole body — doing so
+      // rebuilds the CustomScrollView, detaches _scrollController and snaps the
+      // feed to the top (looked like a "reload" when returning from an image).
+      body: _isLoading && _socialPosts.isEmpty
           ? _buildSkeletonLoader()
           : _isOffline && _socialPosts.isEmpty
           ? Center(
@@ -757,10 +749,14 @@ class FeedScreenState extends State<FeedScreen>
                 ]);
               },
               color: Theme.of(context).primaryColor,
-              backgroundColor: Colors.white,
+              backgroundColor: Theme.of(context).cardColor,
               child: CustomScrollView(
                 controller: _scrollController,
                 physics: const AlwaysScrollableScrollPhysics(),
+                // Keep ~a screen of off-screen cards built on each side (default
+                // is 250px). Stops cards being destroyed+recreated on small
+                // scroll-backs, which was re-fetching data and reloading images.
+                cacheExtent: 800,
                 slivers: [
                   // 1. App Bar
                   SliverAppBar(
@@ -777,8 +773,12 @@ class FeedScreenState extends State<FeedScreen>
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                               colors: [
-                                Colors.white.withOpacity(0.82),
-                                Colors.white.withOpacity(0.70),
+                                Theme.of(context)
+                                    .scaffoldBackgroundColor
+                                    .withOpacity(0.82),
+                                Theme.of(context)
+                                    .scaffoldBackgroundColor
+                                    .withOpacity(0.70),
                               ],
                             ),
                           ),
@@ -786,12 +786,13 @@ class FeedScreenState extends State<FeedScreen>
                       ),
                     ),
                     centerTitle: false,
+                    titleSpacing: 0,
                     title: Padding(
-                      padding: const EdgeInsets.only(left: 8.0),
+                      padding: const EdgeInsets.only(left: 16.0),
                       child: Row(
                         children: [
                           Text(
-                            'HangHut',
+                            'Feed',
                             style: TextStyle(
                               color: Theme.of(context).primaryColor,
                               fontSize: 26,
@@ -802,15 +803,52 @@ class FeedScreenState extends State<FeedScreen>
                         ],
                       ),
                     ),
-                    actionsPadding: const EdgeInsets.only(right: 9),
+                    actionsPadding: const EdgeInsets.only(right: 28),
                     actions: [
+                      // Dark mode toggle
+                      Consumer<ThemeProvider>(
+                        builder: (context, themeProvider, _) {
+                          final isDark = themeProvider.isDarkMode;
+                          return Material(
+                            color: isDark
+                                ? Colors.white.withOpacity(0.12)
+                                : const Color(0xFFF1F5F9),
+                            shape: const CircleBorder(),
+                            clipBehavior: Clip.antiAlias,
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 36,
+                                height: 36,
+                              ),
+                              tooltip: isDark
+                                  ? 'Switch to light mode'
+                                  : 'Switch to dark mode',
+                              icon: Icon(
+                                // Non-rounded variants are already bundled in
+                                // the release, so these stay safe even in a
+                                // patch-only build (no tree-shake "?" glyphs).
+                                isDark ? Icons.light_mode : Icons.dark_mode,
+                                color: isDark ? Colors.white70 : Colors.black87,
+                                size: 18,
+                              ),
+                              onPressed: () =>
+                                  themeProvider.toggleTheme(!isDark),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(width: 6),
                       // Filter icon button
                       Stack(
                         children: [
                           Material(
                             color: _hasActiveFilters
                                 ? Theme.of(context).primaryColor
-                                : const Color(0xFFF1F5F9),
+                                : (Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Colors.white.withOpacity(0.12)
+                                      : const Color(0xFFF1F5F9)),
                             shape: const CircleBorder(),
                             clipBehavior: Clip.antiAlias,
                             child: IconButton(
@@ -823,7 +861,10 @@ class FeedScreenState extends State<FeedScreen>
                                 Icons.tune_rounded,
                                 color: _hasActiveFilters
                                     ? Colors.white
-                                    : Colors.black87,
+                                    : (Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? Colors.white70
+                                          : Colors.black87),
                                 size: 18,
                               ),
                               onPressed: _showFilterSheet,
@@ -834,7 +875,9 @@ class FeedScreenState extends State<FeedScreen>
                       const SizedBox(width: 6),
                       // Search Icon
                       Material(
-                        color: const Color(0xFFF1F5F9),
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white.withOpacity(0.12)
+                            : const Color(0xFFF1F5F9),
                         shape: const CircleBorder(),
                         clipBehavior: Clip.antiAlias,
                         child: IconButton(
@@ -843,9 +886,11 @@ class FeedScreenState extends State<FeedScreen>
                             width: 36,
                             height: 36,
                           ),
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.search,
-                            color: Colors.black87,
+                            color: Theme.of(context).brightness == Brightness.dark
+                                ? Colors.white70
+                                : Colors.black87,
                             size: 19,
                           ),
                           onPressed: () {
@@ -870,7 +915,11 @@ class FeedScreenState extends State<FeedScreen>
                               Hero(
                                 tag: 'notification_bell',
                                 child: Material(
-                                  color: const Color(0xFFF1F5F9),
+                                  color:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Colors.white.withOpacity(0.12)
+                                      : const Color(0xFFF1F5F9),
                                   shape: const CircleBorder(),
                                   clipBehavior: Clip.antiAlias,
                                   child: IconButton(
@@ -879,9 +928,13 @@ class FeedScreenState extends State<FeedScreen>
                                       width: 36,
                                       height: 36,
                                     ),
-                                    icon: const Icon(
+                                    icon: Icon(
                                       Icons.notifications_outlined,
-                                      color: Colors.black87,
+                                      color:
+                                          Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? Colors.white70
+                                          : Colors.black87,
                                       size: 19,
                                     ),
                                     onPressed: () {
@@ -922,7 +975,9 @@ class FeedScreenState extends State<FeedScreen>
                                       color: Colors.red,
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
-                                        color: Colors.white,
+                                        color: Theme.of(
+                                          context,
+                                        ).scaffoldBackgroundColor,
                                         width: 1.5,
                                       ),
                                     ),
@@ -965,7 +1020,7 @@ class FeedScreenState extends State<FeedScreen>
                   // ═══════════════════════════════════════════
                   if (_friendsStories.isNotEmpty || _isLoadingStories)
                     SliverToBoxAdapter(
-                      child: FriendsMomentsTray(
+                      child: SpotlightStoriesTray(
                         stories: _friendsStories,
                         isLoading: _isLoadingStories,
                         hasMore: _hasMoreStories,
@@ -982,13 +1037,14 @@ class FeedScreenState extends State<FeedScreen>
                             _loadFriendsStories(offset: _friendsStories.length);
                           }
                         },
-                        onStoryTap: (story) async {
+                        onStoryTap: (story, originRect) async {
                           final authorId = story['author_id']?.toString();
                           final storyIndex = _friendsStories.indexOf(story);
                           await Navigator.push(
                             context,
-                            MaterialPageRoute(
-                              builder: (context) => LocationStoryViewerScreen(
+                            ZoomFromRectRoute(
+                              originRect: originRect,
+                              page: LocationStoryViewerScreen(
                                 initialStory: story,
                                 clusterId:
                                     authorId ??
@@ -1085,9 +1141,6 @@ class FeedScreenState extends State<FeedScreen>
                       ),
                     ),
 
-                  // 6. Thread Creation Bar
-                  _buildThreadCreationBar(),
-
                   // 6. Threads Feed
                   if (postsToShow.isEmpty && !_isLoading)
                     SliverFillRemaining(
@@ -1117,6 +1170,18 @@ class FeedScreenState extends State<FeedScreen>
                   else
                     SliverList(
                       delegate: SliverChildBuilderDelegate(
+                        // Map a card's ValueKey back to its current index so that
+                        // inserting a realtime post at index 0 (or any list
+                        // mutation) reuses existing card elements instead of
+                        // rebuilding them shifted — keeps scroll position stable.
+                        findChildIndexCallback: (Key key) {
+                          if (key is! ValueKey) return null;
+                          final id = (key).value;
+                          final index = postsToShow.indexWhere(
+                            (p) => p['id'] == id,
+                          );
+                          return index >= 0 ? index : null;
+                        },
                         (context, index) {
                           // Check if we are at the bottom and loading more
                           if (index == postsToShow.length) {
@@ -1287,84 +1352,14 @@ class FeedScreenState extends State<FeedScreen>
         _hasMore = true;
         _errorMessage = null;
         _lastFetchTime = null; // Force refresh
+        _pendingInserts.clear();
+        _pendingDeletes.clear();
       });
       _loadSocialPosts();
       _loadFriendsStories(); // Reload stories for the new tab
     } else {
       if (mounted) setState(() {});
     }
-  }
-
-  Widget _buildThreadCreationBar() {
-    return SliverToBoxAdapter(
-      child: GestureDetector(
-        onTap: _showCreatePost,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: (Theme.of(context).cardTheme.color ?? Colors.white)
-                      .withOpacity(0.85),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.white.withOpacity(0.3)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: Colors.grey[200],
-                      backgroundImage: _currentUserAvatarUrl != null
-                          ? NetworkImage(_currentUserAvatarUrl!)
-                          : (SupabaseConfig
-                                        .client
-                                        .auth
-                                        .currentUser
-                                        ?.userMetadata?['avatar_url'] !=
-                                    null
-                                ? NetworkImage(
-                                    SupabaseConfig
-                                        .client
-                                        .auth
-                                        .currentUser!
-                                        .userMetadata!['avatar_url'],
-                                  )
-                                : null),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Start a thread...',
-                      style: TextStyle(color: Colors.grey[500], fontSize: 15),
-                    ),
-                    const Spacer(),
-                    Icon(
-                      Icons.image_outlined,
-                      color: Colors.grey[400],
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
-            ), // BackdropFilter
-          ), // ClipRRect
-        ), // Padding
-      ),
-    );
   }
 
   Widget _activeChip(String label, {required VoidCallback onRemove}) {

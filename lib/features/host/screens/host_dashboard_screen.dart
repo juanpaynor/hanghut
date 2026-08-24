@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/host/screens/create_experience_screen.dart';
+import 'package:bitemates/features/host/screens/create_event_screen.dart';
+import 'package:bitemates/features/host/screens/host_event_detail_screen.dart';
+import 'package:bitemates/features/host/widgets/create_event_recommendation_sheet.dart';
 import 'package:bitemates/features/host/screens/host_schedule_manifest_screen.dart';
 import 'package:bitemates/features/host/screens/host_booking_detail_screen.dart';
 import 'package:bitemates/features/host/screens/bank_accounts_screen.dart';
@@ -25,6 +29,7 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
   int _selectedTab = 0;
   final GlobalKey<_BookingsTabState> _bookingsTabKey =
       GlobalKey<_BookingsTabState>();
+  final GlobalKey<_EventsTabState> _eventsTabKey = GlobalKey<_EventsTabState>();
 
   late final String _partnerId;
 
@@ -95,6 +100,11 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
             hostService: _hostService,
             onRefresh: () => setState(() {}),
           ),
+          _EventsTab(
+            key: _eventsTabKey,
+            partnerId: _partnerId,
+            hostService: _hostService,
+          ),
           _SchedulesTab(partnerId: _partnerId, hostService: _hostService),
           _BookingsTab(
             key: _bookingsTabKey,
@@ -124,12 +134,33 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
               icon: const Icon(Icons.add),
               label: const Text('New Experience'),
             )
-          : null,
+          : _selectedTab == 1
+              ? FloatingActionButton.extended(
+                  heroTag: null,
+                  onPressed: () async {
+                    final proceed =
+                        await showCreateEventRecommendationSheet(context);
+                    if (proceed != true || !context.mounted) return;
+                    final created = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            CreateEventScreen(partnerId: _partnerId),
+                      ),
+                    );
+                    if (created == true) {
+                      _eventsTabKey.currentState?._fetchEvents();
+                    }
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('New Event'),
+                )
+              : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTab,
         onDestinationSelected: (i) {
           setState(() => _selectedTab = i);
-          if (i == 2) {
+          if (i == 3) {
             _bookingsTabKey.currentState?._fetchBookings();
           }
         },
@@ -138,6 +169,11 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
             icon: Icon(Icons.explore_outlined),
             selectedIcon: Icon(Icons.explore),
             label: 'Experiences',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.confirmation_number_outlined),
+            selectedIcon: Icon(Icons.confirmation_number),
+            label: 'Events',
           ),
           NavigationDestination(
             icon: Icon(Icons.calendar_today_outlined),
@@ -447,6 +483,438 @@ class _ExperienceCardState extends State<_ExperienceCard> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Tab 2: Events ────────────────────────────────────────────────────────────
+
+class _EventsTab extends StatefulWidget {
+  final String partnerId;
+  final HostService hostService;
+
+  const _EventsTab({
+    super.key,
+    required this.partnerId,
+    required this.hostService,
+  });
+
+  @override
+  State<_EventsTab> createState() => _EventsTabState();
+}
+
+class _EventsTabState extends State<_EventsTab> {
+  final _searchController = TextEditingController();
+  Timer? _debounce;
+  String _query = '';
+  List<Map<String, dynamic>>? _events;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchEvents();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchEvents() async {
+    if (mounted) setState(() => _loading = true);
+    try {
+      final events = await widget.hostService.getMyEvents(widget.partnerId);
+      if (mounted) {
+        setState(() {
+          _events = events;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  // Debounced so the list only re-filters 300ms after typing stops.
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => _query = value.trim().toLowerCase());
+    });
+  }
+
+  void _clearSearch() {
+    _debounce?.cancel();
+    _searchController.clear();
+    setState(() => _query = '');
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    final all = _events ?? const [];
+    if (_query.isEmpty) return all;
+    return all.where((e) {
+      final title = (e['title'] ?? '').toString().toLowerCase();
+      final venue = (e['venue_name'] ?? '').toString().toLowerCase();
+      return title.contains(_query) || venue.contains(_query);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading && _events == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final all = _events ?? const [];
+
+    if (all.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _fetchEvents,
+        child: ListView(
+          children: [
+            const SizedBox(height: 120),
+            Icon(Icons.confirmation_number_outlined,
+                size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Center(
+              child: Text('No events yet',
+                  style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[500])),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text('Tap + to create a ticketed event',
+                  style: GoogleFonts.inter(color: Colors.grey[400])),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final filtered = _filtered;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: TextField(
+            controller: _searchController,
+            onChanged: _onSearchChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search events',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: _clearSearch,
+                    ),
+              isDense: true,
+              filled: true,
+              fillColor: Colors.grey[100],
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _fetchEvents,
+            child: filtered.isEmpty
+                ? ListView(
+                    children: [
+                      const SizedBox(height: 100),
+                      Icon(Icons.search_off,
+                          size: 56, color: Colors.grey[300]),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: Text('No events match "$_query"',
+                            style: GoogleFonts.inter(
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey[500])),
+                      ),
+                    ],
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, i) => _EventCard(
+                      event: filtered[i],
+                      hostService: widget.hostService,
+                      onChanged: _fetchEvents,
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EventCard extends StatefulWidget {
+  final Map<String, dynamic> event;
+  final HostService hostService;
+  final VoidCallback onChanged;
+
+  const _EventCard({
+    required this.event,
+    required this.hostService,
+    required this.onChanged,
+  });
+
+  @override
+  State<_EventCard> createState() => _EventCardState();
+}
+
+class _EventCardState extends State<_EventCard> {
+  bool _busy = false;
+
+  bool get _isLive => widget.event['status'] == 'active';
+  bool get _isDraft => widget.event['status'] == 'draft';
+
+  (String, Color) get _statusChip {
+    switch (widget.event['status']) {
+      case 'active':
+        return ('Live', Colors.green);
+      case 'draft':
+        return ('Draft', Colors.grey);
+      case 'sold_out':
+        return ('Sold out', Colors.blue);
+      case 'cancelled':
+        return ('Cancelled', Colors.red);
+      case 'completed':
+        return ('Completed', Colors.grey);
+      case 'paused':
+        return ('Paused', Colors.orange);
+      default:
+        return ('${widget.event['status'] ?? 'Draft'}', Colors.grey);
+    }
+  }
+
+  Future<void> _openDetail() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HostEventDetailScreen(event: widget.event),
+      ),
+    );
+    if (changed == true) widget.onChanged();
+  }
+
+  Future<void> _openEditor() async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreateEventScreen(
+          partnerId: widget.event['organizer_id'] as String,
+          existingEvent: widget.event,
+        ),
+      ),
+    );
+    if (saved == true) widget.onChanged();
+  }
+
+  Future<void> _togglePublish() async {
+    setState(() => _busy = true);
+    try {
+      await widget.hostService.setEventPublished(
+        eventId: widget.event['id'] as String,
+        publish: _isDraft,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(_isDraft ? 'Event published' : 'Event unpublished'),
+          backgroundColor: Colors.green,
+        ));
+        widget.onChanged();
+      }
+    } catch (e) {
+      if (mounted) {
+        ErrorHandler.showError(context,
+            error: e,
+            fallbackMessage:
+                'Unable to change publish state. Events with sales can\'t be unpublished — use cancel instead.');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final e = widget.event;
+    final cover = e['cover_image_url'] as String?;
+    final start = DateTime.tryParse(e['start_datetime'] ?? '')?.toLocal();
+    final capacity = (e['capacity'] as num?)?.toInt() ?? 0;
+    final sold = (e['tickets_sold'] as num?)?.toInt() ?? 0;
+    final tiers = (e['ticket_tiers'] as List?) ?? [];
+    final (chipLabel, chipColor) = _statusChip;
+
+    return Opacity(
+      opacity: _busy ? 0.5 : 1.0,
+      child: GestureDetector(
+        onTap: _busy ? null : _openDetail,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: (cover != null && cover.isNotEmpty)
+                      ? Image.network(cover, fit: BoxFit.cover)
+                      : Container(
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.image_outlined,
+                              size: 40, color: Colors.grey)),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(e['title'] ?? '',
+                              style: GoogleFonts.inter(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 16,
+                                  color: Colors.black87)),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: chipColor.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(chipLabel,
+                              style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: chipColor)),
+                        ),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert,
+                              size: 20, color: Colors.grey),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onSelected: (v) {
+                            if (v == 'edit') _openEditor();
+                            if (v == 'publish') _togglePublish();
+                          },
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Row(children: [
+                                Icon(Icons.edit_outlined, size: 18),
+                                SizedBox(width: 8),
+                                Text('Edit'),
+                              ]),
+                            ),
+                            PopupMenuItem(
+                              value: 'publish',
+                              child: Row(children: [
+                                Icon(
+                                    _isLive
+                                        ? Icons.unpublished_outlined
+                                        : Icons.publish_outlined,
+                                    size: 18),
+                                const SizedBox(width: 8),
+                                Text(_isLive ? 'Unpublish' : 'Publish'),
+                              ]),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(Icons.event, size: 14, color: Colors.grey[500]),
+                        const SizedBox(width: 4),
+                        Text(
+                          start == null
+                              ? 'No date'
+                              : DateFormat('MMM d, y • h:mm a').format(start),
+                          style: GoogleFonts.inter(
+                              fontSize: 13, color: Colors.grey[700]),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.people_outline,
+                            size: 14, color: Colors.grey[500]),
+                        const SizedBox(width: 4),
+                        Text('$sold / $capacity sold',
+                            style: GoogleFonts.inter(
+                                fontSize: 13, color: Colors.grey[700])),
+                        const SizedBox(width: 12),
+                        Icon(Icons.local_activity_outlined,
+                            size: 14, color: Colors.grey[500]),
+                        const SizedBox(width: 4),
+                        Text(
+                            '${tiers.length} ${tiers.length == 1 ? 'tier' : 'tiers'}',
+                            style: GoogleFonts.inter(
+                                fontSize: 13, color: Colors.grey[700])),
+                      ],
+                    ),
+                    if (_isDraft || _isLive) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _busy ? null : _togglePublish,
+                          icon: Icon(
+                              _isLive
+                                  ? Icons.unpublished_outlined
+                                  : Icons.publish_outlined,
+                              size: 18),
+                          label: Text(_isLive ? 'Unpublish' : 'Publish'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _isLive
+                                ? Colors.grey[700]
+                                : AppTheme.primaryColor,
+                            side: BorderSide(
+                                color: _isLive
+                                    ? Colors.grey[400]!
+                                    : AppTheme.primaryColor),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2645,10 +3113,13 @@ class _PayoutHistoryItem extends StatelessWidget {
     final createdAt =
         DateTime.tryParse(payout['created_at'] ?? '') ?? DateTime.now();
 
+    // Payout lifecycle (team_comms #189): pending_request -> approved ->
+    // completed; 'rejected'/'failed' are terminal-negative.
     final statusColor = switch (status) {
       'completed' => Colors.green[700]!,
-      'rejected' => Colors.red[700]!,
-      _ => Colors.orange[700]!,
+      'approved' => Colors.blue[700]!, // approved & disbursing
+      'rejected' || 'failed' => Colors.red[700]!,
+      _ => Colors.orange[700]!, // pending_request / processing
     };
 
     return Container(

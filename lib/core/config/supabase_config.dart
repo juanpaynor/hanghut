@@ -4,7 +4,9 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 class SupabaseConfig {
   // IMPORTANT: Replace these with your actual values!
   // These are fallbacks for when .env file is missing (e.g., in release builds)
-  static const String _fallbackUrl = 'https://rahhezqtkpvkialnduft.supabase.co';
+  // Custom domain for the same project — must match SUPABASE_URL in .env so the
+  // endpoint is identical whether or not .env loads.
+  static const String _fallbackUrl = 'https://api.hanghut.com';
   static const String _fallbackAnonKey =
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhaGhlenF0a3B2a2lhbG5kdWZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQzMzk2NDAsImV4cCI6MjA3OTkxNTY0MH0.6dKJKlaAU2tSiu0lcDatiXkf59yCz8eHMq04KBQer3I';
 
@@ -41,8 +43,17 @@ class SupabaseConfig {
     await Supabase.initialize(
       url: supabaseUrl,
       anonKey: supabaseAnonKey,
-      authOptions: const FlutterAuthClientOptions(
+      authOptions: FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
+        // Pin the session storage key. supabase_flutter otherwise derives it as
+        // "sb-<url-host-first-segment>-auth-token", so changing the Supabase URL
+        // (api.hanghut.com vs the raw project URL used as .env-missing fallback)
+        // changes the key and silently logs everyone out — and flip-flops on
+        // every launch where .env fails to load. 'sb-api-auth-token' is the key
+        // already in use with api.hanghut.com, so current sessions are kept.
+        localStorage: SharedPreferencesLocalStorage(
+          persistSessionKey: 'sb-api-auth-token',
+        ),
       ),
     );
   }

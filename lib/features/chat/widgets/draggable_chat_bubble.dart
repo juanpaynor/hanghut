@@ -4,10 +4,14 @@ class DraggableChatBubble extends StatefulWidget {
   final VoidCallback onTap;
   final double initialY;
 
+  /// Live total-unread count. When > 0 a red badge is shown on the bubble.
+  final Stream<int>? unreadStream;
+
   const DraggableChatBubble({
     super.key,
     required this.onTap,
     this.initialY = 100,
+    this.unreadStream,
   });
 
   @override
@@ -137,13 +141,55 @@ class _DraggableChatBubbleState extends State<DraggableChatBubble>
                   ),
                   child: Stack(
                     alignment: Alignment.center,
+                    clipBehavior: Clip.none,
                     children: [
-                      // TODO: Show user avatar or unread count
                       const Icon(
                         Icons.chat_bubble_outline,
                         color: Colors.white,
                         size: 28,
                       ),
+                      // Unread count badge
+                      if (widget.unreadStream != null)
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: StreamBuilder<int>(
+                            stream: widget.unreadStream,
+                            initialData: 0,
+                            builder: (context, snapshot) {
+                              final count = snapshot.data ?? 0;
+                              if (count <= 0) return const SizedBox.shrink();
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 1,
+                                ),
+                                constraints: const BoxConstraints(
+                                  minWidth: 18,
+                                  minHeight: 18,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF3B30),
+                                  borderRadius: BorderRadius.circular(9),
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  count > 99 ? '99+' : '$count',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.1,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                     ],
                   ),
                 ),

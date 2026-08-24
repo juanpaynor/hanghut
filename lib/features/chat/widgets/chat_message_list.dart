@@ -13,6 +13,7 @@ class ChatMessageList extends StatelessWidget {
   // View builders from parent
   final String Function(String?) getReplySenderName;
   final String Function(String?) getReplyContent;
+  final String? Function(String?)? getReplyImageUrl;
   final Widget Function(String) buildStatusIndicator;
   final List<Widget> Function(String?) buildReactionChips;
 
@@ -23,6 +24,8 @@ class ChatMessageList extends StatelessWidget {
   final Function(LinkableElement) onOpenLink;
   final Function(String userId)? onMentionTap;
   final Function(String userId)? onAvatarTap;
+  final Function(Map<String, dynamic>)? onRetry;
+  final bool Function(String id)? shouldAnimate;
   final List<Map<String, dynamic>> participants;
   final String searchQuery;
   final List<int> matchedIndices;
@@ -37,6 +40,7 @@ class ChatMessageList extends StatelessWidget {
     required this.messageReactions,
     required this.getReplySenderName,
     required this.getReplyContent,
+    this.getReplyImageUrl,
     required this.buildStatusIndicator,
     required this.buildReactionChips,
     required this.onReply,
@@ -45,6 +49,8 @@ class ChatMessageList extends StatelessWidget {
     required this.onOpenLink,
     this.onMentionTap,
     this.onAvatarTap,
+    this.onRetry,
+    this.shouldAnimate,
     this.participants = const [],
     this.searchQuery = '',
     this.matchedIndices = const [],
@@ -111,6 +117,8 @@ class ChatMessageList extends StatelessWidget {
               currentDate.day != olderDate.day;
         }
 
+        final String msgId = (msg['id'] ?? '$index').toString();
+
         // ── System messages (RSVP changes, check-ins) ──
         if (msg['contentType'] == 'system') {
           final systemChip = _buildSystemMessageChip(
@@ -118,17 +126,20 @@ class ChatMessageList extends StatelessWidget {
             msg['content'] ?? '',
           );
           if (showDateSeparator) {
-            return Column(
-              children: [
-                _buildDateChip(
-                  context,
-                  DateTime.parse(msg['timestamp']).toLocal(),
-                ),
-                systemChip,
-              ],
+            return _wrapAnimated(
+              msgId,
+              Column(
+                children: [
+                  _buildDateChip(
+                    context,
+                    DateTime.parse(msg['timestamp']).toLocal(),
+                  ),
+                  systemChip,
+                ],
+              ),
             );
           }
-          return systemChip;
+          return _wrapAnimated(msgId, systemChip);
         }
 
         // Header Logic: Show if this message is the First (Oldest) of a block.
@@ -143,6 +154,7 @@ class ChatMessageList extends StatelessWidget {
           showHeader: showHeader,
           replySenderName: getReplySenderName(msg['reply_to_id']),
           replyContent: getReplyContent(msg['reply_to_id']),
+          replyImageUrl: getReplyImageUrl?.call(msg['reply_to_id']),
           statusIndicator: buildStatusIndicator(msg['status'] ?? 'sent'),
           reactionChips: buildReactionChips(msg['id']),
           hasReactions: messageReactions[msg['id']]?.isNotEmpty == true,
@@ -167,20 +179,71 @@ class ChatMessageList extends StatelessWidget {
               matchedIndices[currentMatchIndex] == index,
         );
 
-        if (showDateSeparator) {
-          return Column(
+        // Failed send → show a tappable "retry" caption under the bubble.
+        Widget bubbleWidget = bubble;
+        if (msg['status'] == 'failed' && onRetry != null) {
+          bubbleWidget = Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildDateChip(
-                context,
-                DateTime.parse(msg['timestamp']).toLocal(),
-              ),
               bubble,
+              GestureDetector(
+                onTap: () => onRetry!(msg),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4, top: 2, bottom: 2),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: const [
+                      Icon(
+                        Icons.error_outline,
+                        size: 12,
+                        color: Colors.redAccent,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'Failed to send. Tap to retry',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           );
         }
 
-        return bubble;
+        if (showDateSeparator) {
+          return _wrapAnimated(
+            msgId,
+            Column(
+              children: [
+                _buildDateChip(
+                  context,
+                  DateTime.parse(msg['timestamp']).toLocal(),
+                ),
+                bubbleWidget,
+              ],
+            ),
+          );
+        }
+
+        return _wrapAnimated(msgId, bubbleWidget);
       },
+    );
+  }
+
+  /// Wraps a message row in a one-time fade + slide entrance (only for live
+  /// arrivals — history is pre-marked so it renders instantly).
+  Widget _wrapAnimated(String id, Widget child) {
+    final animate = shouldAnimate?.call(id) ?? false;
+    return _AnimatedMessageItem(
+      key: ValueKey('anim_$id'),
+      animate: animate,
+      child: child,
     );
   }
 
@@ -256,6 +319,64 @@ class ChatMessageList extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// One-shot fade + slide-up entrance for a newly arrived message. When
+/// [animate] is false it renders at rest immediately (used for history so the
+/// backlog never animates on open).
+class _AnimatedMessageItem extends StatefulWidget {
+  final Widget child;
+  final bool animate;
+
+  const _AnimatedMessageItem({
+    super.key,
+    required this.child,
+    required this.animate,
+  });
+
+  @override
+  State<_AnimatedMessageItem> createState() => _AnimatedMessageItemState();
+}
+
+class _AnimatedMessageItemState extends State<_AnimatedMessageItem>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 240),
+  );
+  late final Animation<double> _fade = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.08),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animate) {
+      _controller.forward();
+    } else {
+      _controller.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.animate) return widget.child;
+    return FadeTransition(
+      opacity: _fade,
+      child: SlideTransition(position: _slide, child: widget.child),
     );
   }
 }

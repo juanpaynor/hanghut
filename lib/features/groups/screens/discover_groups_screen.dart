@@ -206,6 +206,7 @@ class _DiscoverGroupsScreenState extends State<DiscoverGroupsScreen> {
 
   Widget _buildDiscoverCard(Map<String, dynamic> group) {
     final coverUrl = group['cover_image_url'] as String?;
+    final iconImageUrl = group['icon_image_url'] as String?;
     final iconEmoji = group['icon_emoji'] as String?;
     final privacy = group['privacy'] as String? ?? 'public';
     final memberCount = group['member_count'] ?? 0;
@@ -259,12 +260,40 @@ class _DiscoverGroupsScreenState extends State<DiscoverGroupsScreen> {
               ),
               child: coverUrl == null
                   ? Center(
-                      child: iconEmoji != null && iconEmoji.isNotEmpty
-                          ? Text(iconEmoji,
-                              style: const TextStyle(fontSize: 36))
-                          : Icon(Icons.groups,
-                              size: 36,
-                              color: Colors.white.withOpacity(0.4)),
+                      child: iconImageUrl != null && iconImageUrl.isNotEmpty
+                          ? Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(18),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.2),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Image.network(
+                                iconImageUrl,
+                                width: 64,
+                                height: 64,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Icon(
+                                  Icons.groups,
+                                  size: 36,
+                                  color: Colors.white.withOpacity(0.4),
+                                ),
+                              ),
+                            )
+                          : iconEmoji != null && iconEmoji.isNotEmpty
+                              ? Text(iconEmoji,
+                                  style: const TextStyle(fontSize: 36))
+                              : Icon(Icons.groups,
+                                  size: 36,
+                                  color: Colors.white.withOpacity(0.4)),
                     )
                   : null,
             ),

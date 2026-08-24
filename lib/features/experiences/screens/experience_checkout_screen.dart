@@ -40,10 +40,30 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
   bool _subscribedToNewsletter = true;
   int _currentImageIndex = 0;
 
+  // Server-computed price breakdown (subtotal + service fee + true total). Null
+  // while loading or if the quote fails (then we fall back to subtotal-only).
+  ExperienceQuote? _quote;
+  bool _loadingQuote = true;
+
   @override
   void initState() {
     super.initState();
     _fetchUserProfile();
+    _fetchQuote();
+  }
+
+  Future<void> _fetchQuote() async {
+    final quote = await _experienceService.quoteExperience(
+      tableId: widget.experience['id'].toString(),
+      scheduleId: widget.schedule['id']?.toString(),
+      quantity: widget.quantity,
+    );
+    if (mounted) {
+      setState(() {
+        _quote = quote;
+        _loadingQuote = false;
+      });
+    }
   }
 
   @override
@@ -52,6 +72,93 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
     _emailController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  /// Price breakdown card body. Uses the server quote (subtotal + service fee +
+  /// true total) when available; while loading or on failure it falls back to
+  /// the subtotal so the screen still renders.
+  Widget _buildBreakdown(String currency, double fallbackSubtotal) {
+    final quote = _quote;
+    final subtotal = quote?.subtotal ?? fallbackSubtotal;
+
+    String money(double v) => '$currency ${v.round()}';
+
+    final rows = <Widget>[
+      _breakdownRow(
+        label: '$currency ${widget.unitPrice.toStringAsFixed(0)} x ${widget.quantity} '
+            '${widget.quantity == 1 ? 'guest' : 'guests'}',
+        value: money(subtotal),
+      ),
+    ];
+
+    if (quote != null && quote.hasVisibleFee) {
+      rows.add(const SizedBox(height: 12));
+      // Matches the event checkout's product rule (team_comms #228): buyer-facing
+      // fee is ONE line labelled "Booking Fee"; the % is charged but never broken
+      // out as its own line.
+      rows.add(
+        _breakdownRow(
+          label: 'Booking Fee',
+          value: money(quote.platformFee),
+        ),
+      );
+    }
+
+    rows.add(const Padding(
+      padding: EdgeInsets.symmetric(vertical: 16),
+      child: Divider(height: 1),
+    ));
+
+    rows.add(
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'Total (PHP)',
+            style: GoogleFonts.outfit(
+              fontWeight: FontWeight.bold, fontSize: 18, color: Colors.black87,
+            ),
+          ),
+          if (quote == null && _loadingQuote)
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.grey[400],
+              ),
+            )
+          else
+            Text(
+              money(quote?.totalAmount ?? subtotal),
+              style: GoogleFonts.outfit(
+                fontWeight: FontWeight.bold, fontSize: 24, color: Colors.black87,
+              ),
+            ),
+        ],
+      ),
+    );
+
+    return Column(children: rows);
+  }
+
+  Widget _breakdownRow({required String label, required String value}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Flexible(
+          child: Text(
+            label,
+            style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 16),
+          ),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.inter(
+            color: Colors.grey[800], fontWeight: FontWeight.w600, fontSize: 16,
+          ),
+        ),
+      ],
+    );
   }
 
   Future<void> _fetchUserProfile() async {
@@ -481,46 +588,7 @@ class _ExperienceCheckoutScreenState extends State<ExperienceCheckoutScreen> {
                         ),
                       ],
                     ),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              '$currency ${widget.unitPrice.toStringAsFixed(0)} x ${widget.quantity} guests',
-                              style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 16),
-                            ),
-                            Text(
-                              '$currency ${total.toStringAsFixed(0)}',
-                              style: GoogleFonts.inter(
-                                color: Colors.grey[800], fontWeight: FontWeight.w600, fontSize: 16,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: Divider(height: 1),
-                        ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Total (PHP)',
-                              style: GoogleFonts.outfit(
-                                fontWeight: FontWeight.bold, fontSize: 18, color: Colors.black87,
-                              ),
-                            ),
-                            Text(
-                              '$currency ${total.toStringAsFixed(0)}',
-                              style: GoogleFonts.outfit(
-                                fontWeight: FontWeight.bold, fontSize: 24, color: Colors.black87,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                    child: _buildBreakdown(currency, total),
                   ),
                   const SizedBox(height: 40),
                 ],

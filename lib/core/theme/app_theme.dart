@@ -6,6 +6,13 @@ class AppTheme {
   static const Color primaryColor = Color(
     0xFF6B7FFF,
   ); // Brighter vibrant indigo
+
+  /// Signature HangHut gradient — brand indigo → violet. Use for hero CTAs,
+  /// accent pills, and promo buttons so the brand reads consistently.
+  static const List<Color> brandGradient = [
+    Color(0xFF6B7FFF), // brand indigo
+    Color(0xFF9B6BFF), // violet
+  ];
   static const Color secondaryColor = Colors.white;
   static const MaterialColor accentColor = Colors.indigo;
   static const Color backgroundColor = Colors.white;

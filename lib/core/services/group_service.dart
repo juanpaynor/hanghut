@@ -19,6 +19,7 @@ class GroupService {
     double? locationLat,
     double? locationLng,
     File? coverImage,
+    File? iconImage,
   }) async {
     try {
       final user = SupabaseConfig.client.auth.currentUser;
@@ -38,7 +39,10 @@ class GroupService {
             'location_lat': locationLat,
             'location_lng': locationLng,
             'created_by': user.id,
-            'member_count': 1,
+            // Start at 0 — the group_members INSERT below fires
+            // update_group_member_count() which bumps this to 1. Seeding 1 here
+            // caused a permanent +1 (the count trigger double-counted the owner).
+            'member_count': 0,
           })
           .select('id')
           .single();
@@ -52,6 +56,17 @@ class GroupService {
           await SupabaseConfig.client
               .from('groups')
               .update({'cover_image_url': coverUrl})
+              .eq('id', groupId);
+        }
+      }
+
+      // 2b. Upload group profile picture if provided
+      if (iconImage != null) {
+        final iconUrl = await _uploadIconImage(groupId, iconImage);
+        if (iconUrl != null) {
+          await SupabaseConfig.client
+              .from('groups')
+              .update({'icon_image_url': iconUrl})
               .eq('id', groupId);
         }
       }
@@ -123,6 +138,7 @@ class GroupService {
               category,
               privacy,
               icon_emoji,
+              icon_image_url,
               cover_image_url,
               member_count,
               created_at
@@ -191,6 +207,7 @@ class GroupService {
     String? iconEmoji,
     String? locationCity,
     File? coverImage,
+    File? iconImage,
   }) async {
     try {
       final updates = <String, dynamic>{
@@ -209,6 +226,12 @@ class GroupService {
       if (coverImage != null) {
         final coverUrl = await _uploadCoverImage(groupId, coverImage);
         if (coverUrl != null) updates['cover_image_url'] = coverUrl;
+      }
+
+      // Upload new group profile picture (round avatar)
+      if (iconImage != null) {
+        final iconUrl = await _uploadIconImage(groupId, iconImage);
+        if (iconUrl != null) updates['icon_image_url'] = iconUrl;
       }
 
       await SupabaseConfig.client
@@ -348,6 +371,35 @@ class GroupService {
       return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
     } catch (e) {
       print('❌ GROUP SERVICE: Error uploading cover - $e');
+      return null;
+    }
+  }
+
+  /// Uploads a group's profile picture (round avatar). Reuses the group-covers
+  /// bucket with a distinct `<groupId>-icon` key so it never collides with the
+  /// cover image.
+  Future<String?> _uploadIconImage(String groupId, File imageFile) async {
+    try {
+      final fileExt = imageFile.path.split('.').last;
+      final fileName = '$groupId-icon.$fileExt';
+      final bytes = await imageFile.readAsBytes();
+
+      await SupabaseConfig.client.storage
+          .from('group-covers')
+          .uploadBinary(
+            fileName,
+            bytes,
+            fileOptions: const FileOptions(upsert: true),
+          );
+
+      final publicUrl = SupabaseConfig.client.storage
+          .from('group-covers')
+          .getPublicUrl(fileName);
+
+      // Append cache-buster so updated images show immediately
+      return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+    } catch (e) {
+      print('❌ GROUP SERVICE: Error uploading group icon - $e');
       return null;
     }
   }

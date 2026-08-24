@@ -9,10 +9,9 @@ import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
+import 'package:bitemates/features/home/widgets/like_facepile.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
-import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
-import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/camera/widgets/story_viewers_sheet.dart';
 
 class LocationStoryViewerScreen extends StatefulWidget {
@@ -850,11 +849,14 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
               ),
             ),
 
-            // Header
+            // Header (avatar, name, close, location pill + vibe)
             _buildHeader(),
 
-            // Footer
-            Align(alignment: Alignment.bottomCenter, child: _buildFooter()),
+            // Vertical action rail (right edge, centered)
+            _buildActionRail(),
+
+            // Footer — caption only, bottom-left
+            Align(alignment: Alignment.bottomLeft, child: _buildFooter()),
 
             // Loading overlay for user transitions
             if (_isLoadingNextUser)
@@ -1013,90 +1015,177 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
       top: MediaQuery.of(context).padding.top + 24,
       left: 12,
       right: 12,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          GestureDetector(
-            onTap: () {
-              if (story['user_id'] != null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) =>
-                        UserProfileScreen(userId: story['user_id']),
+          Row(
+            children: [
+              GestureDetector(
+                onTap: () {
+                  if (story['user_id'] != null) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            UserProfileScreen(userId: story['user_id']),
+                      ),
+                    );
+                  }
+                },
+                child: CircleAvatar(
+                  radius: 18,
+                  backgroundImage: author['avatar_url'] != null
+                      ? NetworkImage(author['avatar_url'])
+                      : null,
+                  backgroundColor: Colors.indigo,
+                  child: author['avatar_url'] == null
+                      ? Text(
+                          author['display_name']?[0] ?? '?',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        )
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    if (story['user_id'] != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              UserProfileScreen(userId: story['user_id']),
+                        ),
+                      );
+                    }
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        author['display_name'] ?? 'Someone',
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        _formatTimeAgo(story['created_at']),
+                        style: GoogleFonts.inter(
+                          color: Colors.white60,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
                   ),
-                );
-              }
-            },
-            child: CircleAvatar(
-              radius: 18,
-              backgroundImage: author['avatar_url'] != null
-                  ? NetworkImage(author['avatar_url'])
-                  : null,
-              backgroundColor: Colors.indigo,
-              child: author['avatar_url'] == null
-                  ? Text(
-                      author['display_name']?[0] ?? '?',
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                    )
-                  : null,
-            ),
+                ),
+              ),
+              // Close button
+              GestureDetector(
+                onTap: () {
+                  if (_isPopping) return;
+                  _isPopping = true;
+                  _progressController.removeStatusListener(_onProgressComplete);
+                  _progressController.stop();
+                  _videoController?.pause();
+                  Navigator.pop(context);
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(
+                    color: Colors.black26,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 22),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (story['user_id'] != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          UserProfileScreen(userId: story['user_id']),
-                    ),
-                  );
-                }
-              },
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          // Location tag + vibe — left-aligned under the avatar.
+          // Informational only: NOT tappable, does not open the map (surfacing
+          // a poster's exact coordinates crosses a privacy line).
+          _buildLocationTag(story),
+        ],
+      ),
+    );
+  }
+
+  /// Dark frosted "capture-screen style" location pill + optional vibe tag,
+  /// grouped directly under the header. Purely informational.
+  Widget _buildLocationTag(Map<String, dynamic> story) {
+    final place = story['external_place_name']?.toString();
+    final vibe = story['vibe_tag']?.toString();
+    final hasPlace = place != null && place.isNotEmpty;
+    final hasVibe = vibe != null && vibe.isNotEmpty;
+    if (!hasPlace && !hasVibe) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasPlace)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.45),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.15),
+                  width: 1,
+                ),
+              ),
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    author['display_name'] ?? 'Someone',
-                    style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
+                  const Icon(
+                    Icons.location_on_rounded,
+                    color: Colors.white,
+                    size: 14,
                   ),
-                  Text(
-                    _formatTimeAgo(story['created_at']),
-                    style: GoogleFonts.inter(
-                      color: Colors.white60,
-                      fontSize: 11,
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      place,
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.1,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-          // Close button
-          GestureDetector(
-            onTap: () {
-              if (_isPopping) return;
-              _isPopping = true;
-              _progressController.removeStatusListener(_onProgressComplete);
-              _progressController.stop();
-              _videoController?.pause();
-              Navigator.pop(context);
-            },
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(
-                color: Colors.black26,
-                shape: BoxShape.circle,
+          if (hasVibe)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                '#$vibe',
+                style: GoogleFonts.inter(
+                  color: Colors.indigoAccent.shade100,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  shadows: [
+                    Shadow(
+                      offset: const Offset(0, 1),
+                      blurRadius: 3.0,
+                      color: Colors.black.withOpacity(0.6),
+                    ),
+                  ],
+                ),
               ),
-              child: const Icon(Icons.close, color: Colors.white, size: 22),
             ),
-          ),
         ],
       ),
     );
@@ -1105,334 +1194,244 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
   Widget _buildFooter() {
     if (_currentIndex >= _stories.length) return const SizedBox();
     final story = _stories[_currentIndex];
-    final isOwner =
-        story['user_id'] == Supabase.instance.client.auth.currentUser?.id;
+    final content = story['content']?.toString();
+    final hasCaption = content != null && content.isNotEmpty;
+    final likeCount = (story['_likeCount'] ?? 0) as int;
+    final storyId = story['id']?.toString();
+    if (!hasCaption && likeCount <= 0) return const SizedBox.shrink();
 
     return SafeArea(
       top: false,
-      child: Container(
-        padding: const EdgeInsets.only(bottom: 41, left: 16, right: 16),
+      child: Padding(
+        // Right padding clears the vertical action rail.
+        padding: const EdgeInsets.only(bottom: 41, left: 16, right: 72),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Content text
-            if (story['content'] != null &&
-                story['content'].toString().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  story['content'],
-                  style: GoogleFonts.inter(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    shadows: [
-                      Shadow(
-                        offset: const Offset(0, 1),
-                        blurRadius: 3.0,
-                        color: Colors.black.withOpacity(0.8),
-                      ),
-                    ],
-                  ),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
+            // Public "who reacted" facepile — everyone sees who liked.
+            if (likeCount > 0 && storyId != null) ...[
+              LikeFacepile(
+                postId: storyId,
+                likeCount: likeCount,
+                onDark: true,
               ),
-
-            // Location pill
-            if (story['external_place_name'] != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: GestureDetector(
-                  onTap: () {
-                    final lat = story['latitude'] as num?;
-                    final lng = story['longitude'] as num?;
-                    if (lat == null || lng == null) return;
-
-                    // Stop playback
-                    _progressController.removeStatusListener(
-                      _onProgressComplete,
-                    );
-                    _progressController.stop();
-                    _videoController?.pause();
-
-                    // Navigate to map with fly-to
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(
-                        builder: (_) => MainNavigationScreen(
-                          initialIndex: 0,
-                          flyToLat: lat.toDouble(),
-                          flyToLng: lng.toDouble(),
-                        ),
-                      ),
-                      (route) => false,
-                    );
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 7,
+              const SizedBox(height: 6),
+            ],
+            if (hasCaption)
+              Text(
+                content,
+                style: GoogleFonts.inter(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  shadows: [
+                    Shadow(
+                      offset: const Offset(0, 1),
+                      blurRadius: 3.0,
+                      color: Colors.black.withOpacity(0.8),
                     ),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppTheme.primaryColor,
-                          AppTheme.primaryColor.withOpacity(0.8),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.primaryColor.withOpacity(0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.location_on_rounded,
-                          color: Colors.white,
-                          size: 14,
-                        ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            story['external_place_name'],
-                            style: GoogleFonts.inter(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.1,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.map_rounded,
-                            color: Colors.white,
-                            size: 10,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
               ),
+          ],
+        ),
+      ),
+    );
+  }
 
-            // Vibe tag
-            if (story['vibe_tag'] != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  '#${story['vibe_tag']}',
-                  style: GoogleFonts.inter(
-                    color: Colors.indigoAccent.shade100,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
+  // ═══════════════════════════════════════════════
+  // VERTICAL ACTION RAIL (right edge, centered)
+  // ═══════════════════════════════════════════════
 
-            // Interaction row
-            Row(
-              children: [
-                // Like button
-                GestureDetector(
-                  onTap: () => _toggleLike(_currentIndex),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        (story['_isLiked'] == true)
-                            ? Icons.favorite
-                            : Icons.favorite_border,
-                        color: (story['_isLiked'] == true)
-                            ? Colors.red
-                            : Colors.white,
-                        size: 28,
-                      ),
-                      if ((story['_likeCount'] ?? 0) > 0) ...[
-                        const SizedBox(width: 4),
-                        Text(
-                          '${story['_likeCount']}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 20),
+  Widget _buildActionRail() {
+    if (_currentIndex >= _stories.length) return const SizedBox.shrink();
+    final story = _stories[_currentIndex];
+    final isOwner =
+        story['user_id'] == Supabase.instance.client.auth.currentUser?.id;
+    final storyId = story['id']?.toString();
 
-                // Comment button
-                GestureDetector(
+    return Positioned(
+      top: 0,
+      bottom: 0,
+      right: 6,
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Viewer count on top (owner only)
+              if (isOwner)
+                _railItem(
+                  icon: Icons.visibility_outlined,
+                  label: '${_viewerCounts[storyId] ?? 0}',
                   onTap: () {
                     _pause();
+                    if (storyId == null) return;
                     showModalBottomSheet(
                       context: context,
                       isScrollControlled: true,
                       backgroundColor: Colors.transparent,
-                      builder: (context) => CommentsBottomSheet(post: story),
+                      builder: (context) => StoryViewersSheet(
+                        postId: storyId,
+                        initialCount: _viewerCounts[storyId] ?? 0,
+                      ),
                     ).then((_) {
                       if (mounted) _resume();
                     });
                   },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.chat_bubble_outline,
-                        color: Colors.white,
-                        size: 26,
-                      ),
-                      if ((story['_commentCount'] ?? 0) > 0) ...[
-                        const SizedBox(width: 4),
-                        Text(
-                          '${story['_commentCount']}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
                 ),
 
-                const Spacer(),
+              // Like
+              _railItem(
+                icon: (story['_isLiked'] == true)
+                    ? Icons.favorite
+                    : Icons.favorite_border,
+                iconColor: (story['_isLiked'] == true)
+                    ? Colors.red
+                    : Colors.white,
+                label: (story['_likeCount'] ?? 0) > 0
+                    ? '${story['_likeCount']}'
+                    : null,
+                onTap: () => _toggleLike(_currentIndex),
+              ),
 
-                // Viewer count (own stories only)
-                if (isOwner) ...[
-                  GestureDetector(
-                    onTap: () {
-                      _pause();
-                      final storyId = story['id']?.toString();
-                      if (storyId == null) return;
-                      showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (context) => StoryViewersSheet(
-                          postId: storyId,
-                          initialCount: _viewerCounts[storyId] ?? 0,
-                        ),
-                      ).then((_) {
-                        if (mounted) _resume();
-                      });
-                    },
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.visibility_outlined,
-                          color: Colors.white,
-                          size: 26,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${_viewerCounts[story['id']?.toString()] ?? 0}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                ],
+              // Comment
+              _railItem(
+                icon: Icons.chat_bubble_outline,
+                label: (story['_commentCount'] ?? 0) > 0
+                    ? '${story['_commentCount']}'
+                    : null,
+                onTap: () {
+                  _pause();
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (context) => CommentsBottomSheet(post: story),
+                  ).then((_) {
+                    if (mounted) _resume();
+                  });
+                },
+              ),
 
-                // Delete button (own stories only)
-                if (isOwner)
-                  GestureDetector(
-                    onTap: () {
-                      _pause();
-                      showDialog(
-                        context: context,
-                        builder: (dialogCtx) => AlertDialog(
-                          backgroundColor: Colors.grey[900],
-                          title: const Text(
-                            'Delete Story?',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                          content: const Text(
-                            'This cannot be undone.',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () {
-                                Navigator.pop(dialogCtx);
-                                _resume();
-                              },
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(color: Colors.white54),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                Navigator.pop(dialogCtx);
-                                _deleteStory(_currentIndex);
-                              },
-                              child: const Text(
-                                'Delete',
-                                style: TextStyle(color: Colors.redAccent),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                    child: const Icon(
-                      Icons.delete_outline,
-                      color: Colors.white70,
-                      size: 26,
-                    ),
-                  ),
+              // Delete (owner) / Report (others)
+              if (isOwner)
+                _railItem(
+                  icon: Icons.delete_outline,
+                  onTap: () => _confirmDelete(story),
+                )
+              else
+                _railItem(
+                  icon: Icons.flag_outlined,
+                  onTap: () {
+                    _pause();
+                    ReportModal.show(
+                      context,
+                      targetType: 'post',
+                      targetId: storyId ?? '',
+                      targetName: story['user']?['display_name'],
+                    ).then((_) {
+                      if (mounted) _resume();
+                    });
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                // Report button (other people's stories)
-                if (!isOwner)
-                  GestureDetector(
-                    onTap: () {
-                      _pause();
-                      ReportModal.show(
-                        context,
-                        targetType: 'post',
-                        targetId: story['id']?.toString() ?? '',
-                        targetName: story['user']?['display_name'],
-                      ).then((_) {
-                        if (mounted) _resume();
-                      });
-                    },
-                    child: const Icon(
-                      Icons.flag_outlined,
-                      color: Colors.white70,
-                      size: 26,
-                    ),
-                  ),
-              ],
-            ),
+  /// A single icon (+ optional count) in the vertical action rail.
+  Widget _railItem({
+    required IconData icon,
+    String? label,
+    Color iconColor = Colors.white,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: iconColor, size: 30, shadows: _iconShadow),
+            if (label != null) ...[
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  shadows: _iconShadow,
+                ),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  // Dual-layer shadow so white rail icons stay legible over ANY media,
+  // including bright/white photos where a single soft shadow washed out:
+  //  1. a tight, near-opaque halo that hugs the glyph like a thin outline, and
+  //  2. a softer ambient shadow underneath for depth.
+  static final List<Shadow> _iconShadow = [
+    Shadow(
+      offset: Offset.zero,
+      blurRadius: 3,
+      color: Colors.black.withValues(alpha: 0.6),
+    ),
+    Shadow(
+      offset: const Offset(0, 1),
+      blurRadius: 8,
+      color: Colors.black.withValues(alpha: 0.35),
+    ),
+  ];
+
+  void _confirmDelete(Map<String, dynamic> story) {
+    _pause();
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Delete Story?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This cannot be undone.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              _resume();
+            },
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              _deleteStory(_currentIndex);
+            },
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
       ),
     );
   }

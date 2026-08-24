@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
@@ -47,6 +48,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   String _visibility = 'public'; // 'public' or 'followers'
   final Set<String> _selectedVibes = {};
   bool _includeLocation = true; // Privacy: user can opt out of geotagging
+
+  // Which lower-left utility popover is open: 'flash' | 'location' | 'privacy'.
+  String? _activePopover;
 
   // Manual location override (set when user picks via map)
   double? _customLat;
@@ -151,40 +155,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     await _initializeCamera(cameraIndex: nextIndex);
   }
 
-  Future<void> _toggleFlash() async {
-    if (_cameraController == null) return;
-    HapticFeedback.selectionClick();
-
-    final nextMode = switch (_flashMode) {
-      FlashMode.off => FlashMode.auto,
-      FlashMode.auto => FlashMode.always,
-      FlashMode.always => FlashMode.torch,
-      FlashMode.torch => FlashMode.off,
-    };
-
-    try {
-      await _cameraController!.setFlashMode(nextMode);
-      setState(() => _flashMode = nextMode);
-    } catch (e) {
-      debugPrint('Flash mode error: $e');
-    }
-  }
-
   IconData _flashIcon() {
     return switch (_flashMode) {
       FlashMode.off => Icons.flash_off,
       FlashMode.auto => Icons.flash_auto,
       FlashMode.always => Icons.flash_on,
       FlashMode.torch => Icons.flashlight_on,
-    };
-  }
-
-  String _flashLabel() {
-    return switch (_flashMode) {
-      FlashMode.off => 'Off',
-      FlashMode.auto => 'Auto',
-      FlashMode.always => 'On',
-      FlashMode.torch => 'Torch',
     };
   }
 
@@ -296,6 +272,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     if (!mounted) return;
 
     if (imageFile != null) {
+      // IMPORTANT (pro_image_editor v12): the completion callback is AWAITED by
+      // the editor while its "Applying changes" overlay is showing, and only
+      // after it returns does the editor hide that overlay + close itself. So
+      // this callback must ONLY persist the bytes — never pop or push here.
+      // Throwing (or popping the editor route) mid-callback is exactly what left
+      // the overlay stranded ("hangs on Applying changes"). We navigate to the
+      // final preview afterwards, once the editor route has actually closed.
+      var didComplete = false;
+      File? editedImage;
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -303,49 +288,75 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
             imageFile,
             callbacks: ProImageEditorCallbacks(
               onImageEditingComplete: (Uint8List bytes) async {
-                Navigator.pop(context); // Pop editor
-
-                // Save edited bytes to temp file
-                final Directory tempDir = await getTemporaryDirectory();
-                final File editedImage = await File(
-                  '${tempDir.path}/edited_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
-                ).writeAsBytes(bytes);
-
-                _pushToFinalPreview(imageFile: editedImage);
+                didComplete = true;
+                try {
+                  final Directory tempDir = await getTemporaryDirectory();
+                  editedImage = await File(
+                    '${tempDir.path}/edited_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
+                  ).writeAsBytes(bytes);
+                } catch (e) {
+                  debugPrint('❌ Saving edited image failed: $e');
+                }
               },
+              // v12 done-path only closes the editor when onCloseEditor is
+              // provided; this also handles the cancel/back case.
+              onCloseEditor: (_) => Navigator.pop(context),
             ),
           ),
         ),
-      );
+      ).then((_) {
+        if (!mounted) return;
+        final img = editedImage;
+        if (img != null) {
+          _pushToFinalPreview(imageFile: img);
+        } else if (didComplete) {
+          _showErrorSnackBar('Could not process the image. Please try again.');
+        }
+      });
     } else if (videoFile != null) {
+      // Same contract as the image path above: persist only inside the awaited
+      // callback, then navigate after the editor route closes.
+      var didComplete = false;
+      File? editedVideo;
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => _VideoEditorScreen(
             videoFile: videoFile,
             onComplete: (bytes) async {
-              Navigator.pop(context); // Pop editor
+              didComplete = true;
+              try {
+                final tempDir = await getTemporaryDirectory();
 
-              final tempDir = await getTemporaryDirectory();
+                // Preserve original extension so a .mov isn't mislabeled .mp4.
+                final originalPath = videoFile.path.toLowerCase();
+                String ext = '.mp4';
+                if (originalPath.endsWith('.mov')) {
+                  ext = '.mov';
+                } else if (originalPath.endsWith('.m4v')) {
+                  ext = '.m4v';
+                }
 
-              // Get original extension so we don't accidentally save a .mov as purely .mp4
-              final originalPath = videoFile.path.toLowerCase();
-              String ext = '.mp4';
-              if (originalPath.endsWith('.mov'))
-                ext = '.mov';
-              else if (originalPath.endsWith('.m4v'))
-                ext = '.m4v';
-
-              final editedVideo = File(
-                '${tempDir.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}$ext',
-              );
-              await editedVideo.writeAsBytes(bytes);
-
-              _pushToFinalPreview(videoFile: editedVideo);
+                final out = File(
+                  '${tempDir.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}$ext',
+                );
+                await out.writeAsBytes(bytes);
+                editedVideo = out;
+              } catch (e) {
+                debugPrint('❌ Saving edited video failed: $e');
+              }
             },
           ),
         ),
-      );
+      ).then((_) {
+        if (!mounted) return;
+        final vid = editedVideo;
+        if (vid != null) {
+          _pushToFinalPreview(videoFile: vid);
+        } else if (didComplete) {
+          _showErrorSnackBar('Could not process the video. Please try again.');
+        }
+      });
     }
   }
 
@@ -406,14 +417,45 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
           media.path.toLowerCase().endsWith('.mp4') ||
           media.path.toLowerCase().endsWith('.mov');
 
-      _navigateToPreview(
-        imageFile: isVideo ? null : file,
-        videoFile: isVideo ? file : null,
-      );
+      if (isVideo) {
+        _navigateToPreview(videoFile: file);
+        return;
+      }
+
+      // Album photos come at full resolution and, on iOS, often as HEIC.
+      // Handing that straight to the editor makes its export ("Applying
+      // changes") stall or OOM. Downscale + transcode to a manageable JPEG
+      // first — mirrors what the camera capture already produces.
+      final File prepared = await _prepareGalleryImage(file);
+      if (!mounted) return;
+      _navigateToPreview(imageFile: prepared);
     } catch (e) {
       debugPrint('Error picking from gallery: $e');
       if (mounted) _showErrorSnackBar('Failed to load media from gallery.');
     }
+  }
+
+  /// Downscale + transcode a picked album image to a JPEG the editor can
+  /// export quickly. Falls back to the original file if compression fails.
+  Future<File> _prepareGalleryImage(File original) async {
+    try {
+      final Directory tempDir = await getTemporaryDirectory();
+      final String target =
+          '${tempDir.path}/story_pick_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final XFile? result = await FlutterImageCompress.compressAndGetFile(
+        original.absolute.path,
+        target,
+        minWidth: 1920,
+        minHeight: 1920,
+        quality: 88,
+        format: CompressFormat.jpeg, // transcodes HEIC/HEIF → JPEG
+        keepExif: false, // bake in orientation, drop stale EXIF
+      );
+      if (result != null) return File(result.path);
+    } catch (e) {
+      debugPrint('Gallery image pre-process failed, using original: $e');
+    }
+    return original;
   }
 
   void _showEditOverlayBottomSheet() {
@@ -530,10 +572,118 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     );
   }
 
-  void _toggleVisibility() {
+  // ─── Story control chrome (lower-left utility stack + popovers) ───────────
+
+  void _togglePopover(String id) {
+    HapticFeedback.selectionClick();
+    setState(() => _activePopover = _activePopover == id ? null : id);
+  }
+
+  Future<void> _setFlashMode(FlashMode mode) async {
     setState(() {
-      _visibility = _visibility == 'public' ? 'followers' : 'public';
+      _flashMode = mode;
+      _activePopover = null;
     });
+    try {
+      await _cameraController?.setFlashMode(mode);
+    } catch (e) {
+      debugPrint('Flash mode error: $e');
+    }
+  }
+
+  /// Map-style white rounded-square utility button. [active] fills it purple
+  /// (used for Location = on, or a control whose popover is open).
+  Widget _utilityButton({
+    required IconData icon,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: active ? Colors.indigo : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2)),
+          ],
+        ),
+        child: Icon(
+          icon,
+          size: 22,
+          color: active ? Colors.white : Colors.black87,
+        ),
+      ),
+    );
+  }
+
+  /// A control + its right-side popover, so the popover stays vertically
+  /// aligned with (and never covers) its button.
+  Widget _controlRow(String id, Widget button, List<_PopoverOption> options) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button,
+        if (_activePopover == id) ...[
+          const SizedBox(width: 8),
+          _popover(options),
+        ],
+      ],
+    );
+  }
+
+  Widget _popover(List<_PopoverOption> options) {
+    return Container(
+      width: 168,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 16, offset: Offset(0, 4)),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < options.length; i++) ...[
+            if (i > 0) const Divider(height: 1, thickness: 1),
+            InkWell(
+              onTap: options[i].onTap,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                color: options[i].selected
+                    ? Colors.indigo.withValues(alpha: 0.08)
+                    : Colors.transparent,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        options[i].label,
+                        style: GoogleFonts.inter(
+                          fontSize: 15,
+                          fontWeight: options[i].selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          color: options[i].selected
+                              ? Colors.indigo
+                              : Colors.black87,
+                        ),
+                      ),
+                    ),
+                    if (options[i].selected)
+                      const Icon(Icons.check, size: 18, color: Colors.indigo),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -583,132 +733,38 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
             child: Center(child: CameraPreview(_cameraController!)),
           ),
 
-          // 2. Top Bar (Close, Flash, Flip, and Follower Toggle)
+          // 2a. Outside-tap catcher — closes any open popover. Sits below the
+          // controls so Close / capture / etc. stay tappable.
+          if (_activePopover != null)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _activePopover = null),
+              ),
+            ),
+
+          // 2b. Close (upper-right)
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
-            left: 16,
             right: 16,
-            child: Row(
-              children: [
-                // Close button
-                Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.black26,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Flash toggle
-                Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.black26,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: Icon(_flashIcon(), color: Colors.white),
-                    onPressed: _toggleFlash,
-                    tooltip: 'Flash: ${_flashLabel()}',
-                  ),
-                ),
-                const Spacer(),
-                // Location privacy toggle
-                GestureDetector(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() => _includeLocation = !_includeLocation);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _includeLocation
-                          ? Colors.black45
-                          : Colors.red.withOpacity(0.75),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _includeLocation
-                              ? Icons.location_on
-                              : Icons.location_off,
-                          color: Colors.white,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _includeLocation ? 'Location On' : 'Location Off',
-                          style: GoogleFonts.inter(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Visibility toggle
-                GestureDetector(
-                  onTap: _toggleVisibility,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _visibility == 'public'
-                          ? Colors.black45
-                          : Colors.indigo,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _visibility == 'public' ? Icons.public : Icons.group,
-                          color: _visibility == 'public'
-                              ? Colors.white70
-                              : Colors.white,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _visibility == 'public'
-                              ? 'Public Map'
-                              : 'Followers Only',
-                          style: GoogleFonts.inter(
-                            color: _visibility == 'public'
-                                ? Colors.white70
-                                : Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Colors.black38,
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
             ),
           ),
 
-          // 3. The Auto-Overlay Sticker (Bottom Left)
+          // 2c. Location / overlay tag (upper-left, below the top row)
           Positioned(
+            top: MediaQuery.of(context).padding.top + 60,
             left: 16,
-            bottom: 120,
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 StoryOverlayWidget(
                   locationName: _currentLocationName,
@@ -718,8 +774,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                       : _selectedVibes.join(' · '),
                   onTap: _showEditOverlayBottomSheet,
                 ),
-                const SizedBox(width: 8),
-                if (_includeLocation)
+                if (_includeLocation) ...[
+                  const SizedBox(width: 8),
                   GestureDetector(
                     onTap: _editLocation,
                     child: Container(
@@ -735,6 +791,105 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
                       ),
                     ),
                   ),
+                ],
+              ],
+            ),
+          ),
+
+          // 3. Utility control stack (lower-left) — Map-style buttons, each
+          // opening a popover to the right.
+          Positioned(
+            left: 16,
+            bottom: 150,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Flash → Off / On / Auto
+                _controlRow(
+                  'flash',
+                  _utilityButton(
+                    icon: _flashIcon(),
+                    active: _activePopover == 'flash',
+                    onTap: () => _togglePopover('flash'),
+                  ),
+                  [
+                    _PopoverOption(
+                      label: 'Off',
+                      selected: _flashMode == FlashMode.off,
+                      onTap: () => _setFlashMode(FlashMode.off),
+                    ),
+                    _PopoverOption(
+                      label: 'On',
+                      selected: _flashMode == FlashMode.always ||
+                          _flashMode == FlashMode.torch,
+                      onTap: () => _setFlashMode(FlashMode.always),
+                    ),
+                    _PopoverOption(
+                      label: 'Auto',
+                      selected: _flashMode == FlashMode.auto,
+                      onTap: () => _setFlashMode(FlashMode.auto),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Location → On / Off
+                _controlRow(
+                  'location',
+                  _utilityButton(
+                    icon: _includeLocation
+                        ? Icons.location_on
+                        : Icons.location_off,
+                    active: _includeLocation,
+                    onTap: () => _togglePopover('location'),
+                  ),
+                  [
+                    _PopoverOption(
+                      label: 'On',
+                      selected: _includeLocation,
+                      onTap: () => setState(() {
+                        _includeLocation = true;
+                        _activePopover = null;
+                      }),
+                    ),
+                    _PopoverOption(
+                      label: 'Off',
+                      selected: !_includeLocation,
+                      onTap: () => setState(() {
+                        _includeLocation = false;
+                        _activePopover = null;
+                      }),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Privacy → Public / Followers
+                _controlRow(
+                  'privacy',
+                  _utilityButton(
+                    icon: _visibility == 'public' ? Icons.public : Icons.group,
+                    active: _activePopover == 'privacy',
+                    onTap: () => _togglePopover('privacy'),
+                  ),
+                  [
+                    _PopoverOption(
+                      label: 'Public',
+                      selected: _visibility == 'public',
+                      onTap: () => setState(() {
+                        _visibility = 'public';
+                        _activePopover = null;
+                      }),
+                    ),
+                    _PopoverOption(
+                      label: 'Followers',
+                      selected: _visibility == 'followers',
+                      onTap: () => setState(() {
+                        _visibility = 'followers';
+                        _activePopover = null;
+                      }),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -860,9 +1015,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
   }
 }
 
+/// One row inside a story-control popover (Flash / Location / Privacy).
+class _PopoverOption {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _PopoverOption({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+}
+
 class _VideoEditorScreen extends StatefulWidget {
   final File videoFile;
-  final Function(Uint8List) onComplete;
+  // Awaited by the editor's completion flow, so the caller can finish writing
+  // the file before the editor hides its overlay and closes.
+  final Future<void> Function(Uint8List) onComplete;
 
   const _VideoEditorScreen({
     Key? key,
@@ -958,7 +1127,7 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
       debugPrint(
         '✅ Video rendered successfully: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB',
       );
-      widget.onComplete(bytes);
+      await widget.onComplete(bytes);
     } catch (e) {
       debugPrint('⚠️ Video rendering skipped or failed: $e');
       debugPrint('🔄 Uploading raw video without edits...');
@@ -967,7 +1136,7 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
         debugPrint(
           '📹 Raw video size: ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MB',
         );
-        widget.onComplete(bytes);
+        await widget.onComplete(bytes);
       } catch (fallbackError) {
         debugPrint('❌ Fallback also failed: $fallbackError');
       }

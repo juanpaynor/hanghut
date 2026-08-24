@@ -10,8 +10,7 @@ import 'package:bitemates/core/theme/app_theme.dart';
 
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
+import 'package:bitemates/core/services/places_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 
@@ -68,14 +67,6 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
   List<Map<String, dynamic>> _placePredictions = [];
   Timer? _debounce;
   bool _showPredictions = false;
-  static const String _fallbackGoogleKey =
-      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-
-  String get _googleApiKey {
-    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    if (envKey.isNotEmpty) return envKey;
-    return _fallbackGoogleKey;
-  }
 
   final _types = [
     ('workshop', '🎨', 'Workshop'),
@@ -289,7 +280,7 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
             content: Text(
               _isEditing
                   ? 'Experience updated successfully!'
-                  : '🎉 Experience submitted! Hanghut will review and verify it shortly.',
+                  : '🎉 Experience submitted! HangHut will review and verify it shortly.',
             ),
             backgroundColor: Colors.green,
           ),
@@ -703,7 +694,7 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
           _sectionTitle('Set your price'),
           const SizedBox(height: 8),
           Text(
-            'You\'ll receive your earnings after Hanghut\'s platform fee.',
+            'You\'ll receive your earnings after HangHut\'s platform fee.',
             style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
           ),
           const SizedBox(height: 32),
@@ -834,84 +825,50 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
     });
   }
 
+  // One Places session token per search (autocomplete calls + details fetch),
+  // rotated after each pick so the search bills as a single session.
+  String? _placesSession;
+
   Future<void> _getPlacePredictions(String input) async {
-    debugPrint(
-      '🔍 Searching Places for: "$input" using key: ${_googleApiKey.substring(0, 5)}...',
+    _placesSession ??= PlacesService.instance.newSessionToken();
+    final predictions = await PlacesService.instance.autocomplete(
+      input,
+      lat: _lat,
+      lng: _lng,
+      radiusMeters: 30000,
+      sessionToken: _placesSession,
     );
-    try {
-      var urlString =
-          'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$_googleApiKey';
-      // Bias towards current location if available
-      urlString += '&location=$_lat,$_lng&radius=30000';
-
-      final response = await http.get(Uri.parse(urlString));
-      debugPrint('📥 Places Response: ${response.statusCode}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        debugPrint('📦 Places Data Status: ${data['status']}');
-
-        if (data['status'] == 'OK') {
-          setState(() {
-            _placePredictions = List<Map<String, dynamic>>.from(
-              data['predictions'].map(
-                (p) => {
-                  'place_id': p['place_id'],
-                  'description': p['description'],
-                  'main_text': p['structured_formatting']['main_text'],
-                  'secondary_text':
-                      p['structured_formatting']['secondary_text'],
-                },
-              ),
-            );
-            _showPredictions = true;
-          });
-          debugPrint('✅ Found ${_placePredictions.length} predictions');
-        } else {
-          debugPrint(
-            '⚠️ Places Error: ${data['status']} - ${data['error_message']}',
-          );
-          setState(() {
-            _placePredictions = [];
-            _showPredictions = false;
-          });
-        }
-      } else {
-        debugPrint('❌ HTTP Error: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('❌ Places Exception: $e');
-    }
+    if (!mounted) return;
+    setState(() {
+      _placePredictions = predictions
+          .map((p) => <String, dynamic>{
+                'place_id': p.placeId,
+                'description': p.description,
+                'main_text': p.mainText,
+                'secondary_text': p.secondaryText,
+              })
+          .toList();
+      _showPredictions = predictions.isNotEmpty;
+    });
   }
 
   Future<void> _getPlaceDetails(String placeId, String description) async {
-    try {
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&key=$_googleApiKey&fields=geometry,name,formatted_address',
-      );
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          final result = data['result'];
-          final location = result['geometry']['location'];
-
-          setState(() {
-            _locationNameController.text =
-                result['name']; // Use name as location name
-            // Optionally store address separately if needed, but for experiences "Location Name" is usually what we want displayed
-            // We could append address if we want.
-            _lat = location['lat'];
-            _lng = location['lng'];
-            _showPredictions = false;
-            _placePredictions = [];
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Place Details Error: $e');
-    }
+    final details = await PlacesService.instance.details(
+      placeId,
+      sessionToken: _placesSession,
+    );
+    _placesSession = null; // close the session; next search starts fresh
+    if (details == null || !mounted) return;
+    setState(() {
+      // For experiences the "Location Name" is what we display.
+      _locationNameController.text = details.name.isNotEmpty
+          ? details.name
+          : description;
+      _lat = details.latitude;
+      _lng = details.longitude;
+      _showPredictions = false;
+      _placePredictions = [];
+    });
   }
 
   Future<void> _pickLocationOnMap() async {

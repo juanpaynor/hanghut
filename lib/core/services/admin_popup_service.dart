@@ -4,59 +4,59 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AdminPopupService {
   static const String _seenPrefix = 'popup_seen_';
 
-  /// Fetches all active popups from Supabase and returns the first one
-  /// that the user is eligible to see (not in cooldown).
-  Future<Map<String, dynamic>?> checkAndGetActivePopup() async {
+  /// Safety cap so a mistake on the admin side can never trap a user behind a
+  /// wall of modals on a single launch.
+  static const int _maxPerLaunch = 3;
+
+  /// Fetches the active popups the user is eligible to see this launch, in the
+  /// order they should be shown (a queue — the caller displays them one after
+  /// another): highest `priority` first, newest as the tiebreaker. Respects the
+  /// optional scheduling window (starts_at/ends_at). Capped at [_maxPerLaunch].
+  Future<List<Map<String, dynamic>>> getEligiblePopups() async {
     try {
-      // 1. Fetch ALL active popups from Supabase, newest first
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       final response = await SupabaseConfig.client
           .from('admin_popups')
           .select()
           .eq('is_active', true)
+          // Scheduling window: a null bound means "no bound on that side".
+          .or('starts_at.is.null,starts_at.lte.$nowIso')
+          .or('ends_at.is.null,ends_at.gte.$nowIso')
+          .order('priority', ascending: false)
           .order('created_at', ascending: false);
 
-      final popups = response as List<dynamic>;
-
-      if (popups.isEmpty) {
-        return null; // No active popups at all
-      }
+      final popups = (response as List<dynamic>).cast<Map<String, dynamic>>();
+      if (popups.isEmpty) return const [];
 
       final prefs = await SharedPreferences.getInstance();
 
-      // 2. Iterate through them to find the first one the user should see
+      final eligible = <Map<String, dynamic>>[];
       for (final popup in popups) {
-        final popupData = popup as Map<String, dynamic>;
-        final popupId = popupData['id'] as String;
-        final cooldownDays = popupData['cooldown_days'] as int?;
-
-        final lastSeenIso = prefs.getString('$_seenPrefix$popupId');
-
-        if (lastSeenIso == null) {
-          // Never seen this one! Show it.
-          return popupData;
-        }
-
-        final lastSeenDate = DateTime.parse(lastSeenIso);
-
-        // Option A: Never show again
-        if (cooldownDays == null || cooldownDays <= 0) {
-          continue; // Move to the next popup in the list
-        }
-
-        // Option B: Check if cooldown period is over
-        final timePassed = DateTime.now().difference(lastSeenDate);
-        if (timePassed.inDays >= cooldownDays) {
-          return popupData; // Cooldown is over, show it!
+        if (_isEligible(popup, prefs)) {
+          eligible.add(popup);
+          if (eligible.length >= _maxPerLaunch) break;
         }
       }
-
-      // If we made it here, all active popups are either dismissed permanently
-      // or currently on cooldown. Show nothing.
-      return null;
+      return eligible;
     } catch (e) {
-      print('❌ Error fetching admin popup: $e');
-      return null;
+      print('❌ Error fetching admin popups: $e');
+      return const [];
     }
+  }
+
+  /// A popup is eligible if it's never been seen, or its cooldown has elapsed.
+  /// cooldown_days null/<=0 means "show once, never again".
+  bool _isEligible(Map<String, dynamic> popup, SharedPreferences prefs) {
+    final popupId = popup['id'] as String;
+    final lastSeenIso = prefs.getString('$_seenPrefix$popupId');
+    if (lastSeenIso == null) return true; // never seen
+
+    final cooldownDays = popup['cooldown_days'] as int?;
+    if (cooldownDays == null || cooldownDays <= 0) return false; // once only
+
+    final lastSeen = DateTime.tryParse(lastSeenIso);
+    if (lastSeen == null) return true; // corrupt timestamp → treat as unseen
+    return DateTime.now().difference(lastSeen).inDays >= cooldownDays;
   }
 
   /// Called when the user dismisses the popup. Saves the timestamp.
@@ -69,6 +69,25 @@ class AdminPopupService {
       );
     } catch (e) {
       print('❌ Error marking popup as seen: $e');
+    }
+  }
+
+  /// Records that a popup was shown. Fire-and-forget — analytics must never
+  /// throw into the launch path. The RPC no-ops on an unknown kind / missing id.
+  Future<void> recordImpression(String popupId) =>
+      _recordStat(popupId, 'impression');
+
+  /// Records that the user tapped the popup's action. Fire-and-forget.
+  Future<void> recordTap(String popupId) => _recordStat(popupId, 'tap');
+
+  Future<void> _recordStat(String popupId, String kind) async {
+    try {
+      await SupabaseConfig.client.rpc(
+        'increment_popup_stat',
+        params: {'p_popup_id': popupId, 'p_kind': kind},
+      );
+    } catch (e) {
+      print('⚠️ Popup $kind stat failed (non-fatal): $e');
     }
   }
 }

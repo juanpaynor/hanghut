@@ -10,6 +10,7 @@ import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/mention_overlay.dart';
 import 'package:video_player/video_player.dart';
 
+import 'dart:async';
 import 'dart:io';
 
 class CreatePostModal extends StatefulWidget {
@@ -39,6 +40,15 @@ class _CreatePostModalState extends State<CreatePostModal> {
   // Mention state
   String? _mentionQuery;
   bool _showMentionOverlay = false;
+
+  // Event tag (inline search + attach)
+  final TextEditingController _eventSearchController = TextEditingController();
+  final FocusNode _eventSearchFocus = FocusNode();
+  bool _eventSearchExpanded = false;
+  bool _eventSearching = false;
+  List<Map<String, dynamic>> _eventResults = [];
+  Map<String, dynamic>? _selectedEvent;
+  Timer? _eventDebounce;
 
   bool get _hasContent =>
       _textController.text.trim().isNotEmpty ||
@@ -100,6 +110,9 @@ class _CreatePostModalState extends State<CreatePostModal> {
     _textController.removeListener(_onTextChanged);
     _textController.dispose();
     _textFocus.dispose();
+    _eventDebounce?.cancel();
+    _eventSearchController.dispose();
+    _eventSearchFocus.dispose();
     _videoPreviewController?.dispose();
     super.dispose();
   }
@@ -137,6 +150,72 @@ class _CreatePostModalState extends State<CreatePostModal> {
         _mentionQuery = null;
       });
     }
+  }
+
+  // ── Event tag ────────────────────────────────────────────────
+
+  void _toggleEventSearch() {
+    setState(() => _eventSearchExpanded = !_eventSearchExpanded);
+    if (_eventSearchExpanded) {
+      // Browse (empty query) on open, then focus the field.
+      if (_eventResults.isEmpty) _searchEvents('');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _eventSearchFocus.requestFocus();
+      });
+    }
+  }
+
+  void _onEventQueryChanged(String q) {
+    _eventDebounce?.cancel();
+    _eventDebounce = Timer(
+      const Duration(milliseconds: 300),
+      () => _searchEvents(q.trim()),
+    );
+  }
+
+  Future<void> _searchEvents(String q) async {
+    setState(() => _eventSearching = true);
+    try {
+      final res = await SupabaseConfig.client.rpc(
+        'search_events_for_post',
+        params: {'q': q},
+      );
+      if (!mounted) return;
+      setState(() {
+        _eventResults = List<Map<String, dynamic>>.from(res as List);
+        _eventSearching = false;
+      });
+    } catch (e) {
+      debugPrint('Event search failed: $e');
+      if (mounted) setState(() => _eventSearching = false);
+    }
+  }
+
+  void _selectEvent(Map<String, dynamic> event) {
+    _eventSearchFocus.unfocus();
+    setState(() {
+      _selectedEvent = event;
+      _eventSearchExpanded = false;
+      _eventSearchController.clear();
+      _eventResults = [];
+    });
+  }
+
+  void _clearEvent() {
+    setState(() => _selectedEvent = null);
+  }
+
+  /// "Fri, 8 PM" style short label for an event start time.
+  String _formatEventTime(String? iso) {
+    if (iso == null) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final day = days[dt.weekday - 1];
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final ampm = dt.hour < 12 ? 'AM' : 'PM';
+    final min = dt.minute == 0 ? '' : ':${dt.minute.toString().padLeft(2, '0')}';
+    return '$day, $h$min $ampm';
   }
 
   void _onMentionSelected(Map<String, dynamic> user) {
@@ -342,6 +421,7 @@ class _CreatePostModalState extends State<CreatePostModal> {
         latitude: _locationEnabled ? _currentPosition?.latitude : null,
         longitude: _locationEnabled ? _currentPosition?.longitude : null,
         mentionedUserIds: mentionedUserIds,
+        eventId: _selectedEvent?['id'] as String?,
       );
 
       if (result != null && mounted) {
@@ -455,6 +535,9 @@ class _CreatePostModalState extends State<CreatePostModal> {
                       hasVideo,
                       _textController.text.characters.length,
                     ),
+
+                    // Event tag — inline search + attach
+                    _buildEventSection(isDark),
 
                     // Image Preview Grid
                     if (hasImages) ...[
@@ -850,6 +933,260 @@ class _CreatePostModalState extends State<CreatePostModal> {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // EVENT TAG — collapsed row → inline search → attached card
+  // ═══════════════════════════════════════════════════════════════
+
+  Widget _buildEventSection(bool isDark) {
+    final divider = isDark ? Colors.grey[850]! : Colors.grey[200]!;
+
+    // Attached state — compact card with clear button.
+    if (_selectedEvent != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppTheme.primaryColor.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: AppTheme.primaryColor.withValues(alpha: 0.25),
+            ),
+          ),
+          child: Row(
+            children: [
+              _eventThumb(_selectedEvent!['cover_image_url'] as String?, 44),
+              const SizedBox(width: 10),
+              Expanded(child: _eventTitleBlock(_selectedEvent!, compact: true)),
+              IconButton(
+                icon: Icon(Icons.close_rounded, size: 20, color: Colors.grey[600]),
+                onPressed: _clearEvent,
+                tooltip: 'Remove event',
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Collapsed row — "Event … Add >"
+    if (!_eventSearchExpanded) {
+      return Column(
+        children: [
+          const SizedBox(height: 8),
+          Divider(height: 1, color: divider),
+          InkWell(
+            onTap: _toggleEventSearch,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.calendar_today_rounded,
+                    size: 18,
+                    color: isDark ? Colors.grey[400] : Colors.grey[600],
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Event',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.grey[200] : Colors.grey[800],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Add',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[500],
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(Icons.chevron_right_rounded, size: 20, color: Colors.grey[500]),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Expanded — search field + capped, scrollable results.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Divider(height: 1, color: divider),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Icon(
+              Icons.calendar_today_rounded,
+              size: 18,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Event',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.grey[200] : Colors.grey[800],
+              ),
+            ),
+            const Spacer(),
+            GestureDetector(
+              onTap: _toggleEventSearch,
+              child: Icon(Icons.close_rounded, size: 20, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _eventSearchController,
+          focusNode: _eventSearchFocus,
+          onChanged: _onEventQueryChanged,
+          decoration: InputDecoration(
+            hintText: 'Search by event name or organizer',
+            hintStyle: TextStyle(fontSize: 14, color: Colors.grey[400]),
+            prefixIcon: Icon(Icons.search_rounded, size: 20, color: Colors.grey[500]),
+            isDense: true,
+            filled: true,
+            fillColor: isDark ? Colors.grey[850] : Colors.grey[100],
+            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: AppTheme.primaryColor.withValues(alpha: 0.4),
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppTheme.primaryColor, width: 1.5),
+            ),
+          ),
+          style: const TextStyle(fontSize: 15),
+        ),
+        const SizedBox(height: 8),
+        // Capped, scrollable results (same pattern as the Map filters).
+        SizedBox(
+          height: 260,
+          child: _buildEventResults(isDark),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEventResults(bool isDark) {
+    if (_eventSearching && _eventResults.isEmpty) {
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
+    if (_eventResults.isEmpty) {
+      return Center(
+        child: Text(
+          'No events found',
+          style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: _eventResults.length,
+      separatorBuilder: (_, __) => Divider(
+        height: 1,
+        color: isDark ? Colors.grey[850] : Colors.grey[200],
+      ),
+      itemBuilder: (context, i) {
+        final e = _eventResults[i];
+        return InkWell(
+          onTap: () => _selectEvent(e),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                _eventThumb(e['cover_image_url'] as String?, 44),
+                const SizedBox(width: 12),
+                Expanded(child: _eventTitleBlock(e)),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _eventThumb(String? url, double size) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: (url != null && url.isNotEmpty)
+          ? Image.network(
+              url,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _eventThumbFallback(size),
+            )
+          : _eventThumbFallback(size),
+    );
+  }
+
+  Widget _eventThumbFallback(double size) {
+    return Container(
+      width: size,
+      height: size,
+      color: AppTheme.primaryColor.withValues(alpha: 0.15),
+      child: Icon(
+        Icons.event_rounded,
+        size: size * 0.5,
+        color: AppTheme.primaryColor,
+      ),
+    );
+  }
+
+  Widget _eventTitleBlock(Map<String, dynamic> e, {bool compact = false}) {
+    final organizer = (e['organizer_name'] as String?)?.trim();
+    final time = _formatEventTime(e['start_datetime'] as String?);
+    final subtitleParts = <String>[
+      if (organizer != null && organizer.isNotEmpty) 'by $organizer',
+      if (time.isNotEmpty) time,
+    ];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          (e['title'] as String?) ?? 'Untitled event',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+        if (subtitleParts.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            subtitleParts.join(' · '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          ),
+        ],
+      ],
+    );
   }
 }
 

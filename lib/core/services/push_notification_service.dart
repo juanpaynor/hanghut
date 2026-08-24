@@ -12,6 +12,7 @@ import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -132,7 +133,10 @@ class PushNotificationService {
 
   Future<void> handleNotificationTap(Map<String, dynamic> data) async {
     print('🔔 Handling Tap: $data');
-    if (data['type'] == 'chat_message' || data['type'] == 'chat') {
+    if (data['type'] == 'chat_message' ||
+        data['type'] == 'chat' ||
+        // Chat mentions carry a chat_type → route into the chat, not a post.
+        (data['type'] == 'mention' && data['chat_type'] != null)) {
       final String chatType = data['chat_type'] ?? 'table';
       // Support both push data keys (table_id, chat_id) and bell data keys (entity_id)
       var entityId =
@@ -214,6 +218,7 @@ class PushNotificationService {
         data['type'] == 'group_approved' ||
         data['type'] == 'group_invite' ||
         data['type'] == 'group_invite_suggestion' ||
+        data['type'] == 'group_admin_promoted' ||
         data['type'] == 'group_detail') {
       // Group membership notifications — open the group detail screen.
       // entity_id (or explicit group_id) carries the group id.
@@ -268,8 +273,11 @@ class PushNotificationService {
           (route) => false,
         );
       }
-    } else if (data['type'] == 'like' || data['type'] == 'comment') {
-      // Social notifications — open the post detail
+    } else if (data['type'] == 'like' ||
+        data['type'] == 'comment' ||
+        data['type'] == 'mention') {
+      // Social notifications (incl. post/comment mentions) — open the post detail.
+      // Chat mentions are handled above (they carry a chat_type).
       final postId =
           data['post_id']?.toString() ?? data['entity_id']?.toString();
       if (postId != null) {
@@ -306,6 +314,21 @@ class PushNotificationService {
         Navigator.of(navContext).push(
           MaterialPageRoute(builder: (_) => const MyMembershipsScreen()),
         );
+      }
+    } else if (data['type'] == 'new_follower') {
+      // Someone followed you → open their profile.
+      // notify_new_follower sets entity_id + metadata.follower_id to the follower.
+      final followerId =
+          data['follower_id']?.toString() ?? data['entity_id']?.toString();
+      if (followerId != null) {
+        final navContext = navigatorKey.currentContext;
+        if (navContext != null) {
+          Navigator.of(navContext).push(
+            MaterialPageRoute(
+              builder: (_) => UserProfileScreen(userId: followerId),
+            ),
+          );
+        }
       }
     } else if (data['type'] == 'new_subscriber_post') {
       // New members-only post → open Feed tab
@@ -399,6 +422,26 @@ class PushNotificationService {
       }
     } catch (e) {
       print('❌ FCM: Error saving token on login: $e');
+    }
+  }
+
+  /// Clear this device's FCM token from the current user's row on logout so the
+  /// account stops receiving pushes on this device. MUST run BEFORE
+  /// auth.signOut() — afterwards currentUser is null and RLS blocks the update.
+  /// (A DB trigger also enforces one-user-per-token, but clearing here closes
+  /// the window immediately and handles the case where the next login is on a
+  /// different device.)
+  Future<void> clearTokenOnLogout() async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) return;
+      await SupabaseConfig.client
+          .from('users')
+          .update({'fcm_token': null})
+          .eq('id', user.id);
+      print('✅ FCM: Token cleared on logout for ${user.email}');
+    } catch (e) {
+      print('❌ FCM: Error clearing token on logout: $e');
     }
   }
 }

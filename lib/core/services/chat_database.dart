@@ -20,7 +20,7 @@ class ChatDatabase {
 
     _database = await openDatabase(
       path,
-      version: 3, // Bumped for sequence_number
+      version: 4, // Bumped for is_forwarded
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -42,6 +42,7 @@ class ChatDatabase {
         message_type TEXT DEFAULT 'text',
         gif_url TEXT,
         chat_type TEXT DEFAULT 'table',
+        is_forwarded INTEGER DEFAULT 0,
         synced INTEGER DEFAULT 0
       )
     ''');
@@ -73,6 +74,13 @@ class ChatDatabase {
         ON messages(table_id, sequence_number DESC)
       ''');
       print('🆙 Upgraded ChatDatabase to v3 (added sequence_number)');
+    }
+
+    if (oldVersion < 4) {
+      await db.execute(
+        "ALTER TABLE messages ADD COLUMN is_forwarded INTEGER DEFAULT 0",
+      );
+      print('🆙 Upgraded ChatDatabase to v4 (added is_forwarded)');
     }
   }
 
@@ -296,6 +304,7 @@ class ChatDatabase {
           'message_type': msg['message_type'] ?? msg['content_type'] ?? 'text',
           'gif_url': msg['gif_url'],
           'chat_type': chatType,
+          'is_forwarded': msg['is_forwarded'] == true ? 1 : 0,
           'synced': 1,
         };
       }).toList();

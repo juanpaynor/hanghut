@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
+
+import 'package:bitemates/core/services/places_service.dart';
 
 /// Result returned when a place is selected.
 class PlaceResult {
@@ -55,12 +54,6 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
   List<Map<String, dynamic>> _predictions = [];
   bool _isLoading = false;
 
-  static const String _fallbackKey = 'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-  String get _apiKey {
-    final k = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    return k.isNotEmpty ? k : _fallbackKey;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -87,35 +80,31 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
     _debounce = Timer(const Duration(milliseconds: 400), () => _search(q));
   }
 
+  // One Places session token per search, reused across autocomplete + details
+  // and rotated after a pick so the search bills as a single session.
+  String? _placesSession;
+
   Future<void> _search(String input) async {
     setState(() => _isLoading = true);
     try {
-      var url =
-          'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${Uri.encodeComponent(input)}&key=$_apiKey';
-      if (widget.currentLat != null && widget.currentLng != null) {
-        url +=
-            '&location=${widget.currentLat},${widget.currentLng}&radius=30000';
-      }
-      final res = await http.get(Uri.parse(url));
-      if (res.statusCode == 200) {
-        final data = json.decode(res.body);
-        if (data['status'] == 'OK') {
-          setState(() {
-            _predictions = List<Map<String, dynamic>>.from(
-              (data['predictions'] as List).map(
-                (p) => {
-                  'place_id': p['place_id'],
-                  'main_text': p['structured_formatting']['main_text'],
-                  'secondary_text':
-                      p['structured_formatting']['secondary_text'] ?? '',
-                },
-              ),
-            );
-          });
-        } else {
-          setState(() => _predictions = []);
-        }
-      }
+      _placesSession ??= PlacesService.instance.newSessionToken();
+      final predictions = await PlacesService.instance.autocomplete(
+        input,
+        lat: widget.currentLat,
+        lng: widget.currentLng,
+        radiusMeters: 30000,
+        sessionToken: _placesSession,
+      );
+      if (!mounted) return;
+      setState(() {
+        _predictions = predictions
+            .map((p) => <String, dynamic>{
+                  'place_id': p.placeId,
+                  'main_text': p.mainText,
+                  'secondary_text': p.secondaryText,
+                })
+            .toList();
+      });
     } catch (e) {
       debugPrint('PlaceSearchSheet: search error $e');
     } finally {
@@ -126,29 +115,25 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
   Future<void> _selectPlace(Map<String, dynamic> prediction) async {
     setState(() => _isLoading = true);
     try {
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/place/details/json?place_id=${prediction['place_id']}&key=$_apiKey&fields=geometry,name,formatted_address',
+      final details = await PlacesService.instance.details(
+        prediction['place_id'] as String,
+        sessionToken: _placesSession,
       );
-      final res = await http.get(url);
-      if (res.statusCode == 200) {
-        final data = json.decode(res.body);
-        if (data['status'] == 'OK') {
-          final result = data['result'];
-          final loc = result['geometry']['location'];
-          if (mounted) {
-            Navigator.pop(
-              context,
-              PlaceResult(
-                name: result['name'] as String? ?? prediction['main_text'],
-                address:
-                    result['formatted_address'] as String? ??
-                    prediction['secondary_text'],
-                latitude: (loc['lat'] as num).toDouble(),
-                longitude: (loc['lng'] as num).toDouble(),
-              ),
-            );
-          }
-        }
+      _placesSession = null; // close the session; next search starts fresh
+      if (details != null && mounted) {
+        Navigator.pop(
+          context,
+          PlaceResult(
+            name: details.name.isNotEmpty
+                ? details.name
+                : prediction['main_text'],
+            address: details.formattedAddress.isNotEmpty
+                ? details.formattedAddress
+                : prediction['secondary_text'],
+            latitude: details.latitude,
+            longitude: details.longitude,
+          ),
+        );
       }
     } catch (e) {
       debugPrint('PlaceSearchSheet: details error $e');

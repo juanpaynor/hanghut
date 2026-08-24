@@ -19,6 +19,7 @@ class TableService {
     double? minLng,
     double? maxLng,
     int? limit, // New: Server-side limit
+    int? offset, // New: Server-side pagination (used with limit)
   }) async {
     try {
       var query = SupabaseConfig.client.from('map_ready_tables').select('''
@@ -49,8 +50,11 @@ class TableService {
       // Order by scheduled time to get soonest events first, but limiting is key.
       var builder = query.order('scheduled_time', ascending: true);
 
-      // Apply limit if provided
-      if (limit != null) {
+      // Pagination: use range() when an offset is given (page N), otherwise a
+      // simple limit for the first/only page.
+      if (limit != null && offset != null) {
+        builder = builder.range(offset, offset + limit - 1);
+      } else if (limit != null) {
         builder = builder.limit(limit);
       }
 

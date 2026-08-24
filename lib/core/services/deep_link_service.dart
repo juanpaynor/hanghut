@@ -3,6 +3,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:bitemates/main.dart'; // navigatorKey
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
 
 /// Handles incoming iOS Universal Links / Android App Links.
 ///
@@ -49,23 +50,31 @@ class DeepLinkService {
   }
 
   void _handleUri(Uri uri) {
-    // Strictly scope to our own Universal Links. OAuth/Supabase callbacks use a
-    // different scheme/host and must fall through untouched.
-    if (uri.scheme != 'https') return;
-    if (uri.host != 'hanghut.com' && !uri.host.endsWith('.hanghut.com')) return;
+    // One shared parser (ShareLinks) owns the URL contract, so deep-link routing
+    // and share-link building can never drift. Non-entity links (OAuth/Supabase
+    // callbacks, unknown paths) parse to null and fall through untouched.
+    final target = ShareLinks.parse(uri);
+    if (target == null) return;
+    routeTarget(target);
+  }
 
-    final segments = uri.pathSegments;
-    if (segments.isEmpty) return;
-
-    switch (segments.first) {
-      case 'events':
-        if (segments.length >= 2 && segments[1].trim().isNotEmpty) {
-          _openEvent(segments[1]);
-        }
-        break;
-      // '/posts/*' is intentionally not handled yet — web has no public post
-      // route, so those links 404. Add a case here once the post contract +
-      // web fallback page ship (see team_comms #158/#159).
+  /// Routes an already-parsed deep-link target to the right in-app surface.
+  ///
+  /// Returns true if it navigated somewhere, false if this entity type isn't
+  /// wired up yet — callers that have the original URL (e.g. admin popups) can
+  /// then fall back to opening it in the browser so the web landing page shows.
+  bool routeTarget(({ShareEntityType type, String id}) target) {
+    switch (target.type) {
+      case ShareEntityType.event:
+        _openEvent(target.id);
+        return true;
+      case ShareEntityType.hangout:
+      case ShareEntityType.experience:
+      case ShareEntityType.post:
+        // Parsed but not yet routed. These wait on (a) web landing routes so
+        // the links don't 404 for non-app users, and (b) an open-by-id surface
+        // on our side. Wired per-type in Phase 1/3 as each ships.
+        return false;
     }
   }
 

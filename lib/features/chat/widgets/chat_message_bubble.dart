@@ -10,6 +10,16 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/chat/widgets/poll_message_bubble.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/share_card.dart';
+import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
+import 'package:bitemates/features/home/screens/post_detail_screen.dart';
+import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/features/map/widgets/liquid_morph_route.dart';
+import 'package:bitemates/core/services/experience_service.dart';
+import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 
 class ChatMessageBubble extends StatelessWidget {
   final Map<String, dynamic> msg;
@@ -19,6 +29,9 @@ class ChatMessageBubble extends StatelessWidget {
   // Computed values passed from parent state
   final String? replySenderName;
   final String? replyContent;
+  // Thumbnail URL when the replied-to message is an image/gif (shows a preview
+  // in the quoted reply instead of just a generic icon).
+  final String? replyImageUrl;
   final Widget statusIndicator;
   final List<Widget> reactionChips;
   final bool hasReactions;
@@ -42,6 +55,7 @@ class ChatMessageBubble extends StatelessWidget {
     required this.showHeader,
     this.replySenderName,
     this.replyContent,
+    this.replyImageUrl,
     required this.statusIndicator,
     required this.reactionChips,
     required this.hasReactions,
@@ -120,10 +134,15 @@ class ChatMessageBubble extends StatelessWidget {
                     ),
                   ),
 
-                // Message Bubble & Actions Wrapper
+                // Message Bubble & Actions Wrapper.
+                // Entrance animation is handled once, higher up, by
+                // _AnimatedMessageItem (only for live arrivals). Keeping a second
+                // fade/translate here caused a visible "double bounce" and also
+                // re-animated every bubble on scroll recycle — so it's disabled
+                // (begin == end == 1 → renders at rest).
                 TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 300),
+                  tween: Tween(begin: 1, end: 1),
+                  duration: Duration.zero,
                   curve: Curves.easeOut,
                   builder: (context, value, child) {
                     return Opacity(
@@ -166,22 +185,24 @@ class ChatMessageBubble extends StatelessWidget {
                                     bottom: hasReactions ? 6.0 : 0,
                                   ),
                                   child: Container(
-                                    padding: msg['contentType'] == 'gif'
+                                    padding:
+                                        (msg['contentType'] == 'gif' ||
+                                            msg['contentType'] == 'share')
                                         ? EdgeInsets.zero
                                         : const EdgeInsets.symmetric(
                                             horizontal: 12,
                                             vertical: 8,
                                           ),
                                     decoration: BoxDecoration(
-                                      color: msg['contentType'] == 'gif'
+                                      // Your bubbles carry the brand accent in
+                                      // both themes (text is already white);
+                                      // others stay neutral light/dark grey.
+                                      color:
+                                          (msg['contentType'] == 'gif' ||
+                                              msg['contentType'] == 'share')
                                           ? Colors.transparent
                                           : (isMe
-                                                ? Theme.of(
-                                                            context,
-                                                          ).brightness ==
-                                                          Brightness.dark
-                                                      ? Colors.blue[700]
-                                                      : Colors.black
+                                                ? Theme.of(context).primaryColor
                                                 : Theme.of(
                                                         context,
                                                       ).brightness ==
@@ -216,6 +237,44 @@ class ChatMessageBubble extends StatelessWidget {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
+                                        // Forwarded tag
+                                        if (msg['isForwarded'] == true)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 4,
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  Icons.forward,
+                                                  size: 12,
+                                                  color: (isMe &&
+                                                          msg['contentType'] !=
+                                                              'gif' &&
+                                                          msg['contentType'] !=
+                                                              'share')
+                                                      ? Colors.white70
+                                                      : Colors.grey[600],
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  'Forwarded',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontStyle: FontStyle.italic,
+                                                    color: (isMe &&
+                                                            msg['contentType'] !=
+                                                                'gif' &&
+                                                            msg['contentType'] !=
+                                                                'share')
+                                                        ? Colors.white70
+                                                        : Colors.grey[600],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         // Reply Preview Inside Bubble
                                         if (msg['reply_to_id'] != null &&
                                             replySenderName != null &&
@@ -244,36 +303,78 @@ class ChatMessageBubble extends StatelessWidget {
                                                 ),
                                               ),
                                             ),
-                                            child: Column(
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
                                               crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
+                                                  CrossAxisAlignment.center,
                                               children: [
-                                                Text(
-                                                  replySenderName!,
-                                                  style: TextStyle(
-                                                    color: isMe
-                                                        ? Colors.white
-                                                        : Colors.black87,
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.bold,
+                                                if (replyImageUrl != null) ...[
+                                                  ClipRRect(
+                                                    borderRadius:
+                                                        BorderRadius.circular(4),
+                                                    child: CachedNetworkImage(
+                                                      imageUrl: replyImageUrl!,
+                                                      width: 32,
+                                                      height: 32,
+                                                      fit: BoxFit.cover,
+                                                      placeholder: (_, __) =>
+                                                          Container(
+                                                            width: 32,
+                                                            height: 32,
+                                                            color: Colors.black
+                                                                .withValues(
+                                                                  alpha: 0.08,
+                                                                ),
+                                                          ),
+                                                      errorWidget:
+                                                          (_, __, ___) => Icon(
+                                                            Icons.image,
+                                                            size: 18,
+                                                            color: isMe
+                                                                ? Colors.white70
+                                                                : Colors.black45,
+                                                          ),
+                                                    ),
                                                   ),
-                                                ),
-                                                Text(
-                                                  replyContent!,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    color: isMe
-                                                        ? Colors.white
-                                                              .withValues(
-                                                                alpha: 0.8,
-                                                              )
-                                                        : Colors.black87
-                                                              .withValues(
-                                                                alpha: 0.8,
-                                                              ),
-                                                    fontSize: 11,
+                                                  const SizedBox(width: 6),
+                                                ],
+                                                Flexible(
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        replySenderName!,
+                                                        style: TextStyle(
+                                                          color: isMe
+                                                              ? Colors.white
+                                                              : Colors.black87,
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        replyContent!,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          color: isMe
+                                                              ? Colors.white
+                                                                    .withValues(
+                                                                      alpha: 0.8,
+                                                                    )
+                                                              : Colors.black87
+                                                                    .withValues(
+                                                                      alpha: 0.8,
+                                                                    ),
+                                                          fontSize: 11,
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 ),
                                               ],
@@ -362,6 +463,12 @@ class ChatMessageBubble extends StatelessWidget {
                                                   (context, url, error) =>
                                                       const Icon(Icons.error),
                                             ),
+                                          )
+                                        else if (msg['contentType'] == 'share')
+                                          _buildShareCard(
+                                            context,
+                                            msg['content'] ?? '',
+                                            isMe,
                                           )
                                         else
                                           _buildMentionAwareText(
@@ -518,9 +625,15 @@ class ChatMessageBubble extends StatelessWidget {
                                                         ? Colors.grey[800]
                                                         : Colors.grey[200],
                                                     placeholderWidget:
-                                                        const SizedBox.shrink(),
-                                                    errorWidget:
-                                                        const SizedBox.shrink(),
+                                                        _linkLoadingCard(
+                                                          context,
+                                                          isMe,
+                                                        ),
+                                                    errorWidget: _linkErrorCard(
+                                                      context,
+                                                      url,
+                                                      isMe,
+                                                    ),
                                                     onTap: () {
                                                       onOpenLink(
                                                         LinkableElement(
@@ -595,6 +708,264 @@ class ChatMessageBubble extends StatelessWidget {
   }
 
   /// Build text with @mentions highlighted and tappable
+  /// Shown while a link's metadata is being fetched.
+  Widget _linkLoadingCard(BuildContext context, bool isMe) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      height: 56,
+      decoration: BoxDecoration(
+        color: isMe
+            ? Colors.white.withOpacity(0.85)
+            : (isDark ? Colors.grey[800] : Colors.grey[200]),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Center(
+        child: SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+    );
+  }
+
+  /// Fallback when a site returns no preview metadata: a tappable card with the
+  /// host + URL so a link never renders as "nothing".
+  Widget _linkErrorCard(BuildContext context, String url, bool isMe) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final host = Uri.tryParse(url)?.host ?? url;
+    final fg = isMe ? Colors.black87 : (isDark ? Colors.white : Colors.black87);
+    final sub = isMe
+        ? Colors.black54
+        : (isDark ? Colors.grey[400] : Colors.grey[600]);
+    return GestureDetector(
+      onTap: () => onOpenLink(LinkableElement(url, url)),
+      child: Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isMe
+              ? Colors.white.withOpacity(0.85)
+              : (isDark ? Colors.grey[800] : Colors.grey[200]),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.link, size: 18, color: sub),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    host,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    url,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: sub, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Renders a shared entity (event/hangout/…) as a ShareCard bubble. Falls
+  /// back to the raw text if the content isn't a valid share envelope.
+  Widget _buildShareCard(BuildContext context, String content, bool isMe) {
+    final payload = SharePayload.tryParseMessageContent(content);
+    if (payload == null) {
+      return _buildMentionAwareText(context, content, isMe);
+    }
+    final card = _buildShareCardBody(context, payload, isMe);
+    final note = payload.note;
+    if (note == null || note.isEmpty) return card;
+    // The share bubble itself is transparent, so the caption gets its own mini
+    // bubble (matching the normal text-bubble colors) sitting above the card,
+    // reading as "your note + the card" — one message.
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Column(
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: isMe
+                ? Theme.of(context).primaryColor
+                : (isDark ? Colors.grey[800] : Colors.grey[100]),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Text(
+            note,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.35,
+              color: isMe
+                  ? Colors.white
+                  : (isDark ? Colors.white : Colors.black87),
+            ),
+          ),
+        ),
+        card,
+      ],
+    );
+  }
+
+  Widget _buildShareCardBody(
+    BuildContext context,
+    SharePayload payload,
+    bool isMe,
+  ) {
+    return ShareCard(
+      payload: payload,
+      onTap: () => _openSharedEntity(context, payload),
+      action: Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(
+          onPressed: () => _openSharedEntity(context, payload),
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          child: Text(
+            payload.type == ShareEntityType.event
+                ? 'View event'
+                : payload.type == ShareEntityType.post
+                ? 'View post'
+                : payload.type == ShareEntityType.hangout
+                ? 'View hangout'
+                : payload.type == ShareEntityType.experience
+                ? 'View experience'
+                : 'View',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the shared entity. Only events are routable today (Phase 1); other
+  /// types are parked until their open-by-id surfaces exist.
+  Future<void> _openSharedEntity(
+    BuildContext context,
+    SharePayload payload,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    // Posts open by id directly — no fetch needed.
+    if (payload.type == ShareEntityType.post) {
+      navigator.push(
+        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: payload.id)),
+      );
+      return;
+    }
+
+    // Events: fetch then open the detail modal.
+    if (payload.type == ShareEntityType.event) {
+      try {
+        final event = await EventService().getEvent(payload.id);
+        if (event == null) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('This event is no longer available.')),
+          );
+          return;
+        }
+        navigator.push(
+          MaterialPageRoute(builder: (_) => EventDetailModal(event: event)),
+        );
+      } catch (_) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text("Couldn't open that event.")),
+        );
+      }
+      return;
+    }
+
+    // Hangouts: fetch the tables row by id, then open the same compact modal
+    // the map uses (via LiquidMorphRoute).
+    if (payload.type == ShareEntityType.hangout) {
+      final size = MediaQuery.of(context).size;
+      try {
+        final table = await SupabaseConfig.client
+            .from('tables')
+            .select('*')
+            .eq('id', payload.id)
+            .maybeSingle();
+        if (table == null) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('This hangout is no longer available.'),
+            ),
+          );
+          return;
+        }
+        navigator.push(
+          LiquidMorphRoute(
+            center: Offset(size.width / 2, size.height / 2),
+            page: TableCompactModal(table: Map<String, dynamic>.from(table)),
+          ),
+        );
+      } catch (_) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text("Couldn't open that hangout.")),
+        );
+      }
+      return;
+    }
+
+    // Experiences (also `tables` rows): fetch via ExperienceService and open the
+    // experience detail modal.
+    if (payload.type == ShareEntityType.experience) {
+      try {
+        final experience =
+            await ExperienceService().getExperienceDetails(payload.id);
+        if (experience.isEmpty) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('This experience is no longer available.'),
+            ),
+          );
+          return;
+        }
+        navigator.push(
+          MaterialPageRoute(
+            builder: (_) => ExperienceDetailModal(
+              experience: experience,
+              matchData: const {},
+            ),
+          ),
+        );
+      } catch (_) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text("Couldn't open that experience.")),
+        );
+      }
+      return;
+    }
+  }
+
   Widget _buildMentionAwareText(BuildContext context, String text, bool isMe) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final defaultColor = isMe

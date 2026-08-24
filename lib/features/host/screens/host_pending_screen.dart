@@ -76,7 +76,7 @@ class HostPendingScreen extends StatelessWidget {
                         const SizedBox(height: 16),
                         _buildStep(
                           '1',
-                          'Hanghut reviews your application',
+                          'HangHut reviews your application',
                           'We check your info and experience type.',
                         ),
                         const SizedBox(height: 12),

@@ -65,6 +65,10 @@ class AuthService {
   // Sign out
   Future<void> signOut() async {
     try {
+      // Clear this device's push token FIRST, while we're still authenticated —
+      // otherwise the token stays mapped to this account and it keeps receiving
+      // pushes on this device after logging into a different account.
+      await PushNotificationService().clearTokenOnLogout();
       await _supabase.auth.signOut();
     } catch (e) {
       rethrow;

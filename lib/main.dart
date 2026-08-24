@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:bitemates/features/auth/screens/welcome_screen.dart';
@@ -186,27 +187,43 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
+  Session? _session;
+  StreamSubscription<AuthState>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    // Seed from the persisted/recovered session. supabase_flutter restores and
+    // (if needed) refreshes the session during init, so currentSession is the
+    // reliable source of truth — NOT the first onAuthStateChange emission,
+    // which can be null during a slow/failed refresh at cold start.
+    _session = SupabaseConfig.client.auth.currentSession;
+    _sub = SupabaseConfig.client.auth.onAuthStateChange.listen((data) {
+      if (!mounted) return;
+      // Only an EXPLICIT sign-out logs the user out. Transient events
+      // (tokenRefreshFailed, network hiccups) must never boot a user who still
+      // has a valid persisted session — that was the "logged out on exit" bug.
+      if (data.event == AuthChangeEvent.signedOut) {
+        setState(() => _session = null);
+      } else {
+        final s = data.session ?? SupabaseConfig.client.auth.currentSession;
+        if (s != null) setState(() => _session = s);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: SupabaseConfig.client.auth.onAuthStateChange,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator(color: Colors.black)),
-          );
-        }
-
-        final session = snapshot.hasData ? snapshot.data!.session : null;
-
-        if (session != null) {
-          // Use a separate widget to hold the Future state
-          return SessionHandler(session: session);
-        } else {
-          return const WelcomeScreen();
-        }
-      },
-    );
+    if (_session != null) {
+      return SessionHandler(session: _session!);
+    }
+    return const WelcomeScreen();
   }
 }
 
@@ -246,7 +263,11 @@ class _SessionHandlerState extends State<SessionHandler> {
       return false;
     } catch (e) {
       print('❌ Error checking profile: $e');
-      return false;
+      // Fail SAFE: a transient/network error must not kick an existing,
+      // logged-in user into onboarding (that reads as "logged out"). Assume the
+      // profile exists and let them in; a genuinely missing profile returns a
+      // clean null above (→ false), not an exception.
+      return true;
     }
   }
 
@@ -284,7 +305,10 @@ class _SessionHandlerState extends State<SessionHandler> {
               );
             }
 
-            if (profileSnapshot.hasError || profileSnapshot.data != true) {
+            // Only route to setup when the profile is DEFINITIVELY absent.
+            // Errors/nulls fall through to the app (fail-safe) so a launch-time
+            // hiccup never looks like a logout.
+            if (profileSnapshot.data == false) {
               print('⚠️ AUTH_GATE: No profile found, redirecting to setup');
               return const ProfileSetupScreen();
             }

@@ -59,7 +59,7 @@ class _SocialMagnetSplashScreenState extends State<SocialMagnetSplashScreen> {
             // "Hanghut" Letter-by-Letter Animation
             Row(
               mainAxisSize: MainAxisSize.min,
-              children: "Hanghut".split('').asMap().entries.map((entry) {
+              children: "HangHut".split('').asMap().entries.map((entry) {
                 final index = entry.key;
                 final letter = entry.value;
 

@@ -26,10 +26,14 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
   late String _selectedCategory;
   late String _selectedPrivacy;
   File? _newCoverImage;
+  File? _newIconImage;
   bool _isSaving = false;
 
   String? get _existingCoverUrl =>
       widget.group['cover_image_url'] as String?;
+
+  String? get _existingIconUrl =>
+      widget.group['icon_image_url'] as String?;
 
   static const _categories = <String, Map<String, dynamic>>{
     'food': {'label': 'Food', 'icon': Icons.restaurant, 'emoji': '🍕'},
@@ -117,6 +121,22 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
     }
   }
 
+  Future<void> _pickIconImage() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        setState(() => _newIconImage = File(picked.path));
+      }
+    } catch (e) {
+      debugPrint('Error picking group photo: $e');
+    }
+  }
+
   Future<void> _saveGroup() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -141,6 +161,7 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
           ? _cityController.text.trim()
           : null,
       coverImage: _newCoverImage,
+      iconImage: _newIconImage,
     );
 
     if (!mounted) return;
@@ -265,6 +286,91 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
                             ),
                           ),
               ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Group Photo (round profile picture)
+            Row(
+              children: [
+                GestureDetector(
+                  onTap: _pickIconImage,
+                  child: Stack(
+                    children: [
+                      Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.grey[900]
+                              : primaryColor.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: isDark
+                                ? Colors.grey[800]!
+                                : primaryColor.withOpacity(0.2),
+                          ),
+                          image: _newIconImage != null
+                              ? DecorationImage(
+                                  image: FileImage(_newIconImage!),
+                                  fit: BoxFit.cover,
+                                )
+                              : _existingIconUrl != null
+                                  ? DecorationImage(
+                                      image: NetworkImage(_existingIconUrl!),
+                                      fit: BoxFit.cover,
+                                    )
+                                  : null,
+                        ),
+                        child: (_newIconImage == null &&
+                                _existingIconUrl == null)
+                            ? Icon(Icons.add_a_photo_outlined,
+                                size: 26,
+                                color: isDark
+                                    ? Colors.grey[500]
+                                    : primaryColor.withOpacity(0.5))
+                            : null,
+                      ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: primaryColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Theme.of(context).scaffoldBackgroundColor,
+                              width: 2,
+                            ),
+                          ),
+                          child: const Icon(Icons.edit,
+                              size: 12, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Group photo',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Shown as the round icon everywhere. Optional — a category emoji is used if left empty.',
+                        style: TextStyle(
+                          color: isDark ? Colors.grey[500] : Colors.grey[600],
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
 

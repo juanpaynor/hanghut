@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:bitemates/core/config/supabase_config.dart';
 
 class HostService {
@@ -213,6 +214,192 @@ class HostService {
     }
   }
 
+  // ─── Events (Ticketed Events) ────────────────────────────────────────────
+  // Backed by the shared web/app RPCs create_event / update_event /
+  // set_event_published / manage_tiers (team_comms thread 198, #204/#206).
+  // The RPCs run as the caller (SECURITY DEFINER) and validate that
+  // organizer_id is an APPROVED partner the caller owns. Status at this
+  // boundary is the clean 2-state vocab 'draft' | 'published'; the DB maps
+  // published -> 'active' internally (a raw events.status read of a live event
+  // returns 'active', not 'published').
+
+  /// Returns all events organized by this partner, newest first, with their
+  /// ticket tiers embedded.
+  Future<List<Map<String, dynamic>>> getMyEvents(String partnerId) async {
+    final response = await _supabase
+        .from('events')
+        .select('*, ticket_tiers(*)')
+        .eq('organizer_id', partnerId)
+        .order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Uploads event images to a partner-owned prefix, per the storage RLS added
+  /// in team_comms #204: an approved partner may write objects whose first path
+  /// segment is their own partners.id. [bucket] is 'event-covers' (single cover)
+  /// or 'event-images' (gallery). Returns the public URLs to pass into
+  /// create_event / update_event.
+  Future<List<String>> uploadEventMedia({
+    required String partnerId,
+    required String bucket,
+    required List<File> files,
+  }) async {
+    final urls = <String>[];
+    for (final file in files) {
+      final ext = file.path.split('.').last;
+      final path =
+          '$partnerId/${DateTime.now().millisecondsSinceEpoch}_${urls.length}.$ext';
+      await _supabase.storage.from(bucket).upload(path, file);
+      urls.add(_supabase.storage.from(bucket).getPublicUrl(path));
+    }
+    return urls;
+  }
+
+  /// Creates an event via the shared `create_event` RPC. [payload] speaks the
+  /// boundary vocabulary — send status 'draft' | 'published', category as an
+  /// event_categories KEY (snake_case) or null, event_type as the events enum,
+  /// seating_type 'general_admission', and optional tiers[] of
+  /// {name, price, quantity_total, sort_order?} (omit -> auto GA tier).
+  /// Returns { event_id, status } with status 'draft' | 'published'.
+  Future<Map<String, dynamic>> createEvent(Map<String, dynamic> payload) async {
+    final response =
+        await _supabase.rpc('create_event', params: {'payload': payload});
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  /// Partial-updates an event via `update_event`. Only keys present in [payload]
+  /// change; [payload] MUST include `event_id`. Event-detail fields only —
+  /// tier changes go through [manageTiers]. Returns { event_id, status }.
+  Future<Map<String, dynamic>> updateEvent(Map<String, dynamic> payload) async {
+    final response =
+        await _supabase.rpc('update_event', params: {'payload': payload});
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  /// Publishes (true) or unpublishes (false) an event via `set_event_published`.
+  /// Unpublish is blocked by the RPC once any ticket is sold (use a cancel flow
+  /// instead). Returns { event_id, status } in the 'published' | 'draft' vocab.
+  Future<Map<String, dynamic>> setEventPublished({
+    required String eventId,
+    required bool publish,
+  }) async {
+    final response = await _supabase.rpc('set_event_published', params: {
+      'p_event_id': eventId,
+      'p_publish': publish,
+    });
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  /// Add / update / remove ticket tiers via `manage_tiers`. The RPC applies
+  /// REMOVE -> UPDATE -> ADD -> capacity check atomically (a failed guard rolls
+  /// the whole batch back). [add] = [{name, price, quantity_total, sort_order?}],
+  /// [update] = [{id, ...any of name|price|quantity_total|is_active|sort_order}]
+  /// (partial), [remove] = [tierId,...]. Returns the fresh full tiers[] ordered
+  /// by sort_order.
+  Future<List<Map<String, dynamic>>> manageTiers({
+    required String eventId,
+    List<Map<String, dynamic>> add = const [],
+    List<Map<String, dynamic>> update = const [],
+    List<String> remove = const [],
+  }) async {
+    final response = await _supabase.rpc('manage_tiers', params: {
+      'p_event_id': eventId,
+      'p_add': add,
+      'p_update': update,
+      'p_remove': remove,
+    });
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  /// Returns a single event (with tiers) by id, or null. Used to refresh the
+  /// per-event detail view after an edit/publish.
+  Future<Map<String, dynamic>?> getEvent(String eventId) async {
+    return _supabase
+        .from('events')
+        .select('*, ticket_tiers(*)')
+        .eq('id', eventId)
+        .maybeSingle();
+  }
+
+  /// Returns the attendee manifest for an event via the `get_event_attendees`
+  /// RPC (team_comms #217). SECURITY DEFINER: validates the caller owns the
+  /// event and resolves the logged-in buyer's profile with definer privileges,
+  /// so registered-user tickets return their REAL name/email/avatar (reading
+  /// `tickets` directly can't — the organizer token can't see buyer profiles).
+  /// [status] = all | valid | checked_in | refunded; [search] matches
+  /// ticket_number/name/email. Returns { total, limit, offset, attendees[] }.
+  Future<Map<String, dynamic>> getEventAttendees(
+    String eventId, {
+    int limit = 50,
+    int offset = 0,
+    String status = 'all',
+    String? search,
+  }) async {
+    final response = await _supabase.rpc('get_event_attendees', params: {
+      'p_event_id': eventId,
+      'p_limit': limit,
+      'p_offset': offset,
+      'p_status': status,
+      'p_search': (search != null && search.trim().isNotEmpty)
+          ? search.trim()
+          : null,
+    });
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  /// Returns registrations for an event (the approvals inbox). RLS
+  /// (organizers_read_event_registrations) lets the organizer read rows for
+  /// their own events. Optionally filter by status (pending/approved/rejected…).
+  Future<List<Map<String, dynamic>>> getEventRegistrations(
+    String eventId, {
+    String? status,
+  }) async {
+    // NOTE: no `tier:ticket_tiers(name)` embed — PostgREST can't resolve that
+    // relationship (event_registrations.tier_id has no usable FK to
+    // ticket_tiers) and returns 400. Tier display for a request, if needed,
+    // is resolved client-side from the event's tiers.
+    var query = _supabase
+        .from('event_registrations')
+        .select('*')
+        .eq('event_id', eventId);
+    if (status != null) query = query.eq('status', status);
+    final response = await query.order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Approves or rejects an event registration via the atomic
+  /// `review-event-registration` edge function (team_comms #213). The function
+  /// validates the caller owns the event, sets status/reviewed_by/reviewed_at,
+  /// and fires ALL side-effects (free→issue ticket+QR email; paid→unlock
+  /// purchase + "get your tickets" email; push; rejection email only if the
+  /// organizer wrote custom copy). NEVER raw-UPDATE the row — there is no UPDATE
+  /// trigger, so a direct update would skip the email/ticket. Only acts on a row
+  /// currently 'pending' (409 otherwise — the double-tap guard).
+  /// Returns { success, status: 'approved'|'rejected', registration_id }.
+  Future<Map<String, dynamic>> reviewEventRegistration({
+    required String registrationId,
+    required bool approve,
+    String? rejectionReason,
+  }) async {
+    final response = await _supabase.functions.invoke(
+      'review-event-registration',
+      body: {
+        'registration_id': registrationId,
+        'approve': approve,
+        if (rejectionReason != null && rejectionReason.trim().isNotEmpty)
+          'rejection_reason': rejectionReason.trim(),
+      },
+    );
+    if (response.status != 200) {
+      final data = response.data;
+      throw Exception(data is Map
+          ? (data['error'] ?? 'Failed to review request')
+          : 'Failed to review request');
+    }
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   // ─── Schedules ───────────────────────────────────────────────────────────
 
   /// Returns all schedules for a specific experience.
@@ -370,12 +557,22 @@ class HostService {
 
     final eventTransactions = List<Map<String, dynamic>>.from(eventResponse);
 
-    // 3. Fetch Payouts (completed + pending) to subtract from available
+    // 3. Fetch in-flight + settled payouts to subtract from available.
+    // Lifecycle (team_comms #189): pending_request -> approved -> completed;
+    // 'rejected'/'failed' return the funds to available so are excluded.
+    // 'approved' MUST be here — admin approval is now the authoritative flip
+    // (money is committed for disbursement), so omitting it overstated the
+    // available balance.
     final payoutResponse = await _supabase
         .from('payouts')
         .select('amount, status')
         .eq('partner_id', partnerId)
-        .inFilter('status', ['completed', 'pending_request', 'processing']);
+        .inFilter('status', [
+          'completed',
+          'approved',
+          'pending_request',
+          'processing',
+        ]);
 
     final payouts = List<Map<String, dynamic>>.from(payoutResponse);
 

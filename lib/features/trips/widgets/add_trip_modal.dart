@@ -4,9 +4,7 @@ import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/trip_service.dart';
-import 'package:google_places_flutter/google_places_flutter.dart';
-import 'package:google_places_flutter/model/prediction.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:bitemates/features/shared/widgets/places_autocomplete_field.dart';
 
 class AddTripModal extends StatefulWidget {
   final VoidCallback onTripCreated;
@@ -25,15 +23,6 @@ class _AddTripModalState extends State<AddTripModal> {
       TextEditingController(); // Hidden, populated via parse
   final _descriptionController = TextEditingController();
 
-  // IMPORTANT: Replace with your actual Google Places API key!
-  static const String _fallbackGoogleKey =
-      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-
-  String get _googleApiKey {
-    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    if (envKey.isNotEmpty) return envKey;
-    return _fallbackGoogleKey;
-  }
 
   DateTime? _startDate;
   DateTime? _endDate;
@@ -279,10 +268,10 @@ class _AddTripModalState extends State<AddTripModal> {
                             color: surfaceColor,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: GooglePlaceAutoCompleteTextField(
-                            textEditingController: _cityController,
-                            googleAPIKey: _googleApiKey,
-                            inputDecoration: InputDecoration(
+                          child: PlacesAutocompleteField(
+                            controller: _cityController,
+                            debounceMs: 800,
+                            decoration: InputDecoration(
                               hintText: 'Search for a city...',
                               hintStyle: TextStyle(
                                 color: onSurface.withOpacity(0.4),
@@ -299,14 +288,8 @@ class _AddTripModalState extends State<AddTripModal> {
                               fillColor:
                                   Colors.transparent, // Handled by Container
                             ),
-                            debounceTime: 800, // Debounce 800ms
-                            isLatLngRequired: false,
-                            getPlaceDetailWithLatLng: (Prediction prediction) {
-                              // Not needed for simple city/country
-                            },
-                            itemClick: (Prediction prediction) {
-                              _cityController.text =
-                                  prediction.description ?? '';
+                            onSelected: (prediction) {
+                              _cityController.text = prediction.description;
                               _cityController.selection =
                                   TextSelection.fromPosition(
                                     TextPosition(
@@ -315,8 +298,7 @@ class _AddTripModalState extends State<AddTripModal> {
                                   );
 
                               // Simple Parsing: "City, Country"
-                              final parts = (prediction.description ?? '')
-                                  .split(',');
+                              final parts = prediction.description.split(',');
                               if (parts.length > 1) {
                                 _countryController.text = parts.last.trim();
                               } else {
@@ -328,27 +310,6 @@ class _AddTripModalState extends State<AddTripModal> {
 
                               setState(() {}); // Refresh UI if needed
                             },
-                            // Customizing the list item
-                            itemBuilder:
-                                (context, index, Prediction prediction) {
-                                  return Container(
-                                    padding: const EdgeInsets.all(10),
-                                    child: Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.location_city,
-                                          color: Colors.grey,
-                                        ),
-                                        const SizedBox(width: 7),
-                                        Expanded(
-                                          child: Text(
-                                            prediction.description ?? '',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
                           ),
                         ),
 

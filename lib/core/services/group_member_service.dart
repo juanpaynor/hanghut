@@ -235,6 +235,28 @@ class GroupMemberService {
           .eq('group_id', groupId)
           .eq('user_id', userId);
 
+      // Notify the member when they're promoted to admin/moderator.
+      // The notifications trigger (handle_notifications_webhook) enqueues the push.
+      final actor = SupabaseConfig.client.auth.currentUser;
+      if (actor != null &&
+          actor.id != userId &&
+          (newRole == 'admin' || newRole == 'moderator')) {
+        try {
+          final groupName = await _getGroupName(groupId);
+          final actorName = await _getUserDisplayName(actor.id);
+          final roleLabel = newRole == 'admin' ? 'an admin' : 'a moderator';
+          await SupabaseConfig.client.from('notifications').insert({
+            'user_id': userId,
+            'actor_id': actor.id,
+            'type': 'group_admin_promoted',
+            'entity_id': groupId,
+            'title': 'You\'re now $roleLabel',
+            'body': '$actorName made you $roleLabel of $groupName',
+            'metadata': {'group_id': groupId, 'role': newRole},
+          });
+        } catch (_) {}
+      }
+
       return {'success': true, 'message': 'Role updated to $newRole'};
     } catch (e) {
       print('❌ GROUP MEMBER SERVICE: Error updating role - $e');

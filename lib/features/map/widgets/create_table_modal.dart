@@ -5,12 +5,10 @@ import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'dart:async';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:bitemates/core/services/places_service.dart';
 import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:intl/intl.dart';
@@ -107,15 +105,6 @@ class _CreateTableModalState extends State<CreateTableModal> {
   List<Map<String, dynamic>> _placePredictions = [];
   Timer? _debounce;
   bool _showPredictions = false;
-  // IMPORTANT: Replace with your actual Google Places API key!
-  static const String _fallbackGoogleKey =
-      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-
-  String get _googleApiKey {
-    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    if (envKey.isNotEmpty) return envKey;
-    return _fallbackGoogleKey;
-  }
 
   @override
   void initState() {
@@ -288,65 +277,48 @@ class _CreateTableModalState extends State<CreateTableModal> {
     });
   }
 
+  // One Places session token per search (autocomplete + details), rotated
+  // after each pick so the search bills as a single session.
+  String? _placesSession;
+
   Future<void> _getPlacePredictions(String input) async {
-    try {
-      var urlString =
-          'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$_googleApiKey';
-      if (widget.currentLat != null && widget.currentLng != null) {
-        urlString +=
-            '&location=${widget.currentLat},${widget.currentLng}&radius=30000';
-      }
-      final response = await http.get(Uri.parse(urlString));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          setState(() {
-            _placePredictions = List<Map<String, dynamic>>.from(
-              data['predictions'].map(
-                (p) => {
-                  'place_id': p['place_id'],
-                  'description': p['description'],
-                  'main_text': p['structured_formatting']['main_text'],
-                  'secondary_text':
-                      p['structured_formatting']['secondary_text'],
-                },
-              ),
-            );
-            _showPredictions = true;
-          });
-        }
-      }
-    } catch (e) {
-      print('❌ Places Error: $e');
-    }
+    _placesSession ??= PlacesService.instance.newSessionToken();
+    final predictions = await PlacesService.instance.autocomplete(
+      input,
+      lat: widget.currentLat,
+      lng: widget.currentLng,
+      radiusMeters: 30000,
+      sessionToken: _placesSession,
+    );
+    if (!mounted) return;
+    setState(() {
+      _placePredictions = predictions
+          .map((p) => <String, dynamic>{
+                'place_id': p.placeId,
+                'description': p.description,
+                'main_text': p.mainText,
+                'secondary_text': p.secondaryText,
+              })
+          .toList();
+      _showPredictions = predictions.isNotEmpty;
+    });
   }
 
   Future<void> _getPlaceDetails(String placeId, String description) async {
-    try {
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&key=$_googleApiKey&fields=geometry,name,formatted_address',
-      );
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          final result = data['result'];
-          final location = result['geometry']['location'];
-
-          setState(() {
-            _venueName = result['name'];
-            _venueAddress = result['formatted_address'];
-            _venueLat = location['lat'];
-            _venueLng = location['lng'];
-            _venueController.text = _venueName!; // Update text to venue name
-            _showPredictions = false;
-          });
-        }
-      }
-    } catch (e) {
-      print('❌ Place Details Error: $e');
-    }
+    final details = await PlacesService.instance.details(
+      placeId,
+      sessionToken: _placesSession,
+    );
+    _placesSession = null; // close the session; next search starts fresh
+    if (details == null || !mounted) return;
+    setState(() {
+      _venueName = details.name.isNotEmpty ? details.name : description;
+      _venueAddress = details.formattedAddress;
+      _venueLat = details.latitude;
+      _venueLng = details.longitude;
+      _venueController.text = _venueName!; // Update text to venue name
+      _showPredictions = false;
+    });
   }
 
   // --- Map Picker Logic (NEW) ---

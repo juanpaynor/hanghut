@@ -4,13 +4,16 @@ import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/home/widgets/like_facepile.dart';
 import 'package:bitemates/features/home/widgets/event_attachment_card.dart';
-import 'package:bitemates/features/ticketing/screens/event_purchase_screen.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
@@ -75,6 +78,9 @@ class _SocialPostCardState extends State<SocialPostCard> {
   // Inline video playback
   VideoPlayerController? _videoController;
   bool _videoInitialized = false;
+  // Set when inline init fails/times out (e.g. Android can't decode a QuickTime
+  // .mov container). We then fall back to opening the video in the OS player.
+  bool _videoError = false;
   bool _isMuted = true;
   // Visibility-gated playback: lazily init when the card scrolls into view and
   // only let the single most-visible video play (mobile has few HW decoders).
@@ -165,6 +171,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
     _videoController = controller;
     controller
         .initialize()
+        // Safety net: some unsupported containers make ExoPlayer hang rather
+        // than error. Time out so we fall back to the OS player instead of
+        // spinning forever.
+        .timeout(const Duration(seconds: 12))
         .then((_) {
           if (!mounted) return;
           setState(() => _videoInitialized = true);
@@ -174,6 +184,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
         })
         .catchError((e) {
           debugPrint('Video init error: $e');
+          if (mounted) setState(() => _videoError = true);
         });
   }
 
@@ -200,25 +211,56 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
   Future<void> _fetchAttachedEvent() async {
     final eventId = widget.post['event_id'];
-    // print('🔍 [SocialPostCard] Post ${widget.post['id']} has eventId: $eventId');
+    if (eventId == null) return;
 
-    if (eventId != null) {
-      if (mounted) setState(() => _isLoadingEvent = true);
-      try {
-        final data = await SupabaseConfig.client
-            .from('events')
-            .select('*')
-            .eq('id', eventId)
-            .single();
-        // print('✅ [SocialPostCard] Fetched event data: ${data['title']}');
-
-        if (mounted) setState(() => _attachedEvent = data);
-      } catch (e) {
-        debugPrint('⚠️ [SocialPostCard] Error fetching event $eventId: $e');
-      } finally {
-        if (mounted) setState(() => _isLoadingEvent = false);
-      }
+    // Reuse a previously-fetched event cached on the post map. Without this,
+    // scrolling a card off-screen and back re-runs initState → re-queries the
+    // DB AND grows the card's height asynchronously once the result lands,
+    // which shifts the feed (the "snap"/reload while scrolling). The post map
+    // lives in the parent's list, so the cache survives card recreation.
+    final cached = widget.post['_attachedEvent'];
+    if (cached is Map<String, dynamic>) {
+      _attachedEvent = cached; // set before first build → renders synchronously
+      return;
     }
+
+    if (mounted) setState(() => _isLoadingEvent = true);
+    try {
+      final data = await SupabaseConfig.client
+          .from('events')
+          .select('*')
+          .eq('id', eventId)
+          .single();
+      widget.post['_attachedEvent'] = data; // cache for future rebuilds
+      if (mounted) setState(() => _attachedEvent = data);
+    } catch (e) {
+      debugPrint('⚠️ [SocialPostCard] Error fetching event $eventId: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingEvent = false);
+    }
+  }
+
+  /// Whether this post may be shared. Non-public posts (private / followers-
+  /// only) must not leak via a share link — enforced at share time in the app,
+  /// with web enforcing 404 as defense in depth (team_comms #252). Stories are
+  /// gated separately in build() since they hard-expire.
+  bool get _isShareable {
+    final visibility =
+        (widget.post['visibility'] as String?)?.toLowerCase() ?? 'public';
+    return visibility == 'public';
+  }
+
+  /// Builds an [Event] model from the attached-event map, filling defaults for
+  /// fields the feed query may omit. Returns null if there's no attached event.
+  /// Shared by the open (tap) and share affordances.
+  Event? _attachedEventModel() {
+    if (_attachedEvent == null) return null;
+    final eventData = Map<String, dynamic>.from(_attachedEvent!);
+    eventData['venue_address'] ??= eventData['venue_name'] ?? 'TBA';
+    eventData['category'] ??= 'general';
+    eventData['created_at'] ??= DateTime.now().toIso8601String();
+    eventData['tickets_sold'] ??= 0;
+    return Event.fromJson(eventData);
   }
 
   void _handleLike() async {
@@ -536,35 +578,26 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                     child: EventAttachmentCard(
                       event: _attachedEvent!,
+                      onShare: () {
+                        final event = _attachedEventModel();
+                        if (event == null) return;
+                        ShareToChatSheet.show(
+                          context,
+                          SharePayload.fromEvent(event),
+                        );
+                      },
                       onTap: () {
                         try {
-                          // Add defaults for potentially missing fields
-                          final eventData = Map<String, dynamic>.from(
-                            _attachedEvent!,
-                          );
+                          final event = _attachedEventModel();
+                          if (event == null) return;
 
-                          // Ensure required fields have defaults
-                          eventData['venue_address'] ??=
-                              eventData['venue_name'] ?? 'TBA';
-                          eventData['category'] ??= 'general';
-                          eventData['created_at'] ??= DateTime.now()
-                              .toIso8601String();
-                          eventData['tickets_sold'] ??= 0;
-
-                          // Convert Map to Event model
-                          final event = Event.fromJson(eventData);
-
-                          if (event.isExternal) {
-                            // External events: show detail modal (which has the redirect CTA)
-                            EventDetailModal.show(context, event);
-                          } else {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => EventPurchaseScreen(event: event),
-                              ),
-                            );
-                          }
+                          // Always open the detail page first so the user sees
+                          // the description/venue/date before any checkout. The
+                          // modal's CTA handles both paths: external → redirect,
+                          // internal → EventPurchaseScreen (with the approved-
+                          // registration check). Previously internal Hanghut
+                          // events skipped straight to checkout.
+                          EventDetailModal.show(context, event);
                         } catch (e) {
                           debugPrint('Error parsing event: $e');
                           ErrorHandler.showError(
@@ -645,6 +678,20 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   const SizedBox(height: 12),
                 ],
 
+                // Who liked this (facepile + names) — renders nothing at 0 likes
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 16, 4),
+                  child: LikeFacepile(
+                    postId: widget.post['id'].toString(),
+                    likeCount: _likeCount,
+                    // Preview faces embedded by the feed RPC (top_likers) — no
+                    // per-post fetch. Null on payloads without it (falls back).
+                    initialLikers: (widget.post['top_likers'] as List?)
+                        ?.map((e) => Map<String, dynamic>.from(e as Map))
+                        .toList(),
+                  ),
+                ),
+
                 // Action Buttons (Like, Comment)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -679,6 +726,23 @@ class _SocialPostCardState extends State<SocialPostCard> {
                         color: Colors.grey[600],
                         activeColor: Colors.blueAccent,
                       ),
+                      // Share is suppressed for stories (they hard-expire in
+                      // 24h → a shared link would 404) and for non-public posts
+                      // (private/followers-only must not leak via a share link).
+                      // Coordinated with web in team_comms #252 (a)+(b).
+                      if (!isStory && _isShareable) ...[
+                        const SizedBox(width: 20),
+                        _buildActionButton(
+                          icon: Icons.share_outlined,
+                          label: 'Share',
+                          onTap: () => ShareToChatSheet.show(
+                            context,
+                            SharePayload.fromPost(widget.post),
+                          ),
+                          color: Colors.grey[600],
+                          activeColor: Theme.of(context).primaryColor,
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -792,6 +856,62 @@ class _SocialPostCardState extends State<SocialPostCard> {
       );
     }
 
+    // Init failed (e.g. Android can't decode a QuickTime .mov container) — show
+    // the poster with a Tap-to-play button that hands off to the OS video
+    // player, which handles containers ExoPlayer won't.
+    if (_videoError) {
+      return GestureDetector(
+        onTap: () => _launchVideoExternally(videoUrl),
+        child: AspectRatio(
+          aspectRatio: 4 / 5,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (posterUrl != null && posterUrl.isNotEmpty)
+                CachedNetworkImage(
+                  imageUrl: posterUrl,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) =>
+                      Container(color: Colors.grey[900]),
+                )
+              else
+                Container(color: Colors.grey[900]),
+              Container(color: Colors.black.withOpacity(0.35)),
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.55),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 34,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Tap to play',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     // Loading / fallback state — show poster with loading spinner
     return GestureDetector(
       onTap: () => _openVideoPlayer(videoUrl),
@@ -822,6 +942,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
   }
 
   void _openVideoPlayer(String videoUrl) {
+    // If inline playback already failed, don't push a fullscreen player that
+    // would fail the same way — hand off to the OS player.
+    if (_videoError) {
+      _launchVideoExternally(videoUrl);
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1147,18 +1273,25 @@ class _FullScreenVideoPlayer extends StatefulWidget {
 class _FullScreenVideoPlayerState extends State<_FullScreenVideoPlayer> {
   late VideoPlayerController _controller;
   bool _isInitialized = false;
+  bool _error = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
-      ..initialize().then((_) {
-        if (mounted) {
-          setState(() => _isInitialized = true);
-          _controller.play();
-          _controller.setLooping(true);
-        }
-      });
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+    _controller
+        .initialize()
+        .timeout(const Duration(seconds: 12))
+        .then((_) {
+          if (mounted) {
+            setState(() => _isInitialized = true);
+            _controller.play();
+            _controller.setLooping(true);
+          }
+        })
+        .catchError((e) {
+          if (mounted) setState(() => _error = true);
+        });
   }
 
   @override
@@ -1215,9 +1348,54 @@ class _FullScreenVideoPlayerState extends State<_FullScreenVideoPlayer> {
                     ],
                   ),
                 )
-              : const CircularProgressIndicator(color: Colors.white),
+              : _error
+                  ? _buildFullscreenError(context)
+                  : const CircularProgressIndicator(color: Colors.white),
         ),
       ),
     );
+  }
+
+  Widget _buildFullscreenError(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.play_circle_outline,
+              color: Colors.white70, size: 64),
+          const SizedBox(height: 16),
+          const Text(
+            "This video can't play in-app on this device.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _launchVideoExternally(widget.videoUrl);
+            },
+            icon: const Icon(Icons.open_in_new_rounded, size: 18),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black,
+            ),
+            label: const Text('Open in player'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Opens [url] in the device's default handler (OS video player / browser).
+/// Fallback for when in-app playback fails on an unsupported container (e.g.
+/// a QuickTime .mov that Android's ExoPlayer can't decode). Pure Dart via
+/// url_launcher — safe to ship as a Shorebird patch.
+Future<void> _launchVideoExternally(String url) async {
+  final uri = Uri.parse(url);
+  if (await canLaunchUrl(uri)) {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 }

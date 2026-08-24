@@ -11,4 +11,11 @@ class AppConstants {
   /// Public link to an event detail page. Opens the app when installed,
   /// falls back to the web event page otherwise.
   static String eventUrl(String eventId) => '$webBaseUrl/events/$eventId';
+
+  /// Organizer web dashboard — the full event builder (custom email templates,
+  /// seat maps, page design, subscriber access) lives here; the app exposes a
+  /// simpler subset. Route group `(dashboard)` is omitted from the URL.
+  static const String organizerDashboardUrl = '$webBaseUrl/organizer';
+  static const String organizerCreateEventUrl =
+      '$webBaseUrl/organizer/events/create';
 }

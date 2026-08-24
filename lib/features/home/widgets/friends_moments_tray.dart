@@ -2,9 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+// Indigo brand ramp (matches the app's story ring / primary).
+const Color _indigo400 = Color(0xFF818CF8);
+const Color _indigo500 = Color(0xFF6366F1);
+const Color _indigo600 = Color(0xFF4F46E5);
+
+// Tile geometry — a large portrait "moment" card.
+const double _ringW = 116;
+const double _ringH = 172;
+const double _ringPad = 2.5; // unseen gradient ring thickness
+const double _radius = 20;
+
 class FriendsMomentsTray extends StatefulWidget {
   final List<Map<String, dynamic>> stories;
-  final Function(Map<String, dynamic>) onStoryTap;
+
+  /// [originRect] is the tapped tile's rect in global screen coordinates, so
+  /// the opener can morph the story viewer out of the card. May be null if it
+  /// couldn't be measured.
+  final void Function(Map<String, dynamic> story, Rect? originRect) onStoryTap;
   final VoidCallback? onAddStory;
   final VoidCallback? onLoadMore;
   final bool isLoading;
@@ -43,7 +58,6 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
 
   void _onScroll() {
     if (!widget.hasMore || widget.isLoading) return;
-    // Trigger load more when near the end
     if (_scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 200) {
       widget.onLoadMore?.call();
@@ -61,22 +75,9 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Section Header
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-          child: Text(
-            "Stories",
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: Theme.of(context).primaryColor,
-            ),
-          ),
-        ),
-
-        // Story Cards
+        const SizedBox(height: 12),
         SizedBox(
-          height: 110,
+          height: _ringH + 12,
           child: widget.isLoading && widget.stories.isEmpty
               ? _buildShimmer()
               : ListView.builder(
@@ -86,12 +87,11 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
                   physics: const BouncingScrollPhysics(),
                   itemCount: widget.stories.length + (widget.hasMore ? 1 : 0),
                   itemBuilder: (context, index) {
-                    // Loading indicator at end for pagination
                     if (index >= widget.stories.length) {
                       return const Padding(
-                        padding: EdgeInsets.only(right: 16),
+                        padding: EdgeInsets.only(right: 12),
                         child: SizedBox(
-                          width: 76,
+                          width: _ringW,
                           child: Center(
                             child: SizedBox(
                               width: 24,
@@ -105,17 +105,17 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
 
                     final story = widget.stories[index];
                     final isOwn = story['is_own'] == true;
-                    final isSeen = story['is_seen'] == true;
                     final hasStory = (story['story_count'] ?? 0) > 0;
 
-                    // "Your Story" bubble (first item if is_own)
                     if (isOwn) {
-                      return _YourStoryCard(
+                      return _StoryTile(
                         story: story,
+                        isOwn: true,
+                        isSeen: false,
                         hasStory: hasStory,
-                        onTap: () {
+                        onTap: (rect) {
                           if (hasStory) {
-                            widget.onStoryTap(story);
+                            widget.onStoryTap(story, rect);
                           } else {
                             widget.onAddStory?.call();
                           }
@@ -123,10 +123,12 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
                       );
                     }
 
-                    return _StoryCard(
+                    return _StoryTile(
                       story: story,
-                      isSeen: isSeen,
-                      onTap: () => widget.onStoryTap(story),
+                      isOwn: false,
+                      isSeen: story['is_seen'] == true,
+                      hasStory: true,
+                      onTap: (rect) => widget.onStoryTap(story, rect),
                     );
                   },
                 ),
@@ -139,30 +141,17 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
     return ListView.builder(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: 5,
+      itemCount: 4,
       itemBuilder: (context, index) {
         return Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Column(
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(22),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                width: 52,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ],
+          padding: const EdgeInsets.only(right: 12),
+          child: Container(
+            width: _ringW,
+            height: _ringH,
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(_radius),
+            ),
           ),
         );
       },
@@ -171,379 +160,397 @@ class _FriendsMomentsTrayState extends State<FriendsMomentsTray> {
 }
 
 // ==========================================
-// "Your Story" Card — always first in tray
+// Story Tile — large cover card ("On the Map")
 // ==========================================
-class _YourStoryCard extends StatefulWidget {
+class _StoryTile extends StatefulWidget {
   final Map<String, dynamic> story;
+  final bool isOwn;
+  final bool isSeen;
   final bool hasStory;
-  final VoidCallback onTap;
 
-  const _YourStoryCard({
+  /// Receives the tile's global-screen rect (for the zoom-open transition),
+  /// or null if it couldn't be measured.
+  final void Function(Rect? originRect) onTap;
+
+  const _StoryTile({
     required this.story,
+    required this.isOwn,
+    required this.isSeen,
     required this.hasStory,
     required this.onTap,
   });
 
   @override
-  State<_YourStoryCard> createState() => _YourStoryCardState();
+  State<_StoryTile> createState() => _StoryTileState();
 }
 
-class _YourStoryCardState extends State<_YourStoryCard> {
+class _StoryTileState extends State<_StoryTile> {
   double _scale = 1.0;
+
+  String? get _coverUrl {
+    final img = widget.story['latest_image_url'] as String?;
+    if (img != null && img.isNotEmpty) return img;
+    return null; // video stories have no thumbnail → gradient fallback
+  }
+
+  String get _authorName =>
+      (widget.story['author_name'] ??
+              widget.story['display_name'] ??
+              (widget.isOwn ? 'You' : 'Friend'))
+          .toString();
+
+  String get _firstName {
+    if (widget.isOwn) return 'Your Story';
+    final n = _authorName.trim();
+    return n.isEmpty ? 'Friend' : n.split(' ').first;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final avatarUrl = widget.story['author_avatar_url'];
+    // "Add story" empty state — dashed placeholder card.
+    if (widget.isOwn && !widget.hasStory) {
+      return _pressable(child: _addStoryCard(context));
+    }
 
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _scale = 0.92),
-      onTapUp: (_) {
-        setState(() => _scale = 1.0);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _scale = 1.0),
-      child: AnimatedScale(
-        scale: _scale,
-        duration: const Duration(milliseconds: 100),
-        child: Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Ring + avatar
-              Container(
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  // Gradient ring if has story, dashed grey if no story
-                  gradient: widget.hasStory
-                      ? const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Color(0xFF818CF8), // Indigo 400
-                            Color(0xFF6366F1), // Indigo 500
-                            Color(0xFF4F46E5), // Indigo 600
-                          ],
-                        )
-                      : null,
-                  border: !widget.hasStory
-                      ? Border.all(color: Colors.grey[300]!, width: 2)
-                      : null,
-                ),
-                child: Padding(
-                  padding: EdgeInsets.all(widget.hasStory ? 3 : 1),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(21),
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(2),
-                      child: Stack(
-                        children: [
-                          // Avatar
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(19),
-                              color: Colors.grey[300],
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: avatarUrl != null
-                                ? CachedNetworkImage(
-                                    imageUrl: avatarUrl,
-                                    fit: BoxFit.cover,
-                                    width: 66,
-                                    height: 66,
-                                    placeholder: (context, url) => Container(
-                                      color: Colors.grey[200],
-                                      child: const Center(
-                                        child: Icon(
-                                          Icons.person,
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                    ),
-                                    errorWidget: (context, url, err) =>
-                                        _buildYouAvatar(),
-                                  )
-                                : _buildYouAvatar(),
-                          ),
+    final Gradient? ringGradient = widget.isSeen
+        ? null
+        : const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_indigo400, _indigo500, _indigo600],
+          );
 
-                          // "+" badge if no story
-                          if (!widget.hasStory)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF6366F1),
-                                  borderRadius: BorderRadius.circular(7),
-                                  border: Border.all(
-                                    color: Theme.of(
-                                      context,
-                                    ).scaffoldBackgroundColor,
-                                    width: 2,
-                                  ),
-                                ),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.add,
-                                    color: Colors.white,
-                                    size: 14,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+    return _pressable(
+      child: Padding(
+        padding: const EdgeInsets.only(right: 12),
+        child: Container(
+          width: _ringW,
+          height: _ringH,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(_radius),
+            gradient: ringGradient,
+            color: widget.isSeen ? Colors.grey[300] : null,
+          ),
+          padding: const EdgeInsets.all(_ringPad),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(_radius - _ringPad),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _cover(),
+                // Bottom scrim for legibility of avatar/name.
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.center,
+                      colors: [Colors.black87, Colors.transparent],
                     ),
                   ),
                 ),
-              ),
-
-              const SizedBox(height: 6),
-
-              // Label
-              SizedBox(
-                width: 76,
-                child: Text(
-                  "Your Story",
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey[800],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ],
+                _locationChip(),
+                _countBadge(),
+                _poster(),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildYouAvatar() {
-    return Container(
-      width: 66,
-      height: 66,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(19),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-        ),
-      ),
-      child: Center(
-        child: Icon(
-          Icons.person,
-          size: 30,
-          color: Colors.white.withOpacity(0.9),
-        ),
-      ),
-    );
+  /// The tile's rect in global screen coordinates, for the zoom-open morph.
+  Rect? _globalRect() {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
   }
-}
 
-// ==========================================
-// Friend Story Card — with seen/unseen ring
-// ==========================================
-class _StoryCard extends StatefulWidget {
-  final Map<String, dynamic> story;
-  final bool isSeen;
-  final VoidCallback onTap;
-
-  const _StoryCard({
-    required this.story,
-    required this.isSeen,
-    required this.onTap,
-  });
-
-  @override
-  State<_StoryCard> createState() => _StoryCardState();
-}
-
-class _StoryCardState extends State<_StoryCard> {
-  double _scale = 1.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final authorName =
-        widget.story['author_name'] ?? widget.story['display_name'] ?? 'Friend';
-    final avatarUrl =
-        widget.story['author_avatar_url'] ?? widget.story['avatar_url'];
-    final storyCount = widget.story['story_count'] ?? 1;
-    final firstName = authorName.toString().split(' ').first;
-
+  Widget _pressable({required Widget child}) {
     return GestureDetector(
-      onTapDown: (_) => setState(() => _scale = 0.92),
+      onTapDown: (_) => setState(() => _scale = 0.95),
       onTapUp: (_) {
+        final rect = _globalRect();
         setState(() => _scale = 1.0);
-        widget.onTap();
+        widget.onTap(rect);
       },
       onTapCancel: () => setState(() => _scale = 1.0),
       child: AnimatedScale(
         scale: _scale,
         duration: const Duration(milliseconds: 100),
-        child: Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Gradient ring (unseen = indigo gradient, seen = grey)
-              Container(
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  gradient: widget.isSeen
-                      ? null
-                      : const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Color(0xFF818CF8), // Indigo 400
-                            Color(0xFF6366F1), // Indigo 500
-                            Color(0xFF4F46E5), // Indigo 600
-                          ],
-                        ),
-                  color: widget.isSeen ? Colors.grey[300] : null,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(3), // Ring thickness
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(21),
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(2), // Inner gap
-                      child: Stack(
-                        children: [
-                          // Avatar image
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(19),
-                              color: Colors.grey[300],
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: avatarUrl != null
-                                ? CachedNetworkImage(
-                                    imageUrl: avatarUrl,
-                                    fit: BoxFit.cover,
-                                    width: 66,
-                                    height: 66,
-                                    placeholder: (context, url) => Container(
-                                      color: Colors.grey[200],
-                                      child: Center(
-                                        child: Text(
-                                          firstName.isNotEmpty
-                                              ? firstName[0].toUpperCase()
-                                              : '?',
-                                          style: GoogleFonts.inter(
-                                            fontSize: 24,
-                                            fontWeight: FontWeight.w700,
-                                            color: Colors.grey[500],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    errorWidget: (context, url, err) =>
-                                        _buildInitialAvatar(firstName),
-                                  )
-                                : _buildInitialAvatar(firstName),
-                          ),
-
-                          // Story count badge (bottom-right)
-                          if (storyCount is int && storyCount > 1)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: Container(
-                                width: 20,
-                                height: 20,
-                                decoration: BoxDecoration(
-                                  color: widget.isSeen
-                                      ? Colors.grey[500]
-                                      : Theme.of(context).primaryColor,
-                                  borderRadius: BorderRadius.circular(7),
-                                  border: Border.all(
-                                    color: Theme.of(
-                                      context,
-                                    ).scaffoldBackgroundColor,
-                                    width: 2,
-                                  ),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    '$storyCount',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 6),
-
-              // Name label
-              SizedBox(
-                width: 76,
-                child: Text(
-                  firstName,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: widget.isSeen ? Colors.grey[500] : Colors.grey[800],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ],
-          ),
-        ),
+        child: child,
       ),
     );
   }
 
-  Widget _buildInitialAvatar(String name) {
+  Widget _cover() {
+    final url = _coverUrl;
+    if (url != null) {
+      return CachedNetworkImage(
+        imageUrl: url,
+        fit: BoxFit.cover,
+        placeholder: (_, __) => _gradientFallback(),
+        errorWidget: (_, __, ___) => _gradientFallback(),
+      );
+    }
+    return _gradientFallback();
+  }
+
+  // Deterministic brand-tinted gradient when there's no cover image.
+  Widget _gradientFallback() {
+    final seed = _authorName.isNotEmpty ? _authorName.codeUnitAt(0) : 0;
+    final palettes = <List<Color>>[
+      [_indigo400, _indigo600],
+      [const Color(0xFFF9A8D4), const Color(0xFFEC4899)],
+      [const Color(0xFF7DD3FC), const Color(0xFF0EA5E9)],
+      [const Color(0xFFFDBA74), const Color(0xFFF97316)],
+      [const Color(0xFF6EE7B7), const Color(0xFF10B981)],
+    ];
+    final colors = palettes[seed % palettes.length];
     return Container(
-      width: 66,
-      height: 66,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(19),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+          colors: colors,
         ),
       ),
       child: Center(
         child: Text(
-          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          _firstName.isNotEmpty ? _firstName[0].toUpperCase() : '?',
           style: GoogleFonts.inter(
-            fontSize: 26,
-            fontWeight: FontWeight.w700,
+            fontSize: 34,
+            fontWeight: FontWeight.w800,
+            color: Colors.white.withOpacity(0.9),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Frosted location pill, top-left — the "On the Map" signature.
+  Widget _locationChip() {
+    final place = widget.story['latest_external_place_name'] as String?;
+    if (place == null || place.trim().isEmpty) return const SizedBox.shrink();
+    return Positioned(
+      top: 8,
+      left: 8,
+      right: 8,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(6, 3, 9, 3),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.32),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withOpacity(0.35), width: 0.5),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.location_on_rounded, size: 11, color: Colors.white),
+              const SizedBox(width: 2),
+              Flexible(
+                child: Text(
+                  place.trim(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _countBadge() {
+    final count = widget.story['story_count'];
+    if (count is! int || count <= 1) return const SizedBox.shrink();
+    return Positioned(
+      top: 8,
+      right: 8,
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 20),
+        height: 20,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.32),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withOpacity(0.35), width: 0.5),
+        ),
+        child: Text(
+          '$count',
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
             color: Colors.white,
           ),
+        ),
+      ),
+    );
+  }
+
+  // Poster: avatar + name, bottom-left.
+  Widget _poster() {
+    final avatarUrl = widget.story['author_avatar_url'] as String?;
+    return Positioned(
+      left: 8,
+      right: 8,
+      bottom: 8,
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.5),
+              color: Colors.grey[400],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: (avatarUrl != null && avatarUrl.isNotEmpty)
+                ? CachedNetworkImage(
+                    imageUrl: avatarUrl,
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => _avatarInitial(),
+                    errorWidget: (_, __, ___) => _avatarInitial(),
+                  )
+                : _avatarInitial(),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _firstName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+                shadows: const [
+                  Shadow(color: Colors.black54, blurRadius: 3, offset: Offset(0, 1)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _avatarInitial() {
+    return Container(
+      color: _indigo500,
+      alignment: Alignment.center,
+      child: Text(
+        _firstName.isNotEmpty ? _firstName[0].toUpperCase() : '?',
+        style: GoogleFonts.inter(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  // ---- "Add to your story" empty card ----
+  Widget _addStoryCard(BuildContext context) {
+    final avatarUrl = widget.story['author_avatar_url'] as String?;
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: Container(
+        width: _ringW,
+        height: _ringH,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_radius),
+          border: Border.all(color: Colors.grey[300]!, width: 1.5),
+          color: Theme.of(context).scaffoldBackgroundColor,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Soft self-preview using the user's own avatar if available.
+            if (avatarUrl != null && avatarUrl.isNotEmpty)
+              ColorFiltered(
+                colorFilter: ColorFilter.mode(
+                  Colors.black.withOpacity(0.15),
+                  BlendMode.darken,
+                ),
+                child: CachedNetworkImage(
+                  imageUrl: avatarUrl,
+                  fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => _addStoryGradient(),
+                ),
+              )
+            else
+              _addStoryGradient(),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.center,
+                  colors: [Colors.black54, Colors.transparent],
+                ),
+              ),
+            ),
+            Align(
+              alignment: const Alignment(0, -0.15),
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: _indigo500,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _indigo500.withOpacity(0.5),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.add, color: Colors.white, size: 22),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 10,
+              child: Text(
+                'Your Story',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                  shadows: const [
+                    Shadow(color: Colors.black54, blurRadius: 3, offset: Offset(0, 1)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _addStoryGradient() {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFC4B5FD), Color(0xFF8B5CF6)],
         ),
       ),
     );

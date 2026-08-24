@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:bitemates/core/services/places_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
@@ -104,14 +102,6 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
   bool _isLoading = false;
   late AnimationController _shakeController;
   late Animation<double> _shakeAnimation;
-
-  // Google Places key
-  static const String _fallbackGoogleKey =
-      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-  String get googleApiKey {
-    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    return envKey.isNotEmpty ? envKey : _fallbackGoogleKey;
-  }
 
   @override
   void initState() {
@@ -244,63 +234,48 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
     });
   }
 
+  // One Places session token per search (autocomplete + details), rotated
+  // after each pick so the search bills as a single session.
+  String? _placesSession;
+
   Future<void> _getPlacePredictions(String input) async {
-    try {
-      var urlString =
-          'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$googleApiKey';
-      if (widget.currentLat != null && widget.currentLng != null) {
-        urlString +=
-            '&location=${widget.currentLat},${widget.currentLng}&radius=30000';
-      }
-      final response = await http.get(Uri.parse(urlString));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          setState(() {
-            placePredictions = List<Map<String, dynamic>>.from(
-              data['predictions'].map(
-                (p) => {
-                  'place_id': p['place_id'],
-                  'description': p['description'],
-                  'main_text': p['structured_formatting']['main_text'],
-                  'secondary_text':
-                      p['structured_formatting']['secondary_text'],
-                },
-              ),
-            );
-            showPredictions = true;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Places Error: $e');
-    }
+    _placesSession ??= PlacesService.instance.newSessionToken();
+    final predictions = await PlacesService.instance.autocomplete(
+      input,
+      lat: widget.currentLat,
+      lng: widget.currentLng,
+      radiusMeters: 30000,
+      sessionToken: _placesSession,
+    );
+    if (!mounted) return;
+    setState(() {
+      placePredictions = predictions
+          .map((p) => <String, dynamic>{
+                'place_id': p.placeId,
+                'description': p.description,
+                'main_text': p.mainText,
+                'secondary_text': p.secondaryText,
+              })
+          .toList();
+      showPredictions = predictions.isNotEmpty;
+    });
   }
 
   void selectPlace(String placeId, String description) async {
-    try {
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&key=$googleApiKey&fields=geometry,name,formatted_address',
-      );
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          final result = data['result'];
-          final location = result['geometry']['location'];
-          setState(() {
-            venueName = result['name'];
-            venueAddress = result['formatted_address'];
-            venueLat = location['lat'];
-            venueLng = location['lng'];
-            venueController.text = venueName!;
-            showPredictions = false;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Place Details Error: $e');
-    }
+    final details = await PlacesService.instance.details(
+      placeId,
+      sessionToken: _placesSession,
+    );
+    _placesSession = null; // close the session; next search starts fresh
+    if (details == null || !mounted) return;
+    setState(() {
+      venueName = details.name.isNotEmpty ? details.name : description;
+      venueAddress = details.formattedAddress;
+      venueLat = details.latitude;
+      venueLng = details.longitude;
+      venueController.text = venueName!;
+      showPredictions = false;
+    });
   }
 
   void clearVenueSelection() {

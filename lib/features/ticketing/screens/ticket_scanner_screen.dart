@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:bitemates/core/services/scanner_service.dart';
 
@@ -21,7 +22,7 @@ class TicketScannerScreen extends StatefulWidget {
   State<TicketScannerScreen> createState() => _TicketScannerScreenState();
 }
 
-enum _Outcome { valid, alreadyScanned, wrongEvent, void_, unauthorized, notFound, error }
+enum _Outcome { valid, alreadyScanned, notSold, wrongEvent, void_, unauthorized, notFound, error }
 
 class _TicketScannerScreenState extends State<TicketScannerScreen> {
   final MobileScannerController _controller = MobileScannerController(
@@ -88,14 +89,48 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
   }
 
   _Outcome _classify(Map<String, dynamic> r) {
+    // Prefer the stable machine-readable `code` (team_comms #264) — message
+    // copy is display text web will keep rewording, so never branch on it.
+    switch ((r['code'] ?? '').toString()) {
+      case 'OK':
+        return _Outcome.valid;
+      case 'ALREADY_CHECKED_IN':
+        return _Outcome.alreadyScanned;
+      case 'NOT_SOLD':
+        return _Outcome.notSold;
+      case 'WRONG_EVENT':
+        return _Outcome.wrongEvent;
+      case 'TICKET_VOID':
+        return _Outcome.void_;
+      case 'UNAUTHORIZED':
+        return _Outcome.unauthorized;
+      case 'TICKET_NOT_FOUND':
+        return _Outcome.notFound;
+    }
+
+    // Fallback for older backends / transport errors that carry no code.
     if (r['success'] == true) return _Outcome.valid;
     final msg = (r['message'] ?? '').toString().toLowerCase();
     if (msg.contains('already')) return _Outcome.alreadyScanned;
+    if (msg.contains('not a valid ticket')) return _Outcome.notSold;
     if (msg.contains('wrong event')) return _Outcome.wrongEvent;
     if (msg.contains('void')) return _Outcome.void_;
     if (msg.contains('unauthorized')) return _Outcome.unauthorized;
     if (msg.contains('not found')) return _Outcome.notFound;
     return _Outcome.error;
+  }
+
+  /// Prefer the raw `checked_in_at` timestamp (team_comms #264) so we render the
+  /// prior check-in in the device's own timezone, not the server's UTC string.
+  /// Falls back to the server's preformatted `details`.
+  String? _detailText(Map<String, dynamic> r, _Outcome outcome) {
+    if (outcome == _Outcome.alreadyScanned && r['checked_in_at'] != null) {
+      final dt = DateTime.tryParse(r['checked_in_at'].toString());
+      if (dt != null) {
+        return 'Checked in at ${DateFormat('h:mm a').format(dt.toLocal())}';
+      }
+    }
+    return r['details']?.toString();
   }
 
   void _feedback(_Outcome outcome) {
@@ -276,10 +311,10 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
                 _infoRow(Icons.local_activity, ticket!['tier_name'].toString()),
               if (ticket?['seat'] != null)
                 _infoRow(Icons.event_seat, _formatSeat(ticket!['seat'])),
-              if (result['details'] != null) ...[
+              if (_detailText(result, outcome) != null) ...[
                 const SizedBox(height: 8),
                 Text(
-                  result['details'].toString(),
+                  _detailText(result, outcome)!,
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     color: Colors.grey[600],
@@ -357,6 +392,7 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
       case _Outcome.alreadyScanned:
       case _Outcome.wrongEvent:
         return const Color(0xFFE08A00); // amber
+      case _Outcome.notSold:
       case _Outcome.void_:
       case _Outcome.unauthorized:
       case _Outcome.notFound:
@@ -371,6 +407,8 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
         return Icons.check_circle;
       case _Outcome.alreadyScanned:
         return Icons.history;
+      case _Outcome.notSold:
+        return Icons.gpp_bad; // fraud signal — an unbought ticket presented
       case _Outcome.wrongEvent:
         return Icons.event_busy;
       case _Outcome.void_:
@@ -390,6 +428,8 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
         return 'Valid Ticket';
       case _Outcome.alreadyScanned:
         return 'Already Scanned';
+      case _Outcome.notSold:
+        return 'Not Sold';
       case _Outcome.wrongEvent:
         return 'Wrong Event';
       case _Outcome.void_:

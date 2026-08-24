@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:timeago/timeago.dart' as timeago;
 import 'package:intl/intl.dart';
 import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,6 +14,8 @@ import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
 
 class HangoutFeedCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -161,7 +162,6 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
   @override
   Widget build(BuildContext context) {
     final user = widget.post['user'];
-    final createdAt = DateTime.parse(widget.post['created_at']);
     final metadata = widget.post['metadata'] as Map<String, dynamic>? ?? {};
 
     final venueName = metadata['venue_name'] ?? 'Unknown Venue';
@@ -765,14 +765,26 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                   color: Colors.grey[600],
                   activeColor: Colors.blueAccent,
                 ),
-                const Spacer(),
-                // Time ago
-                Icon(Icons.access_time, size: 14, color: Colors.grey[400]),
-                const SizedBox(width: 4),
-                Text(
-                  timeago.format(createdAt),
-                  style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                ),
+                // Share — only for a live hangout that still exists (an ended /
+                // deleted hangout can't be joined, so a share link is pointless,
+                // same rationale as suppressing story shares).
+                if (metadata['table_id'] != null &&
+                    _tableExists &&
+                    !_isTableEnded) ...[
+                  const SizedBox(width: 20),
+                  _buildActionButton(
+                    icon: Icons.share_outlined,
+                    label: 'Share',
+                    onTap: () {
+                      final payload = SharePayload.fromHangout(widget.post);
+                      if (payload != null) {
+                        ShareToChatSheet.show(context, payload);
+                      }
+                    },
+                    color: Colors.grey[600],
+                    activeColor: Theme.of(context).primaryColor,
+                  ),
+                ],
               ],
             ),
           ),

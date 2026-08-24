@@ -1,7 +1,72 @@
 import 'package:bitemates/core/config/supabase_config.dart';
 
+/// Server-computed price breakdown for an experience booking. Comes from the
+/// `quote_experience` RPC, which uses the exact same fee logic as
+/// `reserve_experience`, so the displayed total always matches the Xendit charge.
+class ExperienceQuote {
+  final double unitPrice;
+  final int quantity;
+  final double subtotal;
+  final double feePercentage;
+  final bool feesPassedToCustomer;
+  final double platformFee;
+  final double totalAmount;
+
+  const ExperienceQuote({
+    required this.unitPrice,
+    required this.quantity,
+    required this.subtotal,
+    required this.feePercentage,
+    required this.feesPassedToCustomer,
+    required this.platformFee,
+    required this.totalAmount,
+  });
+
+  /// Whether a service-fee line should be shown (a fee that the buyer pays).
+  bool get hasVisibleFee => feesPassedToCustomer && platformFee > 0;
+
+  static double _d(dynamic v) =>
+      v == null ? 0.0 : (v is num ? v.toDouble() : double.tryParse('$v') ?? 0.0);
+
+  factory ExperienceQuote.fromJson(Map<String, dynamic> json) {
+    return ExperienceQuote(
+      unitPrice: _d(json['unit_price']),
+      quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+      subtotal: _d(json['subtotal']),
+      feePercentage: _d(json['fee_percentage']),
+      feesPassedToCustomer: json['fees_passed_to_customer'] == true,
+      platformFee: _d(json['platform_fee']),
+      totalAmount: _d(json['total_amount']),
+    );
+  }
+}
+
 class ExperienceService {
   final _client = SupabaseConfig.client;
+
+  /// Fetches the exact price breakdown (subtotal + service fee + total) the
+  /// booking will be charged, via the `quote_experience` RPC. Returns null if
+  /// the quote can't be fetched (caller should fall back to subtotal-only).
+  Future<ExperienceQuote?> quoteExperience({
+    required String tableId,
+    String? scheduleId,
+    required int quantity,
+  }) async {
+    try {
+      final data = await _client.rpc('quote_experience', params: {
+        'p_table_id': tableId,
+        'p_schedule_id': scheduleId,
+        'p_quantity': quantity,
+      });
+      if (data is Map) {
+        return ExperienceQuote.fromJson(Map<String, dynamic>.from(data));
+      }
+      return null;
+    } catch (e) {
+      print('❌ Error quoting experience: $e');
+      return null;
+    }
+  }
 
   /// Fetch full details for an experience (Table) including Host profile
   Future<Map<String, dynamic>> getExperienceDetails(String tableId) async {

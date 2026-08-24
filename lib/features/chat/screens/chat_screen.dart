@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/forward_message_sheet.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
@@ -29,6 +31,7 @@ import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
 import 'package:bitemates/core/services/connectivity_service.dart';
+import 'package:timeago/timeago.dart' as timeago;
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -37,6 +40,10 @@ class ChatScreen extends StatefulWidget {
   final String chatType; // 'table', 'trip', 'dm', or 'group'
   final bool embedded; // When true, hides header & bottom-sheet chrome
 
+  /// When opened from a share flow, this entity is auto-sent into the chat as a
+  /// ShareCard message once the chat is ready (Phase 1 share-to-chat).
+  final SharePayload? pendingShare;
+
   const ChatScreen({
     super.key,
     required this.tableId,
@@ -44,6 +51,7 @@ class ChatScreen extends StatefulWidget {
     required this.channelId,
     this.chatType = 'table',
     this.embedded = false,
+    this.pendingShare,
   });
 
   @override
@@ -74,6 +82,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Timer? _reconnectTimer; // Automatic reconnection timer
   bool _isOffline = false;
   StreamSubscription<bool>? _connectivitySub;
+  bool _wasDisconnected = false; // Track a drop so we can resync on reconnect
+  bool _isResyncing = false; // Guard against overlapping reconnect resyncs
+
+  // Scroll-to-bottom pill
+  bool _showScrollToBottomPill = false;
+  int _pendingNewMessages = 0;
+
+  // IDs of messages that failed to send (for retry / merge-preserve on resync)
+  final Set<String> _failedMessageIds = <String>{};
+  // Track which message IDs have already played their entrance animation.
+  final Set<String> _animatedMessageIds = <String>{};
 
   // Pagination
   int _messageLimit = 50; // Load 50 messages at a time
@@ -86,6 +105,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Timer? _typingTimer;
   bool _isTyping = false;
   ably.RealtimeChannel? _ablyChannel;
+
+  // Presence: online / last-seen (DM)
+  bool _otherUserOnline = false;
+  DateTime? _otherUserLastActive;
+  Timer? _presenceHeartbeat;
 
   // Search
   bool _isSearching = false;
@@ -139,6 +163,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _loadRsvpData(); // Load RSVP counts for table chats
       _checkIfActivityPast();
     }
+    // Auto-send a shared entity if we were opened from a share flow. Runs last,
+    // after the user is resolved and Ably is subscribed, so it uses the normal
+    // send path (local DB + Ably + batch sync + notifications).
+    _maybeSendPendingShare();
   }
 
   Future<void> _markChatAsRead() async {
@@ -194,6 +222,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _searchController.dispose();
     _reconnectTimer?.cancel();
     _typingTimer?.cancel();
+    _presenceHeartbeat?.cancel();
+    _updateOwnLastActive(); // stamp a fresh last-seen on the way out
     _connectivitySub?.cancel();
     _ablyService.leaveChannel(widget.channelId);
     super.dispose();
@@ -1048,6 +1078,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             };
           }).toList();
         });
+        // Now that we know the DM partner, seed their last-seen.
+        if (widget.chatType == 'dm' && !_otherUserOnline) {
+          _fetchOtherLastActive();
+        }
       }
     } catch (e) {
       print('❌ CHAT: Error loading participants - $e');
@@ -1089,6 +1123,54 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       await _loadMessageHistory_Telegram();
     } else {
       await _loadMessageHistory_Legacy();
+    }
+  }
+
+  /// After a dropped connection is restored, refetch the latest page so any
+  /// messages that arrived while offline appear (Ably only resumes LIVE events).
+  /// Optimistic 'failed' messages are preserved so a resync never eats a message
+  /// the user might still retry.
+  Future<void> _resyncOnReconnect() async {
+    if (_isResyncing) return;
+    _isResyncing = true;
+    try {
+      final failed = _messages
+          .where((m) => m['status'] == 'failed')
+          .toList(growable: false);
+      _messageOffset = 0;
+      await _loadMessageHistory();
+      if (mounted && failed.isNotEmpty) {
+        setState(() {
+          for (final f in failed) {
+            if (!_messages.any((m) => m['id'] == f['id'])) {
+              _messages.insert(0, f);
+            }
+          }
+        });
+      }
+      // Give any previously-failed sends another shot now that we're back.
+      _retryFailedMessages();
+    } finally {
+      _isResyncing = false;
+    }
+  }
+
+  /// Whether a message should play its entrance animation. True only the first
+  /// time a live message id is seen; history/pagination ids are pre-marked in
+  /// the load path so opening a chat doesn't animate the whole backlog.
+  bool _shouldAnimateMessage(String id) {
+    if (_animatedMessageIds.contains(id)) return false;
+    _animatedMessageIds.add(id);
+    return true;
+  }
+
+  /// Resend every message currently marked 'failed' (e.g. after reconnect).
+  void _retryFailedMessages() {
+    final failed = _messages
+        .where((m) => m['status'] == 'failed')
+        .toList(growable: false);
+    for (final m in failed) {
+      _retrySend(m);
     }
   }
 
@@ -1164,16 +1246,34 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Scroll listener for pagination
+  /// Scroll listener for pagination + scroll-to-bottom pill.
   void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+
     // With reverse: true, maxScrollExtent is the "Top" (Older messages).
     // So we load more when we approach the max extent.
-    if (_scrollController.position.pixels >=
-            _scrollController.position.maxScrollExtent - 200 &&
-        !_isLoadingMore) {
+    if (pos.pixels >= pos.maxScrollExtent - 200 && !_isLoadingMore) {
       _loadMoreMessages();
     }
+
+    // reverse:true → pixels==0 is the bottom (latest). Show the pill once the
+    // user has scrolled up past a threshold; hide + clear the count at bottom.
+    final scrolledUp = pos.pixels > 300;
+    if (scrolledUp != _showScrollToBottomPill) {
+      setState(() {
+        _showScrollToBottomPill = scrolledUp;
+        if (!scrolledUp) _pendingNewMessages = 0;
+      });
+    } else if (!scrolledUp && _pendingNewMessages != 0) {
+      setState(() => _pendingNewMessages = 0);
+    }
   }
+
+  /// True when the list is at (or very near) the latest message.
+  bool get _isNearBottom =>
+      !_scrollController.hasClients ||
+      _scrollController.position.pixels <= 300;
 
   /// Legacy mode: Load from Supabase with optimized single query
   Future<void> _loadMessageHistory_Legacy() async {
@@ -1320,8 +1420,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'reply_to_id': replyToId,
               'replyTo': replyToId != null ? replyMap[replyToId] : null,
               'sequenceNumber': msg['sequence_number'],
+              'isForwarded': msg['is_forwarded'] == true,
             };
           }).toList();
+
+          // History/pagination messages are pre-marked so they don't play the
+          // entrance animation — only live-arriving messages animate.
+          _animatedMessageIds.addAll(
+            newMessages.map((m) => m['id'] as String),
+          );
 
           // Pagination: Append or replace messages
           if (_messageOffset == 0) {
@@ -1388,6 +1495,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'senderPhotoUrl': photoMap[msg['sender_id']],
               'timestamp': timestampStr,
               'isMe': msg['sender_id'] == _currentUserId,
+              'isForwarded':
+                  msg['is_forwarded'] == 1 || msg['is_forwarded'] == true,
             };
           }).toList();
         });
@@ -1414,36 +1523,38 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _showConnectionBanner = !isConnected;
         });
 
-        // Attempt reconnection on disconnect
-        // REMOVED: Auto-connect is handled by the SDK. Manual overrides cause loops.
-        // if (stateChange.current == ably.ConnectionState.disconnected) {
-        //   _reconnectTimer?.cancel();
-        //   _reconnectTimer = Timer(Duration(seconds: 3), () {
-        //     _ablyService.reconnect();
-        //   });
-        // }
-
-        // Clear timer on successful connection
-        if (isConnected) {
+        // Auto-connect is handled by the Ably SDK. On a drop→reconnect, Ably
+        // only resumes LIVE events — messages sent while we were offline are
+        // missed — so refetch the latest page to fill the gap.
+        if (!isConnected) {
+          _wasDisconnected = true;
+        } else {
           _reconnectTimer?.cancel();
+          if (_wasDisconnected) {
+            _wasDisconnected = false;
+            _resyncOnReconnect();
+          }
         }
       }
     });
 
-    // Subscribe to presence for typing indicators
+    // Subscribe to presence for typing + online status
     if (_ablyChannel != null) {
       _ablyChannel!.presence.subscribe().listen((message) {
-        if (message.clientId != _currentUserId) {
-          final isTyping =
-              message.data is Map && (message.data as Map)['typing'] == true;
-          if (mounted) {
-            setState(() {
-              _otherUserTyping =
-                  isTyping && message.action != ably.PresenceAction.leave;
-            });
-          }
+        if (message.clientId != _currentUserId && mounted) {
+          final data = message.data;
+          final isTyping = data is Map && data['typing'] == true;
+          final isLeave =
+              message.action == ably.PresenceAction.leave ||
+              message.action == ably.PresenceAction.absent;
+          setState(() {
+            _otherUserTyping = isTyping && !isLeave;
+            _otherUserOnline = !isLeave;
+            if (isLeave) _otherUserLastActive = DateTime.now();
+          });
         }
       });
+      _initPresence();
     }
 
     stream?.listen((ably.Message message) async {
@@ -1530,6 +1641,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   : data['timestamp'],
               'message_type': data['contentType'] ?? 'text',
               'chat_type': widget.chatType,
+              'is_forwarded': data['isForwarded'] == true ? 1 : 0,
               'synced': 1, // Already from cloud
             };
             await _chatDatabase.saveMessage(messageToSave);
@@ -1539,6 +1651,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         }
 
         if (mounted) {
+          final isOwn = data['senderId'] == _currentUserId;
+          final nearBottom = _isNearBottom;
+          final alreadyInList =
+              _messages.indexWhere((m) => m['id'] == data['id']) != -1;
           setState(() {
             // Resolve reply data from existing messages in memory
             Map<String, dynamic>? replyTo;
@@ -1557,21 +1673,42 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               }
             }
 
-            // Insert new message at Top (Index 0) because list is Newest -> Oldest
-            _messages.insert(0, {
-              'id': data['id'],
-              'content': data['content'],
-              'contentType': data['contentType'] ?? 'text',
-              'senderId': data['senderId'],
-              'senderName': data['senderName'],
-              'senderPhotoUrl': data['senderPhotoUrl'],
-              'timestamp': data['timestamp'],
-              'isMe': data['senderId'] == _currentUserId,
-              'reply_to_id': data['replyToId'],
-              'replyTo': replyTo,
-            });
+            // Dedup: our own optimistic bubble is already in the list by id —
+            // the echo just confirms delivery, so update it to 'sent' instead
+            // of inserting a duplicate.
+            final existingIdx = _messages.indexWhere(
+              (m) => m['id'] == data['id'],
+            );
+            if (existingIdx != -1) {
+              _messages[existingIdx] = {
+                ..._messages[existingIdx],
+                'status': 'sent',
+              };
+              _failedMessageIds.remove(data['id']);
+            } else {
+              // Insert new message at Top (Index 0) — list is Newest -> Oldest
+              _messages.insert(0, {
+                'id': data['id'],
+                'content': data['content'],
+                'contentType': data['contentType'] ?? 'text',
+                'senderId': data['senderId'],
+                'senderName': data['senderName'],
+                'senderPhotoUrl': data['senderPhotoUrl'],
+                'timestamp': data['timestamp'],
+                'isMe': data['senderId'] == _currentUserId,
+                'reply_to_id': data['replyToId'],
+                'replyTo': replyTo,
+                'isForwarded': data['isForwarded'] == true,
+              });
+            }
           });
-          _scrollToBottom();
+          // Auto-scroll only for our own sends or when already near the bottom.
+          // A new incoming message while scrolled up bumps the pill instead.
+          if (isOwn || nearBottom || alreadyInList) {
+            _scrollToBottom();
+          } else {
+            setState(() => _pendingNewMessages++);
+          }
         }
       }
     });
@@ -1587,6 +1724,84 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         );
       }
     });
+  }
+
+  /// Jump straight to the latest message and clear the pill/count.
+  void _jumpToBottom() {
+    setState(() {
+      _showScrollToBottomPill = false;
+      _pendingNewMessages = 0;
+    });
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  /// Floating "scroll to latest" pill, with an unread-count badge when new
+  /// messages arrived while the user was reading older ones.
+  Widget _buildScrollToBottomPill() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasNew = _pendingNewMessages > 0;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: _jumpToBottom,
+        child: Container(
+          padding: hasNew
+              ? const EdgeInsets.fromLTRB(8, 6, 10, 6)
+              : const EdgeInsets.all(9),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF2A2A2A) : Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (hasNew) ...[
+                Container(
+                  constraints: const BoxConstraints(minWidth: 20),
+                  padding: const EdgeInsets.all(4),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).primaryColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    _pendingNewMessages > 99 ? '99+' : '$_pendingNewMessages',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Icon(
+                Icons.keyboard_arrow_down,
+                size: 22,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// Scroll to a search result by matched index
@@ -1609,7 +1824,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _sendMessage({String? gifUrl}) async {
+  Future<void> _sendMessage({String? gifUrl, String? shareContent}) async {
     if (_isMuted && !_isHost) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1622,16 +1837,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
     if (_useTelegramMode) {
-      await _sendMessage_Telegram(gifUrl: gifUrl);
+      await _sendMessage_Telegram(gifUrl: gifUrl, shareContent: shareContent);
     } else {
-      await _sendMessage_Legacy(gifUrl: gifUrl);
+      await _sendMessage_Legacy(gifUrl: gifUrl, shareContent: shareContent);
     }
   }
 
+  /// Auto-sends the entity passed via [widget.pendingShare] once, after the chat
+  /// is initialized. Guarded so a rebuild can't re-send it.
+  bool _pendingShareSent = false;
+  void _maybeSendPendingShare() {
+    if (_pendingShareSent) return;
+    final share = widget.pendingShare;
+    if (share == null) return;
+    _pendingShareSent = true;
+    _sendMessage(shareContent: share.toMessageContent());
+  }
+
   /// Telegram mode: Save to local DB first, then sync
-  Future<void> _sendMessage_Telegram({String? gifUrl}) async {
-    final content = gifUrl ?? _messageController.text.trim();
-    final contentType = gifUrl != null ? 'gif' : 'text';
+  Future<void> _sendMessage_Telegram({String? gifUrl, String? shareContent}) async {
+    final content =
+        shareContent ?? gifUrl ?? _messageController.text.trim();
+    final contentType =
+        shareContent != null ? 'share' : (gifUrl != null ? 'gif' : 'text');
 
     if (content.isEmpty || _currentUserId == null) return;
 
@@ -1705,12 +1933,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         });
       }
 
-      // Send push notifications (non-blocking)
-      _sendNewMessagePushNotifications(content, contentType);
-      if (contentType == 'text') {
-        _sendMentionPushNotifications(content);
-      }
-
+      // Push + in-app notifications for the new message (including @mentions,
+      // carried via mentioned_user_ids on sync) are delivered server-side by
+      // the handle_new_message() DB trigger → notifications → push queue.
       // Note: Sync happens in 60-second batches (see _startBatchSyncTimer)
     } catch (e) {
       print('❌ CHAT: Error sending message (Telegram) - $e');
@@ -1727,12 +1952,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     String? gifUrl,
     String? imageUrl,
     String? pollId,
+    String? shareContent,
   }) async {
     HapticFeedback.lightImpact();
     // Determine content and type
     final String content;
     final String contentType;
-    if (imageUrl != null) {
+    if (shareContent != null) {
+      content = shareContent;
+      contentType = 'share';
+    } else if (imageUrl != null) {
       content = imageUrl;
       contentType = 'image';
     } else if (pollId != null) {
@@ -1758,8 +1987,54 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // and message['id'] is never null (prevents delete crash)
     final messageId = const Uuid().v4();
 
+    // Resolve @mentions to exact participant IDs so the DB trigger can notify
+    // them reliably (server-side, no fragile name-regex, no duplicate push).
+    final List<String> mentionedIds = contentType == 'text'
+        ? _resolveMentionedUserIds(content)
+        : const <String>[];
+
+    // Optimistic bubble (status 'sending'). The Ably echo dedups by id and
+    // flips it to 'sent'; a failure flips it to 'failed' for tap-to-retry.
+    final optimistic = <String, dynamic>{
+      'id': messageId,
+      'content': content,
+      'contentType': contentType,
+      'senderId': _currentUserId,
+      'senderName': _currentUserName ?? 'You',
+      'senderPhotoUrl': _currentUserPhoto,
+      'timestamp': DateTime.now().toIso8601String(),
+      'isMe': true,
+      'reply_to_id': replyToId,
+      'status': 'sending',
+      // Kept for retry:
+      '_mentionedIds': mentionedIds,
+    };
+    if (mounted) {
+      setState(() => _messages.insert(0, optimistic));
+      _scrollToBottom();
+    }
+
+    final ok = await _persistAndPublish(
+      messageId: messageId,
+      content: content,
+      contentType: contentType,
+      replyToId: replyToId,
+      mentionedIds: mentionedIds,
+    );
+
+    _markMessageStatus(messageId, ok ? 'sent' : 'failed');
+  }
+
+  /// Persist a message to Supabase and publish it to Ably. Returns whether both
+  /// succeeded. Shared by the initial send and retry so behaviour stays in sync.
+  Future<bool> _persistAndPublish({
+    required String messageId,
+    required String content,
+    required String contentType,
+    String? replyToId,
+    required List<String> mentionedIds,
+  }) async {
     try {
-      // 1. Save to Supabase
       if (widget.chatType == 'trip') {
         await SupabaseConfig.client.from('trip_messages').insert({
           'id': messageId,
@@ -1786,6 +2061,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'content': content,
           'content_type': contentType,
           if (replyToId != null) 'reply_to_id': replyToId,
+          if (mentionedIds.isNotEmpty) 'mentioned_user_ids': mentionedIds,
         });
       } else {
         await SupabaseConfig.client.from('messages').insert({
@@ -1795,10 +2071,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           'content': content,
           'content_type': contentType,
           if (replyToId != null) 'reply_to_id': replyToId,
+          if (mentionedIds.isNotEmpty) 'mentioned_user_ids': mentionedIds,
         });
       }
 
-      // 2. Publish to Ably so other users see it instantly
       await _ablyService.publishMessage(
         channelName: widget.channelId,
         content: content,
@@ -1809,136 +2085,72 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         messageId: messageId,
         replyToId: replyToId,
       );
-
-      // No optimistic insert needed — in legacy mode the Ably listener
-      // echoes back our own message and handles display for all types.
-
-      // Send push notifications
-      _sendNewMessagePushNotifications(content, contentType);
-      if (contentType == 'text') {
-        _sendMentionPushNotifications(content);
-      }
+      return true;
     } catch (e) {
       debugPrint('❌ CHAT: Error sending message - $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Failed to send message')));
-      }
+      return false;
     }
   }
 
-  /// Send push notification to all chat participants (new message)
-  Future<void> _sendNewMessagePushNotifications(
-    String content,
-    String contentType,
-  ) async {
-    if (_currentUserId == null || _participants.isEmpty) return;
-
-    final senderName = _currentUserName ?? 'Someone';
-    final chatName = widget.tableTitle.isNotEmpty
-        ? widget.tableTitle
-        : senderName;
-
-    // Build a preview body
-    final String body;
-    if (contentType == 'image') {
-      body = '📷 sent a photo';
-    } else if (contentType == 'gif') {
-      body = '🎞️ sent a GIF';
-    } else if (contentType == 'poll') {
-      body = '📊 created a poll';
-    } else {
-      body = content.length > 100 ? '${content.substring(0, 100)}...' : content;
-    }
-
-    for (final participant in _participants) {
-      final userId = participant['userId'] as String?;
-      if (userId == null || userId == _currentUserId) continue;
-
-      try {
-        await SupabaseConfig.client.functions.invoke(
-          'send-push',
-          body: {
-            'user_id': userId,
-            'title': '$senderName in $chatName',
-            'body': body,
-            'data': {
-              'type': 'chat',
-              'chat_type': widget.chatType,
-              'table_id': widget.tableId,
-              'sender_name': senderName,
-            },
-          },
-        );
-      } catch (e) {
-        debugPrint('⚠️ Failed to send new-message push to $userId: $e');
+  /// Flip an optimistic message's status and keep the failed-id set in sync.
+  void _markMessageStatus(String messageId, String status) {
+    if (!mounted) return;
+    setState(() {
+      final idx = _messages.indexWhere((m) => m['id'] == messageId);
+      if (idx != -1) _messages[idx]['status'] = status;
+      if (status == 'failed') {
+        _failedMessageIds.add(messageId);
+      } else {
+        _failedMessageIds.remove(messageId);
       }
-    }
+    });
   }
 
-  /// Send push notification to mentioned users
-  Future<void> _sendMentionPushNotifications(String content) async {
-    if (_currentUserId == null || _participants.isEmpty) return;
+  /// Retry a previously-failed message using its stored content.
+  Future<void> _retrySend(Map<String, dynamic> message) async {
+    final id = message['id'] as String?;
+    if (id == null || message['status'] != 'failed') return;
 
-    // Extract @mentions from content
-    final mentionRegex = RegExp(r'@([\w\s]+?)(?=\s@|\s[^@]|$)');
-    final matches = mentionRegex.allMatches(content);
+    _markMessageStatus(id, 'sending');
+    final ok = await _persistAndPublish(
+      messageId: id,
+      content: message['content'] as String? ?? '',
+      contentType: message['contentType'] as String? ?? 'text',
+      replyToId: message['reply_to_id'] as String?,
+      mentionedIds:
+          (message['_mentionedIds'] as List?)?.cast<String>() ?? const [],
+    );
+    _markMessageStatus(id, ok ? 'sent' : 'failed');
+  }
 
-    for (final match in matches) {
-      final name = match.group(1)?.trim();
-      if (name == null) continue;
+  /// Resolve @mentions in [content] to exact participant user IDs.
+  ///
+  /// Matches by display name against the loaded participants (case-insensitive),
+  /// longest name first so multi-word names win over a shorter name that is a
+  /// prefix. The IDs are stored on the message (`mentioned_user_ids`) so the
+  /// handle_new_message() trigger can notify them reliably server-side — no
+  /// fragile name-only regex, and no duplicate with the regular chat push.
+  List<String> _resolveMentionedUserIds(String content) {
+    if (_currentUserId == null || _participants.isEmpty) return const [];
+    if (!content.contains('@')) return const [];
 
-      // Find the participant by display name
-      final participant = _participants.firstWhere(
-        (p) =>
-            (p['displayName'] as String?)?.toLowerCase() == name.toLowerCase(),
-        orElse: () => <String, dynamic>{},
-      );
+    final lower = content.toLowerCase();
+    final sorted = List<Map<String, dynamic>>.from(_participants)
+      ..sort((a, b) => ((b['displayName'] as String?)?.length ?? 0).compareTo(
+        (a['displayName'] as String?)?.length ?? 0,
+      ));
 
-      if (participant.isEmpty) continue;
-      final userId = participant['userId'] as String?;
-      if (userId == null || userId == _currentUserId)
-        continue; // Don't notify self
-
-      try {
-        // Insert in-app notification
-        await SupabaseConfig.client.from('notifications').insert({
-          'user_id': userId,
-          'actor_id': _currentUserId,
-          'type': 'chat',
-          'title': '${_currentUserName ?? 'Someone'} mentioned you',
-          'body': content.length > 100
-              ? '${content.substring(0, 100)}...'
-              : content,
-          'entity_id': widget.tableId,
-          'metadata': {
-            'table_id': widget.tableId,
-            'chat_type': widget.chatType,
-          },
-        });
-
-        // Send push notification
-        await SupabaseConfig.client.functions.invoke(
-          'send-push',
-          body: {
-            'user_id': userId,
-            'title': '${_currentUserName ?? 'Someone'} mentioned you',
-            'body': content.length > 100
-                ? '${content.substring(0, 100)}...'
-                : content,
-            'data': {
-              'type': 'chat',
-              'chat_type': widget.chatType,
-              'table_id': widget.tableId,
-              'sender_name': _currentUserName ?? 'Someone',
-            },
-          },
-        );
-      } catch (e) {
-        print('⚠️ Failed to send mention notification to $userId: $e');
+    final ids = <String>{};
+    for (final p in sorted) {
+      final name = (p['displayName'] as String?)?.trim();
+      final userId = p['userId'] as String?;
+      if (name == null || name.isEmpty || userId == null) continue;
+      if (userId == _currentUserId) continue; // never notify self
+      if (lower.contains('@${name.toLowerCase()}')) {
+        ids.add(userId);
       }
     }
+    return ids.toList();
   }
 
   void _handleReply(Map<String, dynamic> message) {
@@ -2216,6 +2428,83 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return other['name'] ?? 'Someone';
   }
 
+  String? _getOtherUserId() {
+    if (widget.chatType != 'dm') return null;
+    final other = _participants.firstWhere(
+      (p) => p['userId'] != _currentUserId,
+      orElse: () => <String, dynamic>{},
+    );
+    return other['userId'] as String?;
+  }
+
+  /// Announce our presence, seed the other user's online state, and start a
+  /// heartbeat that keeps last_active_at fresh (for "last seen").
+  Future<void> _initPresence() async {
+    try {
+      await _ablyChannel?.presence.enterClient(_currentUserId ?? 'unknown', {
+        'typing': false,
+      });
+    } catch (_) {}
+
+    try {
+      final members = await _ablyChannel?.presence.get();
+      if (members != null && mounted) {
+        final online = members.any(
+          (m) => m.clientId != null && m.clientId != _currentUserId,
+        );
+        setState(() => _otherUserOnline = online);
+      }
+    } catch (_) {}
+
+    _updateOwnLastActive();
+    _fetchOtherLastActive();
+    _presenceHeartbeat?.cancel();
+    _presenceHeartbeat = Timer.periodic(const Duration(seconds: 60), (_) {
+      _updateOwnLastActive();
+      if (!_otherUserOnline) _fetchOtherLastActive();
+    });
+  }
+
+  Future<void> _updateOwnLastActive() async {
+    if (_currentUserId == null) return;
+    try {
+      await SupabaseConfig.client
+          .from('users')
+          .update({'last_active_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _currentUserId!);
+    } catch (_) {}
+  }
+
+  Future<void> _fetchOtherLastActive() async {
+    final otherId = _getOtherUserId();
+    if (otherId == null) return;
+    try {
+      final row = await SupabaseConfig.client
+          .from('users')
+          .select('last_active_at')
+          .eq('id', otherId)
+          .maybeSingle();
+      final ts = row?['last_active_at'];
+      if (ts != null && mounted) {
+        setState(
+          () => _otherUserLastActive = DateTime.tryParse(
+            ts.toString(),
+          )?.toLocal(),
+        );
+      }
+    } catch (_) {}
+  }
+
+  /// DM header status line: "Active now" when present, else "last seen …".
+  String? _headerStatusText() {
+    if (widget.chatType != 'dm') return null;
+    if (_otherUserOnline) return 'Active now';
+    if (_otherUserLastActive != null) {
+      return 'last seen ${timeago.format(_otherUserLastActive!)}';
+    }
+    return null;
+  }
+
   String _getReplyContent(String? replyToId) {
     if (replyToId == null) return '';
 
@@ -2232,6 +2521,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (replyMsg['contentType'] == 'poll') return 'Poll 📊';
 
     return replyMsg['content'] ?? 'Message unavailable';
+  }
+
+  /// URL of the replied-to message's media when it's an image/gif, so the reply
+  /// preview can show an actual thumbnail (image/gif messages store the URL in
+  /// `content`). Returns null for text/other so only a label is shown.
+  String? _getReplyImageUrl(String? replyToId) {
+    if (replyToId == null) return null;
+    final replyMsg = _messages.firstWhere(
+      (m) => m['id'] == replyToId,
+      orElse: () => {},
+    );
+    if (replyMsg.isEmpty) return null;
+    final type = replyMsg['contentType'];
+    if (type != 'image' && type != 'gif') return null;
+    final url = replyMsg['content']?.toString();
+    if (url == null || !url.startsWith('http')) return null;
+    return url;
   }
 
   String _getReplySenderName(String? replyToId) {
@@ -2266,18 +2572,78 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => KlipyGifPicker(
+      builder: (sheetContext) => KlipyGifPicker(
         onGifSelected: (gifUrl) {
+          // Close the picker first, then send the GIF.
+          Navigator.of(sheetContext).pop();
           _sendMessage(gifUrl: gifUrl);
         },
       ),
     );
   }
 
-  /// Image picker: multi-select → compress → upload → send as image messages
+  /// Image button → choose Camera or Gallery, then compress → upload → send.
   Future<void> _sendImageMessage() async {
+    final source = await _pickImageSource();
+    if (source == null) return;
+
     final picker = ImagePicker();
-    final pickedFiles = await picker.pickMultiImage(imageQuality: 85);
+    final List<XFile> pickedFiles;
+    if (source == ImageSource.camera) {
+      final shot = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+      );
+      if (shot == null) return;
+      pickedFiles = [shot];
+    } else {
+      pickedFiles = await picker.pickMultiImage(imageQuality: 85);
+    }
+    await _uploadAndSendImages(pickedFiles);
+  }
+
+  /// Bottom sheet: take a new photo vs pick from the gallery.
+  Future<ImageSource?> _pickImageSource() async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[500],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Compress → upload → send each picked image as its own message.
+  Future<void> _uploadAndSendImages(List<XFile> pickedFiles) async {
     if (pickedFiles.isEmpty || _currentUserId == null) return;
 
     if (mounted && pickedFiles.length > 1) {
@@ -2599,6 +2965,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             children: [
               ChatHeader(
                 title: widget.tableTitle,
+                statusText: _headerStatusText(),
+                isOnline: widget.chatType == 'dm' && _otherUserOnline,
                 onLeave: _leaveTable,
                 onClose: () => Navigator.pop(context),
                 onSearch: () {
@@ -2683,6 +3051,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           title: widget.tableTitle,
                           chatType: widget.chatType,
                           participants: _participants,
+                          tableId: widget.tableId,
                         ),
                       ),
                     );
@@ -2941,13 +3310,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       // Messages Area
       Expanded(
-        child: ChatMessageList(
+        child: Stack(
+          children: [
+            ChatMessageList(
           isLoading: _isLoading,
           messages: _messages,
           scrollController: _scrollController,
           messageReactions: _messageReactions,
           getReplySenderName: _getReplySenderName,
           getReplyContent: _getReplyContent,
+          getReplyImageUrl: _getReplyImageUrl,
           buildStatusIndicator: (status) => _buildStatusIndicator(status),
           buildReactionChips: (msgId) =>
               msgId != null ? _buildReactionChips(msgId) : [],
@@ -2964,11 +3336,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             );
           },
           onAvatarTap: (userId) => _handleAvatarTap(userId),
+          onRetry: _retrySend,
+          shouldAnimate: _shouldAnimateMessage,
           participants: _participants,
           searchQuery: _searchQuery,
           matchedIndices: _matchedIndices,
           currentMatchIndex: _currentMatchIndex,
           channelId: widget.channelId,
+            ),
+            if (_showScrollToBottomPill)
+              Positioned(
+                right: 12,
+                bottom: 12,
+                child: _buildScrollToBottomPill(),
+              ),
+          ],
         ),
       ),
 
@@ -3219,6 +3601,34 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Content-type of a UI message map, normalized across the two key spellings.
+  String _messageContentType(Map<String, dynamic> message) =>
+      (message['contentType'] ?? message['content_type'] ?? 'text').toString();
+
+  /// Only real content can be forwarded — not system notices, and not polls
+  /// (a poll_id references this chat's poll, so it wouldn't resolve elsewhere).
+  bool _isForwardable(Map<String, dynamic> message) {
+    const kinds = {'text', 'image', 'gif', 'share'};
+    final content = (message['content'] ?? '').toString();
+    return kinds.contains(_messageContentType(message)) && content.isNotEmpty;
+  }
+
+  void _handleForward(Map<String, dynamic> message) {
+    final type = _messageContentType(message);
+    const labels = {
+      'image': 'photo',
+      'gif': 'GIF',
+      'share': 'shared item',
+      'text': 'message',
+    };
+    ForwardMessageSheet.show(
+      context,
+      content: (message['content'] ?? '').toString(),
+      contentType: type,
+      kindLabel: labels[type] ?? 'message',
+    );
+  }
+
   void _showMessageActions(Map<String, dynamic> message) {
     HapticFeedback.mediumImpact();
     final isOwnMessage = message['senderId'] == _currentUserId;
@@ -3260,6 +3670,50 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 _handleReply(message);
               },
             ),
+            if (_messageContentType(message) == 'text' &&
+                (message['content'] ?? '').toString().isNotEmpty)
+              ListTile(
+                leading: Icon(
+                  Icons.copy_rounded,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: Text(
+                  'Copy',
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  Clipboard.setData(
+                    ClipboardData(text: message['content'].toString()),
+                  );
+                  HapticFeedback.selectionClick();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Copied'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+              ),
+            if (_isForwardable(message))
+              ListTile(
+                leading: Icon(
+                  Icons.forward,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: Text(
+                  'Forward',
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleForward(message);
+                },
+              ),
             ListTile(
               leading: Icon(
                 Icons.emoji_emotions_outlined,
@@ -3438,12 +3892,106 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         icon = Icons.done_all;
         color = Colors.blue;
         break;
+      case 'failed':
+        icon = Icons.error_outline;
+        color = Colors.redAccent;
+        break;
       default:
         icon = Icons.check;
         color = Colors.grey[400]!;
     }
 
     return Icon(icon, size: 12, color: color);
+  }
+
+  /// Bottom sheet listing who reacted to a message, grouped by emoji.
+  void _showReactionDetails(String messageId) {
+    final reactions = _messageReactions[messageId] ?? [];
+    if (reactions.isEmpty) return;
+
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final r in reactions) {
+      final emoji = r['emoji'] as String? ?? '❓';
+      grouped.putIfAbsent(emoji, () => []).add(r);
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[500],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Text(
+                      'Reactions',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${reactions.length}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[500],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final entry in grouped.entries)
+                      for (final r in entry.value)
+                        ListTile(
+                          dense: true,
+                          leading: Text(
+                            entry.key,
+                            style: const TextStyle(fontSize: 22),
+                          ),
+                          title: Text(
+                            (r['user_id'] == _currentUserId)
+                                ? 'You'
+                                : (r['displayName'] as String? ?? 'Unknown'),
+                            style: TextStyle(
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   List<Widget> _buildReactionChips(String messageId) {
@@ -3463,6 +4011,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       return GestureDetector(
         onTap: () => _handleReaction(messageId, emoji),
+        onLongPress: () => _showReactionDetails(messageId),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(

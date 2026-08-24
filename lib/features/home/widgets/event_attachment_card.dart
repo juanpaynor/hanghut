@@ -9,11 +9,16 @@ class EventAttachmentCard extends StatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onImageTap;
 
+  /// When provided, a small share button is shown in the footer so this event
+  /// can be shared on its own (invite framing), distinct from sharing the post.
+  final VoidCallback? onShare;
+
   const EventAttachmentCard({
     super.key,
     required this.event,
     this.onTap,
     this.onImageTap,
+    this.onShare,
   });
 
   @override
@@ -229,15 +234,33 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
                       ),
                     ),
 
-                    // CTA Button
-                    Text(
-                      widget.event['is_external'] == true
-                          ? 'Get Tickets →'
-                          : 'Get Tickets →',
-                      style: TextStyle(
-                        color: Theme.of(context).primaryColor,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    // Share + CTA
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.onShare != null) ...[
+                          InkWell(
+                            onTap: widget.onShare,
+                            borderRadius: BorderRadius.circular(20),
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Icon(
+                                Icons.share_outlined,
+                                size: 20,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        Text(
+                          'Get Tickets →',
+                          style: TextStyle(
+                            color: Theme.of(context).primaryColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

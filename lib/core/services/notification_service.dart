@@ -237,21 +237,70 @@ class NotificationService {
         .order('created_at', ascending: false)
         .limit(limit);
 
+    var items = List<Map<String, dynamic>>.from(response);
+
     // Filter out notifications from blocked users
     try {
       final blockedIds = await client.rpc('get_blocked_user_ids');
       if (blockedIds != null && (blockedIds as List).isNotEmpty) {
         final blocked = blockedIds.map((e) => e.toString()).toSet();
-        return List<Map<String, dynamic>>.from(
-          response,
-        ).where((n) => !blocked.contains(n['actor_id']?.toString())).toList();
+        items = items
+            .where((n) => !blocked.contains(n['actor_id']?.toString()))
+            .toList();
       }
     } catch (e) {
       // If blocked IDs fetch fails, still return unfiltered
       print('⚠️ Block filter failed for notifications: $e');
     }
 
-    return List<Map<String, dynamic>>.from(response);
+    await _attachPostPreviews(items);
+    return items;
+  }
+
+  /// Attach a `preview_image_url` to post-related notifications (like/comment/
+  /// mention) by batch-fetching each referenced post's thumbnail. One query for
+  /// the whole page — no N+1.
+  Future<void> _attachPostPreviews(List<Map<String, dynamic>> items) async {
+    const postTypes = {'like', 'comment', 'mention'};
+    final postIds = <String>{};
+    for (final n in items) {
+      if (!postTypes.contains(n['type'])) continue;
+      final meta = n['metadata'] as Map<String, dynamic>?;
+      final id = (meta?['post_id'] ?? n['entity_id'])?.toString();
+      if (id != null && id.isNotEmpty) postIds.add(id);
+    }
+    if (postIds.isEmpty) return;
+
+    try {
+      final rows = await SupabaseConfig.client
+          .from('posts')
+          .select('id, image_url, image_urls, gif_url')
+          .inFilter('id', postIds.toList());
+
+      final previews = <String, String>{};
+      for (final r in (rows as List)) {
+        final id = r['id']?.toString();
+        if (id == null) continue;
+        String? url = r['image_url'] as String?;
+        if (url == null || url.isEmpty) {
+          final arr = r['image_urls'] as List?;
+          if (arr != null && arr.isNotEmpty) url = arr.first?.toString();
+        }
+        url ??= r['gif_url'] as String?;
+        if (url != null && url.isNotEmpty) previews[id] = url;
+      }
+
+      for (final n in items) {
+        if (!postTypes.contains(n['type'])) continue;
+        final meta = n['metadata'] as Map<String, dynamic>?;
+        final id = (meta?['post_id'] ?? n['entity_id'])?.toString();
+        if (id != null && previews.containsKey(id)) {
+          n['preview_image_url'] = previews[id];
+        }
+      }
+    } catch (e) {
+      print('⚠️ Failed to attach notification previews: $e');
+    }
   }
 
   Future<void> markAsRead(String notificationId) async {
@@ -261,6 +310,23 @@ class NotificationService {
         .eq('id', notificationId);
 
     // Refresh count after marking as read
+    _refreshUnreadCount();
+  }
+
+  /// Permanently deletes a single notification (scoped to the current user so
+  /// RLS/ownership is enforced). Refreshes the unread badge afterwards in case
+  /// the removed row was still unread.
+  Future<void> deleteNotification(String notificationId) async {
+    final client = SupabaseConfig.client;
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    await client
+        .from('notifications')
+        .delete()
+        .eq('id', notificationId)
+        .eq('user_id', userId);
+
     _refreshUnreadCount();
   }
 

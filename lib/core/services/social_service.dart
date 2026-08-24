@@ -139,6 +139,75 @@ class SocialService {
     }
   }
 
+  /// Fetch a single author's posts for the profile timeline (Facebook-style).
+  /// Returns rows in the SAME shape the feed uses so [SocialPostCard] can render
+  /// them unchanged. Cursor-paginated. Stories are excluded server-side; the RPC
+  /// also enforces visibility + block rules.
+  Future<Map<String, dynamic>> getUserPosts({
+    required String userId,
+    int limit = 15,
+    String? cursor,
+    String? cursorId,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        'get_user_posts',
+        params: {
+          'p_author_id': userId,
+          'p_limit': limit + 1, // +1 to detect hasMore
+          'p_cursor': cursor,
+          'p_cursor_id': cursorId,
+        },
+      );
+
+      if (response == null) {
+        return {
+          'posts': <Map<String, dynamic>>[],
+          'hasMore': false,
+          'nextCursor': null,
+          'nextCursorId': null,
+        };
+      }
+
+      final responseList = response is List ? response : [response];
+      final List<Map<String, dynamic>> posts = responseList
+          .map((item) {
+            if (item is Map<String, dynamic>) return item;
+            if (item is Map) return Map<String, dynamic>.from(item);
+            return <String, dynamic>{};
+          })
+          .where((item) => item.isNotEmpty)
+          .toList();
+
+      // Map user_data -> user, matching getFeed().
+      final mappedPosts = posts.map((post) {
+        final userData = post['user_data'] as Map<String, dynamic>? ?? {};
+        return {...post, 'user': userData};
+      }).toList();
+
+      bool hasMore = false;
+      String? nextCursor;
+      String? nextCursorId;
+      if (mappedPosts.length > limit) {
+        hasMore = true;
+        final lastItem = mappedPosts[limit - 1];
+        nextCursor = lastItem['created_at'] as String?;
+        nextCursorId = lastItem['id'] as String?;
+        mappedPosts.removeLast();
+      }
+
+      return {
+        'posts': mappedPosts,
+        'hasMore': hasMore,
+        'nextCursor': nextCursor,
+        'nextCursorId': nextCursorId,
+      };
+    } catch (e) {
+      print('Error fetching user posts: $e');
+      rethrow;
+    }
+  }
+
   /// Create a new post with up to 5 images or 1 video
   Future<Map<String, dynamic>?> createPost({
     required String content,
@@ -148,6 +217,7 @@ class SocialService {
     double? latitude,
     double? longitude,
     List<String>? mentionedUserIds,
+    String? eventId,
   }) async {
     try {
       final userId = _client.auth.currentUser?.id;
@@ -230,6 +300,10 @@ class SocialService {
       };
       if (mentionedUserIds != null && mentionedUserIds.isNotEmpty) {
         postData['mentioned_user_ids'] = mentionedUserIds;
+      }
+      // Optional event tag linking this post to an event.
+      if (eventId != null && eventId.isNotEmpty) {
+        postData['event_id'] = eventId;
       }
 
       final response = await _client.from('posts').insert(postData).select('''
@@ -353,6 +427,55 @@ class SocialService {
       return false;
     } finally {
       _likesInFlight.remove(postId);
+    }
+  }
+
+  /// Fetch the users who liked a post (or story — they share `post_likes`).
+  /// Most-recent first. Used by the like facepile + likes list sheet.
+  Future<List<Map<String, dynamic>>> getPostLikers(
+    String postId, {
+    int limit = 50,
+  }) async {
+    try {
+      final rows = await _client
+          .from('post_likes')
+          .select(
+            'user_id, created_at, users(id, display_name, username, is_verified_photo, user_photos(photo_url, is_primary))',
+          )
+          .eq('post_id', postId)
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      return (rows as List)
+          .map((r) {
+            final user = r['users'] as Map<String, dynamic>?;
+            if (user == null) return null;
+
+            // Resolve profile photo from user_photos (primary), same pattern
+            // as the feed/comments — NOT the avatar_url column.
+            String? photoUrl;
+            final photos = user['user_photos'] as List?;
+            if (photos != null && photos.isNotEmpty) {
+              final primary = photos.firstWhere(
+                (p) => p['is_primary'] == true,
+                orElse: () => photos.first,
+              );
+              photoUrl = primary['photo_url'] as String?;
+            }
+
+            return <String, dynamic>{
+              'user_id': r['user_id'],
+              'display_name': user['display_name'],
+              'username': user['username'],
+              'avatar_url': photoUrl,
+              'is_verified_photo': user['is_verified_photo'] ?? false,
+            };
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (e) {
+      print('❌ Error fetching post likers: $e');
+      return [];
     }
   }
 

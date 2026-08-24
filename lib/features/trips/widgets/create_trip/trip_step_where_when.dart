@@ -1,24 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:google_places_flutter/google_places_flutter.dart';
-import 'package:google_places_flutter/model/prediction.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/features/shared/widgets/places_autocomplete_field.dart';
 import 'create_trip_flow.dart';
 
 /// Step 1: Where are you going? + When?
 class TripStepWhereWhen extends StatelessWidget {
   final CreateTripFlowState flow;
   const TripStepWhereWhen({super.key, required this.flow});
-
-  static const String _fallbackGoogleKey =
-      'AIzaSyDOIku975W5J2mTaCwqgahOQcbRhw-iRaA';
-
-  String get _googleApiKey {
-    final envKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-    return envKey.isNotEmpty ? envKey : _fallbackGoogleKey;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -88,10 +78,10 @@ class TripStepWhereWhen extends StatelessWidget {
                 color: surfaceColor,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: GooglePlaceAutoCompleteTextField(
-                textEditingController: flow.cityController,
-                googleAPIKey: _googleApiKey,
-                inputDecoration: InputDecoration(
+              child: PlacesAutocompleteField(
+                controller: flow.cityController,
+                debounceMs: 800,
+                decoration: InputDecoration(
                   hintText: 'Search for a city...',
                   hintStyle: TextStyle(color: onSurface.withOpacity(0.4)),
                   border: OutlineInputBorder(
@@ -105,15 +95,12 @@ class TripStepWhereWhen extends StatelessWidget {
                   filled: true,
                   fillColor: Colors.transparent,
                 ),
-                debounceTime: 800,
-                isLatLngRequired: false,
-                getPlaceDetailWithLatLng: (Prediction prediction) {},
-                itemClick: (Prediction prediction) {
-                  flow.cityController.text = prediction.description ?? '';
+                onSelected: (prediction) {
+                  flow.cityController.text = prediction.description;
                   flow.cityController.selection = TextSelection.fromPosition(
                     TextPosition(offset: flow.cityController.text.length),
                   );
-                  final parts = (prediction.description ?? '').split(',');
+                  final parts = prediction.description.split(',');
                   if (parts.length > 1) {
                     flow.countryController.text = parts.last.trim();
                   } else {
@@ -121,23 +108,6 @@ class TripStepWhereWhen extends StatelessWidget {
                   }
                   FocusScope.of(context).unfocus();
                   flow.rebuild();
-                },
-                itemBuilder: (context, index, Prediction prediction) {
-                  return Container(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.location_city, color: Colors.grey[400]),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            prediction.description ?? '',
-                            style: TextStyle(color: onSurface),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
                 },
               ),
             ),

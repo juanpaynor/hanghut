@@ -12,6 +12,8 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/matching_service.dart';
 import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/core/services/weather_service.dart';
+import 'package:bitemates/core/services/weather_effects_preference.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'dart:convert';
@@ -30,9 +32,7 @@ import 'package:bitemates/features/camera/screens/location_story_viewer_screen.d
 import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
-import 'package:bitemates/core/services/coach_mark_service.dart';
 import 'package:bitemates/core/services/event_category_service.dart';
-import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
 // Filter enum for toggling marker visibility
 enum MapFilter { all, hangouts, events, experiences, stories }
@@ -56,6 +56,7 @@ class MapScreenState extends State<MapScreen>
   final _matchingService = MatchingService();
   final _eventService = EventService();
   final StoryService _storyService = StoryService();
+  final WeatherService _weatherService = WeatherService();
 
   List<Map<String, dynamic>> _tables = [];
   List<Event> _events = [];
@@ -83,6 +84,8 @@ class MapScreenState extends State<MapScreen>
   String? _selectedEventCategory;
   // Server-driven category list (team_comms #174). Empty until fetched.
   List<EventCategoryItem> _eventCategories = [];
+  // Filter UI: collapsed to a "Filters" pill, or expanded to the full card.
+  bool _filtersExpanded = false;
 
   // Optimization: Track added images to avoid re-uploading
   final Set<String> _addedImages = {};
@@ -108,8 +111,6 @@ class MapScreenState extends State<MapScreen>
   final GlobalKey _keyLocationBtn  = GlobalKey();
   final GlobalKey _keyNearbyBtn    = GlobalKey();
 
-  static const _mapTourKey = 'map_screen_tour_v1';
-
   @override
   bool get wantKeepAlive => true;
 
@@ -127,6 +128,8 @@ class MapScreenState extends State<MapScreen>
     _startHeartbeat();
     _subscribeToFeed();
     _loadEventCategories();
+    // React live to the Settings weather-effects toggle (no app restart).
+    WeatherEffectsPreference.changes.addListener(_onWeatherEffectsToggled);
   }
 
   /// Loads the server-driven event category list for the Events sub-filter.
@@ -176,6 +179,8 @@ class MapScreenState extends State<MapScreen>
     _heartbeatTimer?.cancel();
     _feedSubscription?.cancel();
     _isochronePulseTimer?.cancel();
+    _weatherRecheckTimer?.cancel();
+    WeatherEffectsPreference.changes.removeListener(_onWeatherEffectsToggled);
     super.dispose();
   }
 
@@ -439,6 +444,9 @@ class MapScreenState extends State<MapScreen>
     _mapboxMap = mapboxMap;
     _addedImages
         .clear(); // Clear local cache to force re-add images to new style
+    // A dark/light toggle rebuilds the MapWidget (new ValueKey) → fresh style,
+    // so let rain re-evaluate on the new style instead of staying "checked".
+    _rainChecked = false;
 
     // Register Tap Listener handled via GestureDetector in build
 
@@ -461,116 +469,138 @@ class MapScreenState extends State<MapScreen>
     }
   }
 
-  /// Public so MainNavigationScreen can chain it from the navbar tour's onFinish.
-  /// Also self-triggers after the cloud intro for users who already saw the
-  /// navbar tour (app updates / reinstalls with data restored).
-  ///
-  /// Pass [requireNavbarSeen] = true when calling from the cloud-intro callback
-  /// so we don't race with the navbar tour. When called from onFinish, pass
-  /// false — the navbar tour is done by definition.
-  Future<void> maybeShowMapCoachMarks({bool requireNavbarSeen = false}) async {
+  // Apply rain at most once per map load (setStyleJSON re-fires styleLoaded).
+  bool _rainChecked = false;
+  // Whether the rain effect is currently baked into the live style.
+  bool _rainApplied = false;
+  // Re-evaluates real weather periodically so rain turns OFF once it stops (and
+  // on if it starts) during a long session — not just once at map open. The
+  // WeatherService caches ~20 min, so a 20 min cadence adds no extra API calls.
+  Timer? _weatherRecheckTimer;
+
+  void _onStyleLoaded(StyleLoadedEventData data) {
+    if (_rainChecked) return;
+    _rainChecked = true;
+    _maybeApplyRain();
+    _weatherRecheckTimer ??= Timer.periodic(
+      const Duration(minutes: 20),
+      (_) => _maybeApplyRain(),
+    );
+  }
+
+  /// Reacts to the Settings "Weather effects on map" toggle while the map is
+  /// open, so it takes effect immediately (no app restart).
+  void _onWeatherEffectsToggled() {
     if (!mounted) return;
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_mapTourKey) ?? false) return;
-    if (requireNavbarSeen &&
-        !(prefs.getBool(CoachMarkService.seenKey) ?? false)) {
-      // Navbar tour hasn't finished yet — it will chain us via onFinish.
-      return;
+    final enabled = WeatherEffectsPreference.changes.value;
+    if (enabled) {
+      // Re-evaluate the real weather and apply rain if it's actually raining.
+      _rainChecked = true; // guard the style listener; we drive it manually
+      _maybeApplyRain();
+    } else if (_rainApplied) {
+      // Strip the rain out of the current style right away.
+      _removeRainEffect();
     }
+  }
 
-    // Poll until the keyed widgets are laid out (filter chips + buttons).
-    final keys = [_keyFilterChips, _keyLocationBtn, _keyNearbyBtn];
-    var attempts = 0;
-    while (mounted && attempts < 25 && keys.any((k) => k.currentContext == null)) {
-      await Future.delayed(const Duration(milliseconds: 120));
-      attempts++;
+  /// Show the native Mapbox rain effect only when it's ACTUALLY raining at the
+  /// user's location (via the get-weather edge function, cached ~20 min).
+  Future<void> _maybeApplyRain() async {
+    // Respect the user's Settings toggle (defaults on).
+    if (!await WeatherEffectsPreference.load()) return;
+
+    // Rain should mirror the user's real weather, so wait briefly for a fix.
+    int waited = 0;
+    while (_currentPosition == null && waited < 4000) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      waited += 200;
     }
-    if (!mounted) return;
+    final pos = _currentPosition;
+    if (pos == null || !mounted) return;
 
-    final targets = <TargetFocus>[];
+    final raining =
+        await _weatherService.isRainingAt(pos.latitude, pos.longitude);
+    if (!mounted || _mapboxMap == null) return;
 
-    void _addTarget(
-      GlobalKey key,
-      String title,
-      String body,
-      ContentAlign align,
-    ) {
-      if (key.currentContext == null) return;
-      targets.add(TargetFocus(
-        identify: key.toString(),
-        keyTarget: key,
-        shape: ShapeLightFocus.RRect,
-        radius: 16,
-        paddingFocus: 8,
-        enableOverlayTab: true,
-        contents: [
-          TargetContent(
-            align: align,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Text(body,
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 13, height: 1.4)),
-                  const SizedBox(height: 12),
-                  const Text('Tap anywhere to continue →',
-                      style: TextStyle(color: Colors.white38, fontSize: 12)),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ));
+    if (raining) {
+      if (!_rainApplied) await _applyRainEffect();
+    } else if (_rainApplied) {
+      // Weather cleared (or a stale effect from an earlier check/session) —
+      // strip the rain so we never show rain when it isn't raining.
+      await _removeRainEffect();
     }
+  }
 
-    _addTarget(
-      _keyFilterChips,
-      'Filter the Map',
-      'Switch between Hangouts, Events, Experiences, and more to focus on what matters to you.',
-      ContentAlign.bottom,
-    );
-    _addTarget(
-      _keyLocationBtn,
-      'Find Your Location',
-      'Tap to instantly center the map on where you are right now.',
-      ContentAlign.left,
-    );
-    _addTarget(
-      _keyNearbyBtn,
-      'Discover Nearby',
-      'See everything reachable in 15 minutes — hangouts, events, and people around you.',
-      ContentAlign.left,
-    );
+  /// Bakes a root `rain` property into the current style JSON and re-sets it.
+  /// setStyleJSON reloads the style (wiping the puck + marker sources/layers/
+  /// images), so we restore those immediately after.
+  Future<void> _applyRainEffect() async {
+    if (_mapboxMap == null) return;
+    try {
+      final styleJsonStr = await _mapboxMap!.style.getStyleJSON();
+      if (styleJsonStr.isEmpty) return;
+      final Map<String, dynamic> styleMap =
+          jsonDecode(styleJsonStr) as Map<String, dynamic>;
 
-    if (targets.isEmpty || !mounted) return;
+      // Toned-down static values (proven to render on this SDK version).
+      styleMap['rain'] = <String, dynamic>{
+        'density': 0.5,
+        'intensity': 0.7,
+        'color': '#a8adbc',
+        'opacity': 0.6,
+        'vignette': 0.8,
+        'vignette-color': '#464646',
+        'direction': <double>[0, 80],
+        'droplet-size': <double>[2.6, 18.2],
+        'distortion-strength': 0.7,
+        'center-thinning': 0,
+      };
 
-    TutorialCoachMark(
-      targets: targets,
-      colorShadow: Colors.black,
-      opacityShadow: 0.85,
-      textSkip: 'SKIP',
-      focusAnimationDuration: const Duration(milliseconds: 400),
-      unFocusAnimationDuration: const Duration(milliseconds: 300),
-      pulseAnimationDuration: const Duration(milliseconds: 500),
-      onFinish: () async {
-        final p = await SharedPreferences.getInstance();
-        await p.setBool(_mapTourKey, true);
-      },
-      onSkip: () {
-        SharedPreferences.getInstance()
-            .then((p) => p.setBool(_mapTourKey, true));
-        return true;
-      },
-    ).show(context: context);
+      await _mapboxMap!.style.setStyleJSON(jsonEncode(styleMap));
+      _rainApplied = true;
+
+      // Restore what the style reload wiped: puck + marker images/sources/layers.
+      _addedImages.clear();
+      _lastFetchCameraState = null;
+      await _enableLocationPuck();
+      await _fetchTablesInViewport(force: true);
+
+      print('🌧️ Rain applied (real weather) + markers restored');
+    } catch (e) {
+      print('🌧️ Rain effect failed: $e');
+    }
+  }
+
+  /// Removes the baked-in `rain` property from the current style and re-sets it,
+  /// then restores the puck + markers the style reload wipes. Used when the
+  /// user turns weather effects off from Settings while the map is open.
+  Future<void> _removeRainEffect() async {
+    if (_mapboxMap == null) return;
+    try {
+      final styleJsonStr = await _mapboxMap!.style.getStyleJSON();
+      if (styleJsonStr.isEmpty) return;
+      final Map<String, dynamic> styleMap =
+          jsonDecode(styleJsonStr) as Map<String, dynamic>;
+
+      if (styleMap.remove('rain') == null) {
+        // Nothing to strip; keep flag in sync and bail.
+        _rainApplied = false;
+        return;
+      }
+
+      await _mapboxMap!.style.setStyleJSON(jsonEncode(styleMap));
+      _rainApplied = false;
+
+      // Restore what the style reload wiped: puck + marker images/sources/layers.
+      _addedImages.clear();
+      _lastFetchCameraState = null;
+      await _enableLocationPuck();
+      await _fetchTablesInViewport(force: true);
+
+      print('🌧️ Rain removed (weather effects off) + markers restored');
+    } catch (e) {
+      print('🌧️ Rain removal failed: $e');
+    }
   }
 
   Future<void> _playIntroAnimation() async {
@@ -696,188 +726,79 @@ class MapScreenState extends State<MapScreen>
               ),
               onCameraChangeListener: _onCameraChangeListener,
               onMapCreated: _onMapCreated,
+              onStyleLoadedListener: _onStyleLoaded, // SPIKE: apply rain here
               onTapListener: _onMapTapWrapper, // Native tap listener
             ),
           ),
 
-          // Active User Count Pill
-          if (_activeUserCount > 0 && !_isTableModalOpen)
-            Positioned(
-              top: 60,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: GestureDetector(
-                  onTap: () async {
-                    // Get current viewport bounds
-                    final cameraState = await _mapboxMap?.getCameraState();
-                    if (cameraState == null) return;
-
-                    final bounds = await _mapboxMap
-                        ?.coordinateBoundsForCameraUnwrapped(
-                          CameraOptions(
-                            center: cameraState.center,
-                            zoom: cameraState.zoom,
-                            bearing: cameraState.bearing,
-                            pitch: cameraState.pitch,
-                          ),
-                        );
-
-                    showModalBottomSheet(
-                      context: context,
-                      backgroundColor: Colors.transparent,
-                      isScrollControlled: true,
-                      builder: (context) => ActiveUsersBottomSheet(
-                        minLat: bounds?.southwest.coordinates.lat.toDouble(),
-                        maxLat: bounds?.northeast.coordinates.lat.toDouble(),
-                        minLng: bounds?.southwest.coordinates.lng.toDouble(),
-                        maxLng: bounds?.northeast.coordinates.lng.toDouble(),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_isFetching)
-                          SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Theme.of(context).colorScheme.onSurface,
-                            ),
-                          ),
-                        if (_isFetching) const SizedBox(width: 6),
-                        Text(
-                          _isFetching
-                              ? 'Updating map...'
-                              : '${_formatActiveCount(_activeUserCount)} active on map',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.onSurface,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+          // Tap-outside scrim — only while the filter card is expanded, so a
+          // tap anywhere off the card morphs it back to the pill.
+          if (!_isTableModalOpen && _filtersExpanded)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _filtersExpanded = false),
               ),
             ),
 
-          // Filter Chips Row (+ contextual category sub-row for Events)
+          // The "Filters" pill that morphs open into the filter card in place.
           if (!_isTableModalOpen)
             Positioned(
               top: 100,
               left: 0,
-              right: 0, // No constraint needed — buttons are lower now
-              child: Column(
+              right: 0,
+              child: KeyedSubtree(
                 key: _keyFilterChips,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: MapFilter.values.map((filter) {
-                        final isSelected = _currentFilter == filter;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(_filterLabel(filter)),
-                            avatar: isSelected
-                                ? null
-                                : Icon(
-                                    _filterIcon(filter),
-                                    size: 16,
-                                    color: Colors.black54,
-                                  ),
-                            selected: isSelected,
-                            onSelected: (_) => _onFilterChanged(filter),
-                            selectedColor: Theme.of(context).primaryColor,
-                            backgroundColor: Colors.white,
-                            labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.black87,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            elevation: 2,
-                            pressElevation: 4,
-                            showCheckmark: false,
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  // Category sub-row — only when Events is the active filter
-                  if (_currentFilter == MapFilter.events)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: _buildCategorySubRow(),
-                    ),
-                ],
+                child: _buildFilterControl(),
               ),
             ),
 
-          // Map Controls (upper-right)
-          if (!_isTableModalOpen)
+          // Map controls — vertical stack, upper-right (back to the original
+          // spot). Hidden while the filter card is expanded so the full-width
+          // card doesn't overlap the buttons.
+          if (!_isTableModalOpen && !_filtersExpanded)
             Positioned(
               right: 16,
-              // Lowered to clear the filter chips; drops further when the
-              // Events category sub-row is showing.
-              top: _currentFilter == MapFilter.events ? 224 : 180,
+              top: 160,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Refresh Button
+                  // Active people nearby (person icon + count badge)
+                  if (_buildActivePeopleButton() case final peopleBtn?) ...[
+                    peopleBtn,
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Refresh
                   _mapControlButton(
                     heroTag: 'map_refresh_btn',
                     icon: Icons.refresh,
-                    label: 'Refresh',
+                    label: '',
                     onPressed: _onRefreshTapped,
                     isDarkMode: isDarkMode,
                   ),
                   const SizedBox(height: 12),
 
-                  // Focus Location Button
+                  // Focus Location
                   KeyedSubtree(
                     key: _keyLocationBtn,
                     child: _mapControlButton(
                       heroTag: 'map_focus_btn',
                       icon: Icons.my_location,
-                      label: 'Location',
+                      label: '',
                       onPressed: _onFocusLocationTapped,
                       isDarkMode: isDarkMode,
                     ),
                   ),
                   const SizedBox(height: 12),
 
-                  // Isochrone Toggle
+                  // Nearby (isochrone)
                   KeyedSubtree(
                     key: _keyNearbyBtn,
                     child: _mapControlButton(
                       heroTag: 'map_isochrone_btn',
                       icon: Icons.radar,
-                      label: 'Nearby',
+                      label: '',
                       onPressed: _showIsochrone
                           ? _toggleIsochrone
                           : _showIsochroneExplainer,
@@ -906,13 +827,6 @@ class MapScreenState extends State<MapScreen>
                 onAnimationComplete: () {
                   if (mounted) {
                     setState(() => _showCloudIntro = false);
-                    // Show map tour for users who already completed the navbar
-                    // tour (e.g. returning users after an app update).
-                    // Fresh installs are handled via MainNavigationScreen's
-                    // onFinish chain instead.
-                    Future.delayed(const Duration(milliseconds: 800), () {
-                      maybeShowMapCoachMarks(requireNavbarSeen: true);
-                    });
                   }
                 },
               ),
@@ -934,47 +848,72 @@ class MapScreenState extends State<MapScreen>
     Color foregroundColor = const Color(0xFF6C63FF),
   }) {
     final isActive = backgroundColor != Colors.white;
-    final btnBg = isActive ? const Color(0xFF6C63FF) : Colors.white;
-    final btnIcon = isActive ? Colors.white : const Color(0xFF6C63FF);
+    const radius = BorderRadius.all(Radius.circular(12));
+    // Active (toggled-on) buttons stay solid so "on" reads clearly; the rest
+    // are frosted glass.
+    final Widget surface = isActive
+        ? Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: Color(0xFF6C63FF),
+              borderRadius: radius,
+            ),
+            child: Icon(icon, size: 20, color: Colors.white),
+          )
+        : _glass(
+            dark: isDarkMode,
+            radius: radius,
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Icon(
+                icon,
+                size: 20,
+                color: isDarkMode ? Colors.white : const Color(0xFF6C63FF),
+              ),
+            ),
+          );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         GestureDetector(
           onTap: onPressed,
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: btnBg,
-              borderRadius: BorderRadius.circular(12),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              borderRadius: radius,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
+                  color: Color(0x22000000),
+                  blurRadius: 10,
+                  offset: Offset(0, 3),
                 ),
               ],
             ),
-            child: Icon(icon, size: 20, color: btnIcon),
+            child: surface,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: isDarkMode ? Colors.white : Colors.black87,
-            shadows: [
-              Shadow(
-                color: isDarkMode
-                    ? Colors.black54
-                    : Colors.white.withOpacity(0.8),
-                blurRadius: 4,
-              ),
-            ],
+        // Icon-only in the new stack — label rendered only when provided.
+        if (label.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: isDarkMode ? Colors.white : Colors.black87,
+              shadows: [
+                Shadow(
+                  color: isDarkMode
+                      ? Colors.black54
+                      : Colors.white.withOpacity(0.8),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -994,7 +933,563 @@ class MapScreenState extends State<MapScreen>
     refreshTables();
   }
 
-  // --- Filter Helpers ---
+  // ── Filter card (collapsible) ──────────────────────────────────────────
+
+  /// Live count of currently-loaded events in a given category — shown in the
+  /// category dropdown so empty categories are obvious before tapping.
+  int _eventCountForCategory(String key) =>
+      _events.where((e) => e.category == key).length;
+
+  /// Label for the collapsed pill: "Filters" when nothing is narrowed, else the
+  /// active selection.
+  String get _filterSummary {
+    if (_currentFilter == MapFilter.all && _selectedEventCategory == null) {
+      return 'Filters';
+    }
+    if (_currentFilter == MapFilter.events && _selectedEventCategory != null) {
+      final match = _eventCategories.where(
+        (c) => c.key == _selectedEventCategory,
+      );
+      if (match.isNotEmpty) return match.first.label;
+    }
+    return _typeDropdownLabel(_currentFilter);
+  }
+
+  String _typeDropdownLabel(MapFilter f) =>
+      f == MapFilter.all ? 'All Types' : _filterLabel(f);
+
+  Widget _buildFilterControl() {
+    final dark = context.watch<ThemeProvider>().isDarkMode;
+    final screenW = MediaQuery.of(context).size.width;
+    // The pill morphs open into the glass card in place: AnimatedSize grows the
+    // box (anchored top-center so it expands downward), while AnimatedSwitcher
+    // crossfades pill ⇄ card. Same easeOutCubic motion as the rest of the app.
+    return Align(
+      alignment: Alignment.topCenter,
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            alignment: Alignment.topCenter,
+            children: [
+              ...previousChildren,
+              if (currentChild != null) currentChild,
+            ],
+          ),
+          transitionBuilder: (child, anim) =>
+              FadeTransition(opacity: anim, child: child),
+          child: _filtersExpanded
+              ? SizedBox(
+                  key: const ValueKey('filter-card'),
+                  width: screenW - 32,
+                  child: _buildFilterCardExpanded(dark),
+                )
+              : KeyedSubtree(
+                  key: const ValueKey('filter-pill'),
+                  child: _buildFiltersPill(),
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterCardExpanded(bool dark) {
+    final primary = Theme.of(context).primaryColor;
+    final textColor = dark ? Colors.white : Colors.black87;
+    final subColor = dark ? Colors.white60 : Colors.grey[500];
+    final active =
+        _currentFilter != MapFilter.all || _selectedEventCategory != null;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: _glass(
+        dark: dark,
+        strength: 1,
+        radius: BorderRadius.circular(24),
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Filters',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: textColor,
+                  ),
+                ),
+                const Spacer(),
+                if (active)
+                  GestureDetector(
+                    onTap: () {
+                      _onFilterChanged(MapFilter.all);
+                      _onCategoryChanged(null);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        'Reset',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => setState(() => _filtersExpanded = false),
+                  child: Icon(
+                    Icons.keyboard_arrow_up_rounded,
+                    size: 22,
+                    color: dark ? Colors.white70 : Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _sheetLabel('TYPE', subColor),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 40,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: MapFilter.values.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final f = MapFilter.values[i];
+                  return _typePill(
+                    f,
+                    selected: _currentFilter == f,
+                    dark: dark,
+                    primary: primary,
+                    onTap: () => _onFilterChanged(f),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 18),
+            if (_currentFilter == MapFilter.events) ...[
+              _sheetLabel('CATEGORY', subColor),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: SingleChildScrollView(
+                  child: _categoryGrid(
+                    dark: dark,
+                    primary: primary,
+                    onPick: _onCategoryChanged,
+                  ),
+                ),
+              ),
+            ] else ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: (dark ? Colors.white : Colors.black).withValues(
+                    alpha: 0.05,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  'Pick “Events” to filter by category',
+                  style: TextStyle(fontSize: 13, color: subColor),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Frosted-glass surface used by the filter pill, utility buttons and sheet.
+  ///
+  /// NOTE: the Mapbox map is a native platform view, so Flutter's
+  /// [BackdropFilter] cannot sample/blur it — a real backdrop blur silently
+  /// no-ops over the map. So this fakes the glass look the way Apple/Google
+  /// map controls do: a translucent diagonal sheen + an edge-lit rim + a soft
+  /// highlight, letting the map bleed through underneath. [blur] enables a real
+  /// backdrop blur only where there IS Flutter content behind (e.g. atop a
+  /// scrim), which is harmless elsewhere.
+  Widget _glass({
+    required Widget child,
+    required BorderRadius radius,
+    EdgeInsetsGeometry? padding,
+    required bool dark,
+    Border? border,
+    bool blur = false,
+    // 0 = light/glassy (small controls), 1 = near-opaque (large surfaces where
+    // text must stay legible over the busy map).
+    double strength = 0,
+  }) {
+    final base = dark ? Colors.black : Colors.white;
+    final double hi = dark
+        ? ui.lerpDouble(0.62, 0.90, strength)!
+        : ui.lerpDouble(0.80, 0.96, strength)!;
+    final double lo = dark
+        ? ui.lerpDouble(0.36, 0.80, strength)!
+        : ui.lerpDouble(0.46, 0.88, strength)!;
+    final surface = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            base.withValues(alpha: hi),
+            base.withValues(alpha: lo),
+          ],
+        ),
+        borderRadius: radius,
+        border:
+            border ??
+            Border.all(
+              color: Colors.white.withValues(alpha: dark ? 0.22 : 0.85),
+              width: 1,
+            ),
+      ),
+      child: child,
+    );
+    return ClipRRect(
+      borderRadius: radius,
+      child: blur
+          ? BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: surface,
+            )
+          : surface,
+    );
+  }
+
+  /// Person-icon control with a live active-user count badge (tap → who's-nearby
+  /// sheet). Lives in the upper-right utility stack. Returns null when there's
+  /// nothing to show.
+  Widget? _buildActivePeopleButton() {
+    if (!(_activeUserCount > 0 || _isFetching)) return null;
+    final dark = context.watch<ThemeProvider>().isDarkMode;
+    final iconColor = dark ? Colors.white : const Color(0xFF6C63FF);
+    return GestureDetector(
+      onTap: _showActiveUsersSheet,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          DecoratedBox(
+            decoration: const BoxDecoration(
+              borderRadius: BorderRadius.all(Radius.circular(12)),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x22000000),
+                  blurRadius: 10,
+                  offset: Offset(0, 3),
+                ),
+              ],
+            ),
+            child: _glass(
+              dark: dark,
+              radius: const BorderRadius.all(Radius.circular(12)),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: _isFetching
+                    ? Padding(
+                        padding: const EdgeInsets.all(13),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: iconColor,
+                        ),
+                      )
+                    : Icon(Icons.people, size: 20, color: iconColor),
+              ),
+            ),
+          ),
+          if (!_isFetching)
+            Positioned(
+              top: -4,
+              right: -4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                constraints: const BoxConstraints(minWidth: 18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6C63FF),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+                child: Text(
+                  _formatActiveCount(_activeUserCount),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFiltersPill() {
+    final dark = context.watch<ThemeProvider>().isDarkMode;
+    final primary = Theme.of(context).primaryColor;
+    final active =
+        _currentFilter != MapFilter.all || _selectedEventCategory != null;
+    final fg = active
+        ? primary
+        : (dark ? Colors.white : Colors.black87);
+    return GestureDetector(
+      onTap: () => setState(() => _filtersExpanded = true),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 12,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: _glass(
+          dark: dark,
+          radius: BorderRadius.circular(24),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          border: active
+              ? Border.all(color: primary, width: 1.5)
+              : null,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.tune_rounded, size: 18, color: fg),
+              const SizedBox(width: 8),
+              Text(
+                _filterSummary,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: fg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetLabel(String text, Color? color) => Text(
+    text,
+    style: TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.6,
+      color: color,
+    ),
+  );
+
+  Widget _typePill(
+    MapFilter f, {
+    required bool selected,
+    required bool dark,
+    required Color primary,
+    required VoidCallback onTap,
+  }) {
+    final fg = selected
+        ? Colors.white
+        : (dark ? Colors.white : Colors.black87);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected
+              ? primary
+              : (dark ? Colors.white : Colors.black).withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected
+                ? primary
+                : (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_filterIcon(f), size: 16, color: fg),
+            const SizedBox(width: 7),
+            Text(
+              _filterLabel(f),
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: fg,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _categoryGrid({
+    required bool dark,
+    required Color primary,
+    required ValueChanged<String?> onPick,
+  }) {
+    // "All" first, then the server taxonomy.
+    final chips = <Widget>[
+      _categoryChip(
+        emoji: '✨',
+        label: 'All',
+        count: _events.length,
+        selected: _selectedEventCategory == null,
+        dark: dark,
+        primary: primary,
+        onTap: () => onPick(null),
+      ),
+      ..._eventCategories.map(
+        (c) => _categoryChip(
+          emoji: c.emoji,
+          label: c.label,
+          count: _eventCountForCategory(c.key),
+          selected: _selectedEventCategory == c.key,
+          dark: dark,
+          primary: primary,
+          onTap: () => onPick(c.key),
+        ),
+      ),
+    ];
+    return GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
+      childAspectRatio: 3.1,
+      children: chips,
+    );
+  }
+
+  Widget _categoryChip({
+    required String emoji,
+    required String label,
+    required int count,
+    required bool selected,
+    required bool dark,
+    required Color primary,
+    required VoidCallback onTap,
+  }) {
+    final empty = count == 0;
+    final fg = selected
+        ? Colors.white
+        : (dark ? Colors.white : Colors.black87);
+    return Opacity(
+      opacity: empty && !selected ? 0.45 : 1,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: selected
+                ? primary
+                : (dark ? Colors.white : Colors.black).withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected
+                  ? primary
+                  : (dark ? Colors.white : Colors.black).withValues(
+                      alpha: 0.08,
+                    ),
+            ),
+          ),
+          child: Row(
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: fg,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: selected
+                      ? Colors.white
+                      : (dark ? Colors.white60 : Colors.black45),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── People button (active-user count as a badge) ──────────────────────
+
+  /// Opens the active-users sheet for the current viewport. Previously the
+  /// on-tap of the floating "N active" pill; now driven by the People button.
+  Future<void> _showActiveUsersSheet() async {
+    final cameraState = await _mapboxMap?.getCameraState();
+    if (cameraState == null) return;
+    final bounds = await _mapboxMap?.coordinateBoundsForCameraUnwrapped(
+      CameraOptions(
+        center: cameraState.center,
+        zoom: cameraState.zoom,
+        bearing: cameraState.bearing,
+        pitch: cameraState.pitch,
+      ),
+    );
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => ActiveUsersBottomSheet(
+        minLat: bounds?.southwest.coordinates.lat.toDouble(),
+        maxLat: bounds?.northeast.coordinates.lat.toDouble(),
+        minLng: bounds?.southwest.coordinates.lng.toDouble(),
+        maxLng: bounds?.northeast.coordinates.lng.toDouble(),
+      ),
+    );
+  }
 
   /// Format active user count: <1k shows exact, ≥1k shows "1.2k 👀", ≥1M shows "1.2M 👀"
   String _formatActiveCount(int count) {
@@ -1006,64 +1501,6 @@ class MapScreenState extends State<MapScreen>
       return '${k % 1 == 0 ? k.toInt() : k.toStringAsFixed(1)}k 👀';
     }
     return '$count 👀';
-  }
-
-  /// Contextual category chips shown beneath the primary filter row while the
-  /// Events filter is active. Leading "All" clears the narrowing.
-  Widget _buildCategorySubRow() {
-    final primary = Theme.of(context).primaryColor;
-
-    Widget chip({
-      required String label,
-      required bool selected,
-      required VoidCallback onTap,
-    }) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(label),
-          selected: selected,
-          onSelected: (_) => onTap(),
-          selectedColor: primary,
-          backgroundColor: Colors.white,
-          labelStyle: TextStyle(
-            color: selected ? Colors.white : Colors.black87,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: primary.withValues(alpha: 0.35)),
-          ),
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          elevation: 1,
-          pressElevation: 3,
-          showCheckmark: false,
-        ),
-      );
-    }
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        children: [
-          chip(
-            label: 'All',
-            selected: _selectedEventCategory == null,
-            onTap: () => _onCategoryChanged(null),
-          ),
-          ..._eventCategories.map(
-            (c) => chip(
-              label: c.display,
-              selected: _selectedEventCategory == c.key,
-              onTap: () => _onCategoryChanged(c.key),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   String _filterLabel(MapFilter filter) {
@@ -1489,13 +1926,15 @@ class MapScreenState extends State<MapScreen>
             );
             if (mounted) {
               if (table['is_experience'] == true) {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (context) => ExperienceDetailModal(
-                    experience: table,
-                    matchData: matchData,
+                // Opaque route (NOT a transparent sheet/morph over Mapbox) —
+                // a transparent route over the map platform view can leave the
+                // map rendering black, making the close button look stuck.
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ExperienceDetailModal(
+                      experience: table,
+                      matchData: matchData,
+                    ),
                   ),
                 );
               } else {
@@ -1629,11 +2068,11 @@ class MapScreenState extends State<MapScreen>
                 table,
               ); // Draw route before so it's visible after pop
               if (mounted) {
-                final center = Offset(screenCoordinate.x, screenCoordinate.y);
+                // Opaque route so the close button reliably returns to the map
+                // (a transparent morph over Mapbox can render black on pop).
                 Navigator.of(context).push(
-                  LiquidMorphRoute(
-                    center: center,
-                    page: ExperienceDetailModal(
+                  MaterialPageRoute(
+                    builder: (_) => ExperienceDetailModal(
                       experience: table,
                       matchData: matchData,
                     ),
@@ -1755,11 +2194,12 @@ class MapScreenState extends State<MapScreen>
     if (table['is_experience'] == true) {
       print('🎨 Launching ExperienceDetailModal via LiquidMorphRoute');
       _drawExperienceRoute(table); // Call _drawExperienceRoute here
-      final center = Offset(tapPosition.x, tapPosition.y);
+      // Opaque route so closing reliably returns to the map (a transparent
+      // morph over Mapbox can render black on pop, freezing the X button).
       Navigator.of(context).push(
-        LiquidMorphRoute(
-          center: center,
-          page: ExperienceDetailModal(experience: table, matchData: matchData),
+        MaterialPageRoute(
+          builder: (_) =>
+              ExperienceDetailModal(experience: table, matchData: matchData),
         ),
       );
       return;
@@ -2233,7 +2673,7 @@ class MapScreenState extends State<MapScreen>
                 await style.addStyleImage(
                   imageId,
                   2.0,
-                  MbxImage(width: 140, height: 140, data: markerImage),
+                  MbxImage(width: 168, height: 168, data: markerImage),
                   false,
                   [],
                   [],
@@ -2871,34 +3311,99 @@ class MapScreenState extends State<MapScreen>
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
-    final int baseSize = 120;
-    final int canvasSize = 140; // Extra room for the attached badge
-    final double padding = 8.0;
+    // Fixed canvas with generous headroom for the glow halo. Keeping it constant
+    // across all story markers keeps the layer's icon anchor/offset stable while
+    // we vary the *drawn* face size per story below.
+    const int canvasSize = 168;
+    final Offset mainCenter = Offset(canvasSize / 2, canvasSize / 2);
 
-    final Offset mainCenter = Offset(baseSize / 2, baseSize / 2);
+    // ── Freshness → vitality ──────────────────────────────────────────────
+    // The map self-ranks by "what's happening now": a just-posted story glows
+    // bright and draws big; as it ages toward its 24h expiry the glow fades and
+    // the face shrinks back. Seen stories are treated as fully calm.
+    final bool storySeen = story['is_seen'] == true;
+    double freshness = 1.0;
+    final dynamic tsRaw = story['latest_story_time'] ?? story['created_at'];
+    if (tsRaw != null) {
+      final DateTime? ts = DateTime.tryParse(tsRaw.toString())?.toLocal();
+      if (ts != null) {
+        final double ageHours =
+            DateTime.now().difference(ts).inMinutes / 60.0;
+        freshness = (1.0 - (ageHours / 24.0)).clamp(0.0, 1.0);
+      }
+    }
+    final double vitality = storySeen ? 0.0 : freshness;
 
-    // 1. Draw solid white background
-    final Paint bgPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(mainCenter, baseSize / 2 - 4, bgPaint);
-
-    // 2. Draw pink→orange→yellow gradient ring (Instagram-style "Moments")
-    final double ringRadius = baseSize / 2 - 4;
+    // Face diameter scales with vitality: stale ≈ 104px, fresh ≈ 138px.
+    final double faceDiameter = ui.lerpDouble(104.0, 138.0, vitality)!;
+    final double ringRadius = faceDiameter / 2;
     final Rect ringRect = Rect.fromCircle(
       center: mainCenter,
       radius: ringRadius,
     );
+
+    // 1. GLOW aura — a soft radial bloom that hugs the face and feathers out to
+    //    fully transparent, so it reads as a glow, not a solid ring. Brightest
+    //    right at the rim, fading to nothing at the outer edge. Two stacked
+    //    passes (a tight bright rim + a wide faint halo) give it depth. Fresh
+    //    stories bloom bright and wide; calm/seen ones draw nothing.
+    if (vitality > 0.03) {
+      final Color glowColor = Color.lerp(
+        const Color(0xFF6366F1), // Indigo 500 (calmer)
+        const Color(0xFF8B93FF), // soft periwinkle (brighter)
+        vitality,
+      )!;
+
+      void drawAura(double extra, double peak, double blur) {
+        final double auraRadius = ringRadius + extra;
+        // Peak sits just outside the ring; fully transparent by the outer edge.
+        final double rimStop =
+            ((ringRadius + 3.0) / auraRadius).clamp(0.0, 0.9);
+        final Paint auraPaint = Paint()
+          ..shader = RadialGradient(
+            colors: [
+              glowColor.withOpacity(0.0),
+              glowColor.withOpacity(peak),
+              glowColor.withOpacity(0.0),
+            ],
+            stops: [
+              (rimStop - 0.14).clamp(0.0, 1.0),
+              rimStop,
+              1.0,
+            ],
+          ).createShader(
+            Rect.fromCircle(center: mainCenter, radius: auraRadius),
+          )
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur);
+        canvas.drawCircle(mainCenter, auraRadius, auraPaint);
+      }
+
+      // Wide, faint atmospheric halo.
+      drawAura(ui.lerpDouble(20.0, 38.0, vitality)!, 0.08 + 0.10 * vitality, 5.0);
+      // Tighter, brighter rim right against the face.
+      drawAura(ui.lerpDouble(10.0, 18.0, vitality)!, 0.12 + 0.20 * vitality, 3.0);
+    }
+
+    // 2. Solid white background behind the face.
+    canvas.drawCircle(mainCenter, ringRadius, Paint()..color = Colors.white);
+
+    // 3. Ring — brand indigo sweep for unseen; muted grey once seen.
     final Paint ringPaint = Paint()
-      ..shader = SweepGradient(
-        colors: const [
-          Color(0xFFFF0080), // Hot pink
-          Color(0xFFFF6A00), // Orange
-          Color(0xFFFFD600), // Yellow
-          Color(0xFFFF0080), // Back to pink
-        ],
-        stops: const [0.0, 0.33, 0.66, 1.0],
-      ).createShader(ringRect)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 7;
+    if (storySeen) {
+      ringPaint.color = const Color(0xFFC7C6D0);
+    } else {
+      ringPaint.shader = SweepGradient(
+        colors: const [
+          Color(0xFF818CF8), // Indigo 400
+          Color(0xFF6366F1), // Indigo 500
+          Color(0xFF4F46E5), // Indigo 600
+          Color(0xFF818CF8), // Back to 400
+        ],
+        stops: const [0.0, 0.33, 0.66, 1.0],
+      ).createShader(ringRect);
+    }
     canvas.drawCircle(mainCenter, ringRadius, ringPaint);
     // White gap between ring and content
     canvas.drawCircle(
@@ -2910,12 +3415,32 @@ class MapScreenState extends State<MapScreen>
         ..strokeWidth = 2,
     );
 
-    // 3. Draw image content (clipped to inner circle)
-    String? imageUrl =
-        story['image_url'] ?? story['thumbnail_url'] ?? story['media_url'];
+    // 4. Draw the AUTHOR'S AVATAR as the primary circle (face-first pin) so you
+    // recognise WHO is where at a glance. Falls back to the story cover.
+    String? imageUrl = story['author_avatar_url'] ?? story['avatar_url'];
+    if (imageUrl == null &&
+        story['user_photos'] != null &&
+        (story['user_photos'] as List).isNotEmpty) {
+      imageUrl = (story['user_photos'] as List).first.toString();
+    }
+    imageUrl ??= story['image_url'] ?? story['thumbnail_url'] ?? story['media_url'];
 
     // Determine placeholder type: 🎬 for videos, 🙂 for others
     final placeholderType = story['video_url'] != null ? 'video' : 'social';
+
+    // Inner radius reserved for the avatar (inside the ring + gap).
+    final double imgRadius = ringRadius - 8;
+    final Rect imgRect = Rect.fromCircle(center: mainCenter, radius: imgRadius);
+
+    // Reuse the shared placeholder helper by translating so its internal
+    // center (size/2) lands on our marker center.
+    void drawPlaceholderCentered() {
+      final int box = (imgRadius * 2).round();
+      canvas.save();
+      canvas.translate(mainCenter.dx - imgRadius, mainCenter.dy - imgRadius);
+      _drawPlaceholder(canvas, box, placeholderType);
+      canvas.restore();
+    }
 
     try {
       if (imageUrl != null) {
@@ -2925,36 +3450,33 @@ class MapScreenState extends State<MapScreen>
           final ui.FrameInfo frameInfo = await codec.getNextFrame();
           final ui.Image image = frameInfo.image;
 
-          final double imgSize = baseSize - (padding * 2);
-
           canvas.save();
-          canvas.clipPath(
-            Path()..addOval(
-              Rect.fromCircle(center: mainCenter, radius: imgSize / 2),
-            ),
-          );
+          canvas.clipPath(Path()..addOval(imgRect));
           paintImage(
             canvas: canvas,
-            rect: Rect.fromLTWH(padding, padding, imgSize, imgSize),
+            rect: imgRect,
             image: image,
             fit: BoxFit.cover,
           );
           canvas.restore();
         } else {
-          _drawPlaceholder(canvas, baseSize, placeholderType);
+          drawPlaceholderCentered();
         }
       } else {
-        _drawPlaceholder(canvas, baseSize, placeholderType);
+        drawPlaceholderCentered();
       }
     } catch (e) {
       print('❌ Error loading story image: $e');
-      _drawPlaceholder(canvas, baseSize, placeholderType);
+      drawPlaceholderCentered();
     }
 
-    // 3b. Camera badge in top-left (marks this as a Story/Moment)
+    // 4b. Camera badge at the top-left of the face (marks this as a Story).
     {
-      const double badgeR = 14.0;
-      const Offset badgeCenter = Offset(22, 22);
+      final double badgeR = 13.0;
+      final Offset badgeCenter = Offset(
+        mainCenter.dx - ringRadius * 0.68,
+        mainCenter.dy - ringRadius * 0.68,
+      );
       canvas.drawCircle(badgeCenter, badgeR + 2, Paint()..color = Colors.white);
       canvas.drawCircle(
         badgeCenter,
@@ -2972,66 +3494,6 @@ class MapScreenState extends State<MapScreen>
         canvas,
         Offset(badgeCenter.dx - tp.width / 2, badgeCenter.dy - tp.height / 2),
       );
-    }
-
-    // 4. Draw author avatar overlapping bottom right
-    String? authorAvatarUrl = story['author_avatar_url'];
-    // Fallback if view doesn't have author_avatar_url yet
-    if (authorAvatarUrl == null &&
-        story['user_photos'] != null &&
-        (story['user_photos'] as List).isNotEmpty) {
-      authorAvatarUrl = (story['user_photos'] as List).first.toString();
-    }
-    authorAvatarUrl ??= story['avatar_url'];
-
-    if (authorAvatarUrl != null) {
-      try {
-        final aBytes = await _loadMarkerImageBytes(authorAvatarUrl);
-        if (aBytes != null) {
-          final ui.Codec aCodec = await ui.instantiateImageCodec(aBytes);
-          final ui.FrameInfo aFrameInfo = await aCodec.getNextFrame();
-          final ui.Image aImage = aFrameInfo.image;
-
-          // Position at bottom right
-          final Offset avatarCenter = const Offset(105, 105);
-          final double avatarRadius = 24.0;
-
-          // Draw white border
-          canvas.drawCircle(
-            avatarCenter,
-            avatarRadius + 3.0,
-            Paint()..color = Colors.white,
-          );
-
-          // Draw grey background/placeholder
-          canvas.drawCircle(
-            avatarCenter,
-            avatarRadius,
-            Paint()..color = Colors.grey.shade300,
-          );
-
-          canvas.save();
-          canvas.clipPath(
-            Path()..addOval(
-              Rect.fromCircle(center: avatarCenter, radius: avatarRadius),
-            ),
-          );
-          paintImage(
-            canvas: canvas,
-            rect: Rect.fromLTWH(
-              avatarCenter.dx - avatarRadius,
-              avatarCenter.dy - avatarRadius,
-              avatarRadius * 2,
-              avatarRadius * 2,
-            ),
-            image: aImage,
-            fit: BoxFit.cover,
-          );
-          canvas.restore();
-        }
-      } catch (e) {
-        print('❌ Error loading story author avatar: $e');
-      }
     }
 
     // Convert to image

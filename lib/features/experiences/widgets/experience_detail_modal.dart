@@ -12,6 +12,8 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/experiences/widgets/write_review_sheet.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
 
 class ExperienceDetailModal extends StatefulWidget {
   final Map<String, dynamic> experience;
@@ -37,6 +39,12 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
   Map<String, dynamic>? _selectedSchedule;
   int _guestCount = 1;
   int _currentImageIndex = 0;
+
+  // Fee config for this experience (fetched once via quote_experience; the % and
+  // pass-flag don't depend on quantity, so the bottom-bar total is computed
+  // locally as the guest count changes — no RPC per tap).
+  double _feePercentage = 0;
+  bool _feesPassed = true;
 
   // Reviews
   List<Map<String, dynamic>> _reviews = [];
@@ -211,8 +219,6 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
         widget.experience['venue_name'] ?? 'Unknown Location';
     final String description =
         widget.experience['description'] ?? 'No description provided.';
-    final double price =
-        (widget.experience['price_per_person'] as num?)?.toDouble() ?? 0.0;
     final String currency = widget.experience['currency'] ?? 'PHP';
 
     // Media and Features
@@ -289,6 +295,24 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                   ),
                 ),
                 actions: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.9),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.share_outlined,
+                            color: Colors.black87, size: 20),
+                        onPressed: () => ShareToChatSheet.show(
+                          context,
+                          SharePayload.fromExperience(widget.experience),
+                        ),
+                        tooltip: 'Share Experience',
+                      ),
+                    ),
+                  ),
                   if (hostId.isNotEmpty &&
                       hostId != SupabaseConfig.client.auth.currentUser?.id)
                     Padding(
@@ -1181,31 +1205,42 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                 top: false,
                 child: Row(
                   children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _selectedSchedule != null
-                              ? '$currency ${(price * _guestCount).toStringAsFixed(0)}'
-                              : '$currency ${price.toStringAsFixed(0)}',
-                          style: GoogleFonts.outfit(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        Text(
-                          _selectedSchedule != null
-                              ? 'Total for $_guestCount guests'
-                              : 'per person',
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            color: Colors.grey[600],
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
+                    Builder(
+                      builder: (context) {
+                        final hasSchedule = _selectedSchedule != null;
+                        final subtotal = _unitPrice * _guestCount;
+                        final fee = _bookingFee;
+                        final total = subtotal + fee;
+                        final plural = _guestCount == 1 ? 'guest' : 'guests';
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              hasSchedule
+                                  ? '$currency ${total.toStringAsFixed(0)}'
+                                  : '$currency ${_unitPrice.toStringAsFixed(0)}',
+                              style: GoogleFonts.outfit(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            Text(
+                              !hasSchedule
+                                  ? 'per person'
+                                  : fee > 0
+                                      ? 'Total for $_guestCount $plural · incl. $currency ${fee.toStringAsFixed(0)} fee'
+                                      : 'Total for $_guestCount $plural',
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(width: 24),
                     Expanded(
@@ -1266,7 +1301,40 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
         _selectedSchedule = selectedSchedule;
         _guestCount = 1; // Reset count
       });
+      _loadFeeConfig();
     }
+  }
+
+  /// Fetches the fee %/pass-flag once (via quote_experience) so the bottom-bar
+  /// total can include the booking fee, matching what checkout charges.
+  Future<void> _loadFeeConfig() async {
+    final quote = await _experienceService.quoteExperience(
+      tableId: widget.experience['id'].toString(),
+      scheduleId: _selectedSchedule?['id']?.toString(),
+      quantity: 1,
+    );
+    if (quote != null && mounted) {
+      setState(() {
+        _feePercentage = quote.feePercentage;
+        _feesPassed = quote.feesPassedToCustomer;
+      });
+    }
+  }
+
+  /// Unit price for the selected schedule (schedule price overrides the table
+  /// price, mirroring reserve_experience), else the table price.
+  double get _unitPrice {
+    final schedulePrice =
+        (_selectedSchedule?['price_per_person'] as num?)?.toDouble();
+    if (schedulePrice != null) return schedulePrice;
+    return (widget.experience['price_per_person'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  /// Booking fee for the current subtotal (0 when absorbed by the host or the
+  /// partner's % is 0).
+  double get _bookingFee {
+    if (!_feesPassed || _feePercentage <= 0) return 0;
+    return (_unitPrice * _guestCount * _feePercentage / 100).roundToDouble();
   }
 }
 

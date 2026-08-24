@@ -16,20 +16,22 @@ import 'package:bitemates/features/profile/screens/connected_users_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/edit_profile_screen.dart';
-import 'package:bitemates/core/services/host_service.dart';
-import 'package:bitemates/features/host/screens/host_apply_screen.dart';
-import 'package:bitemates/features/host/screens/host_pending_screen.dart';
-import 'package:bitemates/features/host/screens/host_dashboard_screen.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/core/services/report_service.dart';
-import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
-import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/features/gamification/models/badge.dart' as gm;
 import 'package:bitemates/features/gamification/models/user_badge.dart';
 import 'package:bitemates/features/gamification/services/badge_service.dart';
 import 'package:bitemates/features/profile/widgets/badges_showcase.dart';
-import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
+import 'package:bitemates/features/gamification/widgets/creator_badge_case.dart';
+import 'package:bitemates/features/ticketing/screens/partner_storefront_screen.dart';
+import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/features/home/widgets/social_post_card.dart';
+import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
+import 'package:bitemates/features/home/screens/post_detail_screen.dart';
+import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+// Membership sections are commented out below (subscriptions not live yet).
+// import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;
@@ -50,20 +52,27 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Map<String, dynamic>? _userData;
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _userPhotos = [];
-  List<String> _postImages = [];
   List<String> _userInterests = [];
-  int _postImagesPage = 0;
-  static const int _postImagesPageSize = 30;
-  bool _hasMorePostImages = true;
-  bool _isLoadingMorePostImages = false;
+
+  // Facebook-style profile timeline: the user's own posts as full feed cards.
+  final SocialService _socialService = SocialService();
+  final List<Map<String, dynamic>> _posts = [];
+  bool _isLoadingPosts = true; // initial load
+  bool _isLoadingMorePosts = false;
+  bool _hasMorePosts = true;
+  String? _postsCursor;
+  String? _postsCursorId;
+  static const int _postsPageSize = 10;
 
   List<gm.Badge> _allBadges = [];
   List<UserBadge> _earnedBadges = [];
   String? _errorMessage;
   bool _isFollowing = false;
+  bool _followsYou = false; // Does the viewed user follow the current user?
   bool _isBlocked = false;
   late final bool _isOwnProfile;
   Map<String, dynamic>? _organizerProfile; // null = not an organizer
+  Map<String, dynamic>? _storefront; // get_storefront data (brand header)
   Map<String, dynamic>? _viewerSubscription; // viewer's active sub for this organizer
   List<Map<String, dynamic>> _myMemberships = []; // own profile: all active subs
   final ScrollController _profileScrollController = ScrollController();
@@ -77,13 +86,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     _profileScrollController.addListener(() {
       if (_profileScrollController.position.pixels >=
           _profileScrollController.position.maxScrollExtent - 400) {
-        _loadMorePostImages();
+        _loadMoreUserPosts();
       }
     });
     _loadUserProfile();
     _loadOrganizerProfile();
     _loadBadges();
-    _loadMorePostImages();
+    _loadUserPosts();
     if (_isOwnProfile) _loadMyMemberships();
     if (!_isOwnProfile) {
       _checkFollowStatus();
@@ -97,41 +106,67 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     super.dispose();
   }
 
-  Future<void> _loadMorePostImages() async {
-    if (_isLoadingMorePostImages || !_hasMorePostImages) return;
-    if (mounted) setState(() => _isLoadingMorePostImages = true);
+  /// Initial load of the profile timeline (first page of the user's posts).
+  Future<void> _loadUserPosts() async {
     try {
-      final offset = _postImagesPage * _postImagesPageSize;
-      final response = await SupabaseConfig.client
-          .from('posts')
-          .select('image_url, image_urls')
-          .eq('user_id', widget.userId)
-          .eq('is_story', false)
-          .order('created_at', ascending: false)
-          .range(offset, offset + _postImagesPageSize - 1);
+      final result = await _socialService.getUserPosts(
+        userId: widget.userId,
+        limit: _postsPageSize,
+      );
       if (!mounted) return;
-      final List<String> newImages = [];
-      for (final post in response as List<dynamic>) {
-        final urls = post['image_urls'];
-        if (urls != null && urls is List && urls.isNotEmpty) {
-          for (final u in urls) {
-            if (u != null && u.toString().isNotEmpty)
-              newImages.add(u.toString());
-          }
-        } else {
-          final single = post['image_url'];
-          if (single != null && single.toString().isNotEmpty)
-            newImages.add(single.toString());
-        }
-      }
       setState(() {
-        _postImages.addAll(newImages);
-        _postImagesPage++;
-        if (newImages.length < _postImagesPageSize) _hasMorePostImages = false;
-        _isLoadingMorePostImages = false;
+        _posts
+          ..clear()
+          ..addAll(List<Map<String, dynamic>>.from(result['posts'] as List));
+        _hasMorePosts = result['hasMore'] as bool? ?? false;
+        _postsCursor = result['nextCursor'] as String?;
+        _postsCursorId = result['nextCursorId'] as String?;
+        _isLoadingPosts = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _isLoadingMorePostImages = false);
+      if (mounted) setState(() => _isLoadingPosts = false);
+    }
+  }
+
+  /// Cursor-paginated load-more, triggered near the bottom of the scroll.
+  Future<void> _loadMoreUserPosts() async {
+    if (_isLoadingMorePosts || !_hasMorePosts || _isLoadingPosts) return;
+    setState(() => _isLoadingMorePosts = true);
+    try {
+      final result = await _socialService.getUserPosts(
+        userId: widget.userId,
+        limit: _postsPageSize,
+        cursor: _postsCursor,
+        cursorId: _postsCursorId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _posts.addAll(
+          List<Map<String, dynamic>>.from(result['posts'] as List),
+        );
+        _hasMorePosts = result['hasMore'] as bool? ?? false;
+        _postsCursor = result['nextCursor'] as String?;
+        _postsCursorId = result['nextCursorId'] as String?;
+        _isLoadingMorePosts = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingMorePosts = false);
+    }
+  }
+
+  /// Remove a deleted post from the timeline in place.
+  void _onPostDeleted(String postId) {
+    if (!mounted) return;
+    setState(() => _posts.removeWhere((p) => p['id'] == postId));
+  }
+
+  /// Merge an edited post's new fields back into the timeline in place.
+  void _onPostEdited(Map<String, dynamic> updated) {
+    if (!mounted) return;
+    final id = updated['id'];
+    final idx = _posts.indexWhere((p) => p['id'] == id);
+    if (idx != -1) {
+      setState(() => _posts[idx] = {..._posts[idx], ...updated});
     }
   }
 
@@ -142,11 +177,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         params: {'p_user_id': widget.userId},
       );
       if (result != null && mounted) {
-        setState(() {
-          _organizerProfile = Map<String, dynamic>.from(result as Map);
-        });
-        if (!_isOwnProfile) {
-          _loadViewerSubscription(result['partner_id'] as String);
+        final org = Map<String, dynamic>.from(result as Map);
+        setState(() => _organizerProfile = org);
+        final partnerId = org['partner_id'] as String?;
+        if (partnerId != null) {
+          // Storefront powers the brand header (profile_mode, cover, counts).
+          try {
+            final sf = await SupabaseConfig.client.rpc(
+              'get_storefront',
+              params: {'p_slug': null, 'p_partner_id': partnerId},
+            );
+            if (sf != null && mounted) {
+              setState(() => _storefront = Map<String, dynamic>.from(sf as Map));
+            }
+          } catch (_) {/* storefront optional; header just won't show */}
+          if (!_isOwnProfile) _loadViewerSubscription(partnerId);
         }
       }
     } catch (e) {
@@ -337,16 +382,27 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       final currentUserId = SupabaseConfig.client.auth.currentUser?.id;
       if (currentUserId == null) return;
 
-      final result = await SupabaseConfig.client
-          .from('follows')
-          .select('follower_id')
-          .eq('follower_id', currentUserId)
-          .eq('following_id', widget.userId)
-          .maybeSingle();
+      final results = await Future.wait([
+        // Do I follow them?
+        SupabaseConfig.client
+            .from('follows')
+            .select('follower_id')
+            .eq('follower_id', currentUserId)
+            .eq('following_id', widget.userId)
+            .maybeSingle(),
+        // Do they follow me?
+        SupabaseConfig.client
+            .from('follows')
+            .select('follower_id')
+            .eq('follower_id', widget.userId)
+            .eq('following_id', currentUserId)
+            .maybeSingle(),
+      ]);
 
       if (mounted) {
         setState(() {
-          _isFollowing = result != null;
+          _isFollowing = results[0] != null;
+          _followsYou = results[1] != null;
         });
       }
     } catch (e) {
@@ -757,17 +813,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
-  /// Whether the organizer has anything live worth showing: at least one
-  /// active upcoming event or one active subscription tier. The RPC already
-  /// filters both lists to active/upcoming only.
-  bool get _hasActiveOrganizerContent {
-    if (_organizerProfile == null) return false;
-    final events = _organizerProfile!['events'];
-    final tiers = _organizerProfile!['tiers'];
-    final hasEvents = events is List && events.isNotEmpty;
-    final hasTiers = tiers is List && tiers.isNotEmpty;
-    return hasEvents || hasTiers;
-  }
+  /// True when the viewed profile belongs to a brand-mode organizer and we have
+  /// its storefront loaded — drives the brand header (team_comms #220).
+  bool get _isBrandOrganizer =>
+      _storefront != null &&
+      (_storefront!['partner'] as Map?)?['profile_mode'] == 'brand';
 
   @override
   Widget build(BuildContext context) {
@@ -831,7 +881,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: RefreshIndicator(
-        onRefresh: _loadUserProfile,
+        onRefresh: () => Future.wait([_loadUserProfile(), _loadUserPosts()]),
         color: AppTheme.accentColor,
         child: CustomScrollView(
           controller: _profileScrollController,
@@ -910,6 +960,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ),
 
+            // Brand header — brand-mode organizers lead with a branded block
+            // (cover, logo, name, follow, counts). Person-mode organizers keep
+            // the personal profile + compact card below (team_comms #220).
+            if (_isBrandOrganizer)
+              SliverToBoxAdapter(
+                child: _BrandHeader(
+                  storefront: _storefront!,
+                  isDark: isDark,
+                ).animate().fadeIn(duration: 500.ms, delay: 250.ms),
+              ),
+
             // Badges Showcase
             if (_allBadges.isNotEmpty)
               SliverToBoxAdapter(
@@ -922,6 +983,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   ).animate().fadeIn(duration: 500.ms, delay: 500.ms),
                 ),
               ),
+
+            // Partner loyalty badges (Steam-style case). Self-loading and
+            // hidden when the user has earned none, so it costs nothing to place.
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                child: CreatorBadgeCase(
+                  userId: widget.userId,
+                  isOwnProfile: _isOwnProfile,
+                ).animate().fadeIn(duration: 500.ms, delay: 550.ms),
+              ),
+            ),
 
             // 3. Action Buttons & Bio
             SliverToBoxAdapter(
@@ -971,7 +1044,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                     size: 18,
                                   ),
                                   label: Text(
-                                    _isFollowing ? 'Following' : 'Follow',
+                                    _isFollowing
+                                        ? 'Following'
+                                        : (_followsYou
+                                              ? 'Follow back'
+                                              : 'Follow'),
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -1085,12 +1162,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       const SizedBox(height: 24),
                     ],
 
-                    // Switch to Host Mode (own profile only)
-                    if (_isOwnProfile) ...[
-                      _HostModeButton(),
-                      const SizedBox(height: 8),
-                    ],
-
                     // Bio
                     if (_userData?['bio'] != null &&
                         (_userData!['bio'] as String).isNotEmpty) ...[
@@ -1194,11 +1265,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ),
 
-            // 5. Organizer Section — only shown when the organizer has active
-            // content (an upcoming event OR an active subscription tier).
-            // Being an approved partner alone is not enough: cancelling all
-            // events/tiers hides this section.
-            if (_organizerProfile != null && _hasActiveOrganizerContent)
+            // 5. Organizer card — compact link to the storefront, for
+            // PERSON-mode organizers only. Brand-mode organizers get the full
+            // brand header up top instead (team_comms #220).
+            if (_organizerProfile != null && !_isBrandOrganizer)
               SliverToBoxAdapter(
                 child: _OrganizerSection(
                   profile: _organizerProfile!,
@@ -1206,40 +1276,41 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ).animate().fadeIn(duration: 600.ms, delay: 700.ms),
               ),
 
-            // 5b. Membership Section (organizer has show_membership_tab=true, viewed by others)
-            if (!_isOwnProfile &&
-                _organizerProfile != null &&
-                _organizerProfile!['show_membership_tab'] == true)
-              SliverToBoxAdapter(
-                child: _MembershipSection(
-                  tiers: (_organizerProfile!['tiers'] as List? ?? [])
-                      .cast<Map<String, dynamic>>(),
-                  viewerSubscription: _viewerSubscription,
-                  slug: _organizerProfile!['slug'] as String? ?? '',
-                  isDark: isDark,
-                  onManage: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const MyMembershipsScreen(),
-                    ),
-                  ),
-                ).animate().fadeIn(duration: 600.ms, delay: 750.ms),
-              ),
-
-            // 5c. My Memberships (own profile, has active subscriptions)
-            if (_isOwnProfile && _myMemberships.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _MyMembershipsCompact(
-                  memberships: _myMemberships,
-                  isDark: isDark,
-                  onViewAll: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const MyMembershipsScreen(),
-                    ),
-                  ),
-                ).animate().fadeIn(duration: 600.ms, delay: 720.ms),
-              ),
+            // 5b/5c. Membership sections — commented out for now: the
+            // subscription model isn't live yet, so there's nothing real to
+            // manage/view. Re-enable once fan subscriptions ship.
+            // if (!_isOwnProfile &&
+            //     _organizerProfile != null &&
+            //     _organizerProfile!['show_membership_tab'] == true)
+            //   SliverToBoxAdapter(
+            //     child: _MembershipSection(
+            //       tiers: (_organizerProfile!['tiers'] as List? ?? [])
+            //           .cast<Map<String, dynamic>>(),
+            //       viewerSubscription: _viewerSubscription,
+            //       slug: _organizerProfile!['slug'] as String? ?? '',
+            //       isDark: isDark,
+            //       onManage: () => Navigator.push(
+            //         context,
+            //         MaterialPageRoute(
+            //           builder: (_) => const MyMembershipsScreen(),
+            //         ),
+            //       ),
+            //     ).animate().fadeIn(duration: 600.ms, delay: 750.ms),
+            //   ),
+            //
+            // if (_isOwnProfile && _myMemberships.isNotEmpty)
+            //   SliverToBoxAdapter(
+            //     child: _MyMembershipsCompact(
+            //       memberships: _myMemberships,
+            //       isDark: isDark,
+            //       onViewAll: () => Navigator.push(
+            //         context,
+            //         MaterialPageRoute(
+            //           builder: (_) => const MyMembershipsScreen(),
+            //         ),
+            //       ),
+            //     ).animate().fadeIn(duration: 600.ms, delay: 720.ms),
+            //   ),
 
             // 6a. Featured Photos (manually curated from user_photos)
             if (_userPhotos.isNotEmpty) ...[
@@ -1310,60 +1381,133 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 8)),
             ],
 
-            // 6b. Photos Grid (Instagram-style) — header
-            if (_postImages.isNotEmpty || _isLoadingMorePostImages)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                sliver: SliverToBoxAdapter(
-                  child: _buildSectionHeader(context, 'PHOTOS'),
-                ),
+            // 6b. POSTS — Facebook-style timeline of the user's own posts.
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              sliver: SliverToBoxAdapter(
+                child: _buildSectionHeader(context, 'POSTS'),
               ),
+            ),
 
-            // 6c. Photos — Polaroid scatter (lazy, paginated)
-            if (_postImages.isNotEmpty)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 6,
-                    mainAxisSpacing: 14,
-                    childAspectRatio: 0.80,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildPolaroidTile(context, index, isDark),
-                    childCount: _postImages.length,
+            // 6c. Timeline body: loading / empty / list of full post cards.
+            if (_isLoadingPosts)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(
+                    child: SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ),
                 ),
-              ),
-
-            // 6d. Load-more footer for photos
-            if (_postImages.isNotEmpty || _isLoadingMorePostImages)
+              )
+            else if (_posts.isEmpty)
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: _isLoadingMorePostImages
-                      ? const Center(
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                  padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.article_outlined,
+                          size: 40,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'No posts yet',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white70 : Colors.black87,
                           ),
-                        )
-                      : _hasMorePostImages
-                      ? Center(
-                          child: TextButton(
-                            onPressed: _loadMorePostImages,
-                            child: Text(
-                              'Load more',
-                              style: TextStyle(
-                                color: Colors.grey[500],
-                                fontSize: 13,
-                              ),
+                        ),
+                        if (_isOwnProfile) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Share your first moment on the feed',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[500],
                             ),
                           ),
-                        )
-                      : const SizedBox(height: 8),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final post = _posts[index];
+                    // Hangout posts get their own rich card (same as the feed);
+                    // everything else uses the standard post card.
+                    if (post['post_type'] == 'hangout') {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: HangoutFeedCard(
+                          key: ValueKey(post['id']),
+                          post: post,
+                          onTap: () {
+                            final metadata =
+                                post['metadata'] as Map<String, dynamic>?;
+                            final tableId = metadata?['table_id'];
+                            if (tableId != null) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => TableCompactModal(
+                                    table: {'id': tableId},
+                                    matchData: const {},
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          onPostDeleted: _onPostDeleted,
+                          onPostEdited: _onPostEdited,
+                        ),
+                      );
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SocialPostCard(
+                        key: ValueKey(post['id']),
+                        post: post,
+                        onTap: () {
+                          final id = post['id']?.toString();
+                          if (id == null) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PostDetailScreen(postId: id),
+                            ),
+                          );
+                        },
+                        onPostDeleted: _onPostDeleted,
+                        onPostEdited: _onPostEdited,
+                      ),
+                    );
+                  },
+                  childCount: _posts.length,
+                ),
+              ),
+
+            // 6d. Load-more spinner for the timeline
+            if (!_isLoadingPosts && _isLoadingMorePosts)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
                 ),
               ),
 
@@ -1402,97 +1546,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
-  // Deterministic tilt per index so the scatter is stable across rebuilds.
-  static const _polaroidTilts = [
-    -0.045,
-    0.032,
-    -0.022,
-    0.05,
-    -0.05,
-    0.028,
-    -0.035,
-    0.04,
-  ];
-
-  /// A single tilted polaroid card for the PHOTOS scatter.
-  Widget _buildPolaroidTile(BuildContext context, int index, bool isDark) {
-    final url = _postImages[index];
-    final tilt = _polaroidTilts[index % _polaroidTilts.length];
-    // Unique per-tile tag — guards against duplicate URLs in the grid.
-    final heroTag = 'polaroid_${index}_$url';
-
-    return Transform.rotate(
-      angle: tilt,
-      child: GestureDetector(
-        onTap: () => _openPhoto(context, url, heroTag),
-        child: Container(
-          // White polaroid frame — chunkier at the bottom lip.
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 20),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF26262E) : Colors.white,
-            borderRadius: BorderRadius.circular(4),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.18),
-                blurRadius: 14,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: Hero(
-                    tag: heroTag,
-                    child: CachedNetworkImage(
-                      imageUrl: url,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      placeholder: (_, __) => Container(
-                        color: isDark
-                            ? Colors.white.withValues(alpha: 0.05)
-                            : Colors.grey[200],
-                      ),
-                      errorWidget: (_, __, ___) => Container(
-                        color: isDark
-                            ? Colors.white.withValues(alpha: 0.05)
-                            : Colors.grey[200],
-                        child: Icon(
-                          Icons.broken_image_outlined,
-                          color: Colors.grey[400],
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Opens a photo with a morph (Hero) transition. The black backdrop fades in
-  /// while the tapped image flies and expands into the fullscreen viewer.
-  void _openPhoto(BuildContext context, String url, Object heroTag) {
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        opaque: false,
-        barrierColor: Colors.black,
-        transitionDuration: const Duration(milliseconds: 350),
-        reverseTransitionDuration: const Duration(milliseconds: 300),
-        pageBuilder: (_, __, ___) =>
-            FullScreenImageViewer(imageUrl: url, heroTag: heroTag),
-        transitionsBuilder: (_, animation, __, child) =>
-            FadeTransition(opacity: animation, child: child),
-      ),
-    );
-  }
 }
 
 // ─── Membership Section ───────────────────────────────────────────────────────
@@ -2017,232 +2070,128 @@ class _MyMembershipsCompact extends StatelessWidget {
 }
 
 
+// ─── Organizer card ───────────────────────────────────────────────────────────
+// Compact link to the organizer's storefront (their brand/sell page). The
+// social profile no longer renders the events grid / tiers / social links —
+// those live on the storefront now (team_comms #220, get_storefront).
 class _OrganizerSection extends StatelessWidget {
   final Map<String, dynamic> profile;
   final bool isDark;
 
   const _OrganizerSection({required this.profile, required this.isDark});
 
-  void _launchUrl(BuildContext context, String url) async {
-    // Ensure URL has a scheme
-    final uri = Uri.parse(url.startsWith('http') ? url : 'https://$url');
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not open $url')));
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isVerified = profile['verified'] == true;
-    final businessName = profile['business_name'] as String? ?? '';
-    final description = profile['description'] as String?;
+    final businessName = profile['business_name'] as String? ?? 'Organizer';
     final photoUrl = profile['profile_photo_url'] as String?;
-    final instagram = profile['instagram'] as String?;
-    final facebook = profile['facebook'] as String?;
-    final website = profile['website'] as String?;
-    final tiktok = profile['tiktok'] as String?;
-    final twitter = profile['twitter'] as String?;
-
-    final rawEvents = profile['events'] as List?;
-    final events = rawEvents?.cast<Map<String, dynamic>>() ?? [];
-
-    final hasSocialLinks = [
-      instagram,
-      facebook,
-      website,
-      tiktok,
-      twitter,
-    ].any((v) => v != null && v.isNotEmpty);
+    final partnerId = profile['partner_id'] as String? ?? '';
+    final isBrand = profile['profile_mode'] == 'brand';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Section header
           _buildSectionHeader(context),
-          const SizedBox(height: 16),
-
-          // ── Organizer identity card
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white.withOpacity(0.05) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withOpacity(0.08)
-                    : Colors.grey.shade200,
-              ),
-            ),
-            child: Row(
-              children: [
-                // Logo / profile photo
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: isDark ? Colors.white10 : Colors.grey.shade100,
-                    border: Border.all(
-                      color: AppTheme.primaryColor.withOpacity(0.3),
-                      width: 2,
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: partnerId.isEmpty
+                ? null
+                : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            PartnerStorefrontScreen(partnerId: partnerId),
+                      ),
                     ),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: photoUrl != null && photoUrl.isNotEmpty
-                      ? CachedNetworkImage(
-                          imageUrl: photoUrl,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => const Icon(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withOpacity(0.05) : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withOpacity(0.08)
+                      : Colors.grey.shade200,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isDark ? Colors.white10 : Colors.grey.shade100,
+                      border: Border.all(
+                        color: AppTheme.primaryColor.withOpacity(0.3),
+                        width: 2,
+                      ),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: photoUrl != null && photoUrl.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: photoUrl,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => const Icon(
+                              Icons.storefront_rounded,
+                              color: AppTheme.primaryColor,
+                              size: 26,
+                            ),
+                          )
+                        : const Icon(
                             Icons.storefront_rounded,
                             color: AppTheme.primaryColor,
-                            size: 28,
+                            size: 26,
                           ),
-                        )
-                      : const Icon(
-                          Icons.storefront_rounded,
-                          color: AppTheme.primaryColor,
-                          size: 28,
-                        ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              businessName,
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                businessName,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          if (isVerified) ...[
-                            const SizedBox(width: 6),
-                            Tooltip(
-                              message: 'Verified Organizer',
-                              child: Icon(
+                            if (isVerified) ...[
+                              const SizedBox(width: 6),
+                              const Icon(
                                 Icons.verified_rounded,
                                 size: 18,
                                 color: AppTheme.primaryColor,
                               ),
-                            ),
+                            ],
                           ],
-                        ],
-                      ),
-                      if (description != null && description.isNotEmpty) ...[
-                        const SizedBox(height: 4),
+                        ),
+                        const SizedBox(height: 2),
                         Text(
-                          description,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                          isBrand ? 'View store' : 'View organizer page',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: isDark ? Colors.grey[400] : Colors.grey[600],
-                            height: 1.4,
+                            color: AppTheme.primaryColor,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
-                    ],
+                    ),
                   ),
-                ),
-              ],
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: isDark ? Colors.grey[500] : Colors.grey[400],
+                  ),
+                ],
+              ),
             ),
           ),
-
-          // ── Social links row
-          if (hasSocialLinks) ...[
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (instagram != null && instagram.isNotEmpty)
-                  _SocialChip(
-                    icon: Icons.camera_alt_outlined,
-                    label: instagram.startsWith('@')
-                        ? instagram
-                        : '@$instagram',
-                    onTap: () => _launchUrl(
-                      context,
-                      'https://instagram.com/${instagram.replaceAll('@', '')}',
-                    ),
-                    isDark: isDark,
-                  ),
-                if (tiktok != null && tiktok.isNotEmpty)
-                  _SocialChip(
-                    icon: Icons.music_note_rounded,
-                    label: tiktok.startsWith('@') ? tiktok : '@$tiktok',
-                    onTap: () => _launchUrl(
-                      context,
-                      'https://tiktok.com/@${tiktok.replaceAll('@', '')}',
-                    ),
-                    isDark: isDark,
-                  ),
-                if (facebook != null && facebook.isNotEmpty)
-                  _SocialChip(
-                    icon: Icons.facebook_rounded,
-                    label: 'Facebook',
-                    onTap: () => _launchUrl(context, facebook),
-                    isDark: isDark,
-                  ),
-                if (twitter != null && twitter.isNotEmpty)
-                  _SocialChip(
-                    icon: Icons.alternate_email_rounded,
-                    label: twitter.startsWith('@') ? twitter : '@$twitter',
-                    onTap: () => _launchUrl(
-                      context,
-                      'https://x.com/${twitter.replaceAll('@', '')}',
-                    ),
-                    isDark: isDark,
-                  ),
-                if (website != null && website.isNotEmpty)
-                  _SocialChip(
-                    icon: Icons.language_rounded,
-                    label: 'Website',
-                    onTap: () => _launchUrl(context, website),
-                    isDark: isDark,
-                  ),
-              ],
-            ),
-          ],
-
-          // ── Active events
-          if (events.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            Text(
-              'UPCOMING EVENTS',
-              style: theme.textTheme.labelSmall?.copyWith(
-                letterSpacing: 1.5,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.grey[500] : Colors.grey[600],
-              ),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 160,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                clipBehavior: Clip.none,
-                itemCount: events.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, i) => _OrganizerEventCard(
-                  event: events[i],
-                  isDark: isDark,
-                  organizerId: profile['partner_id'] as String? ?? '',
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 32),
         ],
       ),
@@ -2262,197 +2211,239 @@ class _OrganizerSection extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(
-          'EVENT ORGANIZER',
+          'ORGANIZER',
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1.2,
-          ),
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
         ),
       ],
     );
   }
 }
 
-// ─── Social link chip ─────────────────────────────────────────────────────────
-
-class _SocialChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
+// ─── Brand header ─────────────────────────────────────────────────────────────
+// Leads a brand-mode organizer's profile: cover, logo, name, follower/event
+// counts, Follow button, and a link into the full storefront. Powered by
+// get_storefront (team_comms #220).
+class _BrandHeader extends StatefulWidget {
+  final Map<String, dynamic> storefront;
   final bool isDark;
 
-  const _SocialChip({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    required this.isDark,
-  });
+  const _BrandHeader({required this.storefront, required this.isDark});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: AppTheme.primaryColor.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppTheme.primaryColor.withOpacity(0.25)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: AppTheme.primaryColor),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppTheme.primaryColor,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<_BrandHeader> createState() => _BrandHeaderState();
 }
 
-// ─── Single event card inside organizer section ───────────────────────────────
+class _BrandHeaderState extends State<_BrandHeader> {
+  bool _following = false;
+  bool _busy = false;
+  int _followers = 0;
 
-class _OrganizerEventCard extends StatelessWidget {
-  final Map<String, dynamic> event;
-  final String organizerId;
-  final bool isDark;
+  Map<String, dynamic> get _partner =>
+      (widget.storefront['partner'] as Map).cast<String, dynamic>();
+  String get _partnerId => _partner['id'] as String? ?? '';
 
-  const _OrganizerEventCard({
-    required this.event,
-    required this.isDark,
-    required this.organizerId,
-  });
+  @override
+  void initState() {
+    super.initState();
+    final counts =
+        (widget.storefront['counts'] as Map?)?.cast<String, dynamic>() ?? {};
+    _followers = (counts['followers'] as num?)?.toInt() ?? 0;
+    _loadFollow();
+  }
+
+  Future<void> _loadFollow() async {
+    final uid = SupabaseConfig.client.auth.currentUser?.id;
+    if (uid == null || _partnerId.isEmpty) return;
+    try {
+      final rows = await SupabaseConfig.client
+          .from('partner_followers')
+          .select('id')
+          .eq('user_id', uid)
+          .eq('partner_id', _partnerId)
+          .limit(1);
+      if (mounted) setState(() => _following = (rows as List).isNotEmpty);
+    } catch (_) {}
+  }
+
+  Future<void> _toggle() async {
+    if (_busy) return;
+    final uid = SupabaseConfig.client.auth.currentUser?.id;
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Log in to follow organizers')),
+      );
+      return;
+    }
+    final prev = _following;
+    final prevCount = _followers;
+    setState(() {
+      _following = !prev;
+      _followers = prevCount + (prev ? -1 : 1);
+      _busy = true;
+    });
+    try {
+      final res = await SupabaseConfig.client.rpc(
+        'toggle_partner_follow',
+        params: {'p_partner_id': _partnerId},
+      );
+      final f = (res as Map)['following'] as bool? ?? !prev;
+      if (mounted) {
+        setState(() {
+          _following = f;
+          _followers = prevCount + (f ? 1 : 0);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _following = prev;
+          _followers = prevCount;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final title = event['title'] as String? ?? 'Event';
-    final coverUrl = event['cover_image_url'] as String?;
-    final venueStr = event['venue_name'] as String?;
-    final rawDate = event['start_datetime'] as String?;
-    final price = event['ticket_price'];
+    final primary = Theme.of(context).primaryColor;
+    final isDark = widget.isDark;
+    final p = _partner;
+    final name = p['business_name'] as String? ?? 'Organizer';
+    final logo = p['profile_photo_url'] as String?;
+    final cover = p['cover_image_url'] as String?;
+    final verified = p['verified'] == true;
+    final events =
+        ((widget.storefront['upcoming_events'] as List?) ?? const []).length;
+    final hasCover = cover != null && cover.isNotEmpty;
 
-    DateTime? startDate;
-    if (rawDate != null) {
-      startDate = DateTime.tryParse(rawDate)?.toLocal();
-    }
-
-    return GestureDetector(
-      onTap: () {
-        // Build a minimal Event object to pass to EventDetailModal
-        try {
-          final eventObj = Event(
-            id: event['id'] as String,
-            title: title,
-            description: '',
-            venueName: venueStr ?? '',
-            venueAddress: '',
-            latitude: 0,
-            longitude: 0,
-            startDatetime: startDate ?? DateTime.now(),
-            coverImageUrl: coverUrl,
-            ticketPrice: (price as num?)?.toDouble() ?? 0,
-            capacity: (event['capacity'] as num?)?.toInt() ?? 0,
-            ticketsSold: (event['tickets_sold'] as num?)?.toInt() ?? 0,
-            category: event['event_type'] as String? ?? 'other',
-            organizerId: event['organizer_id'] as String? ?? organizerId,
-            createdAt: DateTime.now(),
-          );
-          EventDetailModal.show(context, eventObj);
-        } catch (_) {}
-      },
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Container(
-        width: 200,
         decoration: BoxDecoration(
           color: isDark ? Colors.white.withOpacity(0.05) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isDark
-                ? Colors.white.withOpacity(0.08)
-                : Colors.grey.shade200,
+            color: isDark ? Colors.white.withOpacity(0.08) : Colors.grey.shade200,
           ),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Cover image
-            SizedBox(
-              height: 90,
-              width: double.infinity,
-              child: coverUrl != null && coverUrl.isNotEmpty
-                  ? CachedNetworkImage(
-                      imageUrl: coverUrl,
-                      fit: BoxFit.cover,
-                      errorWidget: (_, __, ___) =>
-                          _EventCoverPlaceholder(isDark: isDark),
-                    )
-                  : _EventCoverPlaceholder(isDark: isDark),
-            ),
+            if (hasCover)
+              CachedNetworkImage(
+                imageUrl: cover,
+                height: 116,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorWidget: (_, __, ___) => Container(
+                  height: 116,
+                  color: primary.withOpacity(0.08),
+                ),
+              ),
             Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
                   Row(
                     children: [
-                      Icon(
-                        Icons.calendar_today_outlined,
-                        size: 10,
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          startDate != null
-                              ? DateFormat('MMM d').format(startDate)
-                              : '—',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey[600],
-                              ),
-                        ),
-                      ),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
+                        width: 48,
+                        height: 48,
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          price != null && price > 0
-                              ? '₱${(price as num).toStringAsFixed(0)}'
-                              : 'Free',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.primaryColor,
+                          shape: BoxShape.circle,
+                          color: isDark ? Colors.white10 : Colors.grey.shade100,
+                          border: Border.all(
+                            color: primary.withOpacity(0.3),
+                            width: 2,
                           ),
                         ),
+                        clipBehavior: Clip.antiAlias,
+                        child: logo != null && logo.isNotEmpty
+                            ? CachedNetworkImage(
+                                imageUrl: logo,
+                                fit: BoxFit.cover,
+                                errorWidget: (_, __, ___) => Icon(
+                                  Icons.storefront_rounded,
+                                  color: primary,
+                                  size: 24,
+                                ),
+                              )
+                            : Icon(Icons.storefront_rounded,
+                                color: primary, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    name,
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: -0.3,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (verified) ...[
+                                  const SizedBox(width: 5),
+                                  const Icon(Icons.verified,
+                                      size: 16, color: Colors.blue),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '$_followers ${_followers == 1 ? 'follower' : 'followers'}'
+                              '${events > 0 ? ' · $events upcoming' : ''}',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(child: _followButton(primary)),
+                      const SizedBox(width: 10),
+                      OutlinedButton(
+                        onPressed: _partnerId.isEmpty
+                            ? null
+                            : () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PartnerStorefrontScreen(
+                                        partnerId: _partnerId),
+                                  ),
+                                ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: isDark ? Colors.white70 : Colors.black87,
+                          side: BorderSide(
+                              color:
+                                  isDark ? Colors.grey[700]! : Colors.grey[300]!),
+                          shape: const StadiumBorder(),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 18, vertical: 12),
+                        ),
+                        child: const Text('View store'),
                       ),
                     ],
                   ),
@@ -2464,139 +2455,44 @@ class _OrganizerEventCard extends StatelessWidget {
       ),
     );
   }
-}
 
-class _EventCoverPlaceholder extends StatelessWidget {
-  final bool isDark;
-  const _EventCoverPlaceholder({required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: isDark ? Colors.white10 : Colors.grey.shade100,
-      child: Center(
-        child: Icon(
-          Icons.event_rounded,
-          size: 32,
-          color: isDark ? Colors.grey[600] : Colors.grey[400],
-        ),
+  Widget _followButton(Color primary) {
+    final spinner = SizedBox(
+      width: 14,
+      height: 14,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        color: _following ? primary : Colors.white,
       ),
     );
-  }
-}
+    const pad = EdgeInsets.symmetric(horizontal: 20, vertical: 12);
+    const labelStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w700);
 
-// ─── Host Mode Entry Point Button ────────────────────────────────────────────
-
-class _HostModeButton extends StatefulWidget {
-  const _HostModeButton();
-
-  @override
-  State<_HostModeButton> createState() => _HostModeButtonState();
-}
-
-class _HostModeButtonState extends State<_HostModeButton> {
-  final _hostService = HostService();
-  Map<String, dynamic>? _partner;
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPartner();
-  }
-
-  Future<void> _loadPartner() async {
-    final partner = await _hostService.getMyPartnerProfile();
-    if (mounted) {
-      setState(() {
-        _partner = partner;
-        _isLoading = false;
-      });
-    }
-  }
-
-  void _onTap() {
-    if (_partner == null) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const HostApplyScreen()),
-      ).then((_) => _loadPartner());
-    } else if (_partner!['status'] == 'approved') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => HostDashboardScreen(partner: _partner!),
+    if (_following) {
+      return OutlinedButton.icon(
+        onPressed: _toggle,
+        icon: _busy ? spinner : const Icon(Icons.check_rounded, size: 18),
+        label: const Text('Following'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: primary,
+          side: BorderSide(color: primary, width: 1.5),
+          padding: pad,
+          shape: const StadiumBorder(),
+          textStyle: labelStyle,
         ),
       );
-    } else {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const HostPendingScreen()),
-      );
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) return const SizedBox(height: 52);
-
-    final isApproved = _partner?['status'] == 'approved';
-    final isPending = _partner != null && !isApproved;
-
-    return GestureDetector(
-      onTap: _onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: isApproved
-              ? AppTheme.primaryColor.withOpacity(0.08)
-              : isPending
-              ? Colors.orange.withOpacity(0.08)
-              : Colors.grey.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isApproved
-                ? AppTheme.primaryColor.withOpacity(0.3)
-                : isPending
-                ? Colors.orange.withOpacity(0.4)
-                : Colors.grey.withOpacity(0.3),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              isApproved
-                  ? Icons.storefront_outlined
-                  : isPending
-                  ? Icons.hourglass_top_rounded
-                  : Icons.add_business_outlined,
-              size: 16,
-              color: isApproved
-                  ? AppTheme.primaryColor
-                  : isPending
-                  ? Colors.orange[700]
-                  : Colors.grey[600],
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isApproved
-                  ? 'Switch to Host Mode'
-                  : isPending
-                  ? 'Application Under Review'
-                  : 'Become a Host',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: isApproved
-                    ? AppTheme.primaryColor
-                    : isPending
-                    ? Colors.orange[700]
-                    : Colors.grey[700],
-              ),
-            ),
-          ],
-        ),
+    return ElevatedButton.icon(
+      onPressed: _toggle,
+      icon: _busy ? spinner : const Icon(Icons.add_rounded, size: 18),
+      label: const Text('Follow'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        padding: pad,
+        shape: const StadiumBorder(),
+        textStyle: labelStyle,
       ),
     );
   }

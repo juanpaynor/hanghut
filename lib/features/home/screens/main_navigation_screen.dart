@@ -9,6 +9,7 @@ import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flo
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/activity/screens/activity_screen.dart';
 import 'package:bitemates/features/chat/widgets/draggable_chat_bubble.dart';
+import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/activity/widgets/tabbed_inbox.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/location/logic/geofence_engine.dart';
@@ -25,8 +26,8 @@ import 'package:bitemates/core/services/connectivity_service.dart';
 import 'package:bitemates/core/widgets/offline_banner.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
-import 'package:bitemates/core/services/coach_mark_service.dart';
-import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
+import 'package:bitemates/features/gamification/services/creator_badge_service.dart';
+import 'package:bitemates/features/gamification/widgets/creator_badge_earned_overlay.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -56,6 +57,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   final GlobalKey<FeedScreenState> _feedScreenKey =
       GlobalKey<FeedScreenState>();
   StreamSubscription<Map<String, dynamic>>? _geofenceSubscription;
+
+  // Live total-unread count for the chat bubble badge. Created once so we don't
+  // re-subscribe to realtime on every rebuild.
+  final Stream<int> _chatUnreadStream =
+      ChatListService().totalUnreadStream().asBroadcastStream();
 
   // Speed dial
   bool _fabOpen = false;
@@ -137,139 +143,50 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     // Check for Admin Popups on Startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAdminPopups();
-      _maybeShowCoachMarks();
+    });
+
+    // Celebrate any partner badges earned since last launch (e.g. a partner
+    // manual-granted one, or a claim attached them after signup).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkNewCreatorBadges();
     });
   }
 
-  Future<void> _checkAdminPopups() async {
-    final activePopup = await AdminPopupService().checkAndGetActivePopup();
-    if (activePopup != null && mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false, // Force them to interact with the modal
-        builder: (context) => AdminPopupModal(
-          popupData: activePopup,
-          onDismissed: () {
-            AdminPopupService().markPopupAsSeen(activePopup['id']);
-          },
-        ),
-      );
+  /// Shows the earn celebration for any newly-earned partner badges, one at a
+  /// time. Fire-and-forget; never blocks the UI.
+  Future<void> _checkNewCreatorBadges() async {
+    try {
+      final newBadges = await CreatorBadgeService().getNewlyEarnedBadges();
+      for (final badge in newBadges) {
+        if (!mounted) return;
+        await CreatorBadgeEarnedOverlay.show(context, badge);
+      }
+    } catch (_) {
+      // Celebration is best-effort — never surface an error for it.
     }
   }
 
-  Future<void> _maybeShowCoachMarks() async {
-    final service = CoachMarkService();
-    if (!await service.shouldShowOnboarding()) return;
-    final steps = await service.fetchOnboardingSteps();
-    if (steps.isEmpty || !mounted) return;
-
-    final keyLookup = <String, GlobalKey>{
-      'nav_map': _keyNavMap,
-      'nav_feed': _keyNavFeed,
-      'fab': _keyFab,
-      'nav_explore': _keyNavExplore,
-      'nav_profile': _keyNavProfile,
-    };
-
-    // Wait until the target widgets are actually laid out (their context is
-    // non-null). On slower devices — or while the Map screen is still doing its
-    // heavy first-frame init — the nav bar can lag, which previously made the
-    // tour skip targets and show nothing. Poll up to ~3s before giving up so it
-    // shows reliably instead of "sometimes". (Not marking it seen on failure
-    // means it still retries next launch.)
-    final neededKeys = steps
-        .map((s) => keyLookup[s['target_key']])
-        .whereType<GlobalKey>()
-        .toList();
-    var attempts = 0;
-    while (mounted &&
-        attempts < 25 &&
-        neededKeys.any((k) => k.currentContext == null)) {
-      await Future.delayed(const Duration(milliseconds: 120));
-      attempts++;
+  Future<void> _checkAdminPopups() async {
+    final popups = await AdminPopupService().getEligiblePopups();
+    // Show the eligible popups as a queue — one at a time, the next appearing
+    // once the current is dismissed. awaiting showDialog serializes them.
+    final service = AdminPopupService();
+    for (final popup in popups) {
+      if (!mounted) return; // e.g. an action deep-linked away mid-queue
+      service.recordImpression(popup['id']); // fire-and-forget analytics
+      await showDialog(
+        context: context,
+        barrierDismissible: true, // tap outside the popup/poster to dismiss
+        builder: (context) => AdminPopupModal(
+          popupData: popup,
+          onDismissed: () {},
+        ),
+      );
+      // Mark seen however it closed — X, button, action, or a barrier tap
+      // (a barrier tap never runs onDismissed, so this is the one place that
+      // covers every dismissal path).
+      service.markPopupAsSeen(popup['id']);
     }
-    if (!mounted) return;
-
-    final targets = <TargetFocus>[];
-    for (final step in steps) {
-      final targetKey = step['target_key'] as String;
-      final key = keyLookup[targetKey];
-      if (key == null || key.currentContext == null) continue;
-
-      final isFab = targetKey == 'fab';
-
-      targets.add(TargetFocus(
-        identify: targetKey,
-        keyTarget: key,
-        // FAB is circular; nav items get a rounded rect that fits the pill bar
-        shape: isFab ? ShapeLightFocus.Circle : ShapeLightFocus.RRect,
-        radius: isFab ? null : 16,
-        paddingFocus: isFab ? 10 : 6,
-        enableOverlayTab: true,
-        contents: [
-          TargetContent(
-            align: ContentAlign.top,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    step['title'] as String,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    step['body'] as String,
-                    style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Tap anywhere to continue →',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ));
-    }
-
-    if (targets.isEmpty) return;
-
-    TutorialCoachMark(
-      targets: targets,
-      colorShadow: Colors.black,
-      opacityShadow: 0.85,
-      textSkip: 'SKIP',
-      // Cut default 600ms transitions down to feel snappy
-      focusAnimationDuration: const Duration(milliseconds: 400),
-      unFocusAnimationDuration: const Duration(milliseconds: 300),
-      pulseAnimationDuration: const Duration(milliseconds: 500),
-      onFinish: () {
-        service.markOnboardingSeen();
-        // Chain straight into the map-screen tour now that the navbar tour
-        // is done and the user is already on the Map tab.
-        Future.delayed(const Duration(milliseconds: 600), () {
-          _mapScreenKey.currentState?.maybeShowMapCoachMarks();
-        });
-      },
-      onSkip: () {
-        service.markOnboardingSeen();
-        // Also chain on skip so users who bail out of the navbar tour still
-        // see the map tour (they're already on the map).
-        Future.delayed(const Duration(milliseconds: 400), () {
-          _mapScreenKey.currentState?.maybeShowMapCoachMarks();
-        });
-        return true;
-      },
-    ).show(context: context);
   }
 
   Future<void> _openEventFromNotification(String eventId) async {
@@ -318,6 +235,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       // Delay to let Mapbox and other services stabilize on resume
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) _checkAccountStatus();
+        if (mounted) _checkNewCreatorBadges();
       });
     }
   }
@@ -623,7 +541,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               ),
             ),
 
-          if (currentUserId != null) DraggableChatBubble(onTap: _showQuickChat),
+          if (currentUserId != null)
+            DraggableChatBubble(
+              onTap: _showQuickChat,
+              unreadStream: _chatUnreadStream,
+            ),
 
           // ── Speed Dial Scrim ──
           if (_fabOpen)
@@ -674,16 +596,22 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             _scrollAccum = 0;
           }
           _scrollAccum += delta;
-          if (_scrollAccum > 40 && !navCompactNotifier.value) {
+          // Require a deliberate scroll before toggling — thresholds raised
+          // (and made symmetric) so a small nudge or reading pause doesn't
+          // flip the bar.
+          if (_scrollAccum > 70 && !navCompactNotifier.value) {
             navCompactNotifier.value = true;
             _scrollAccum = 0;
-          } else if (_scrollAccum < -20 && navCompactNotifier.value) {
+          } else if (_scrollAccum < -70 && navCompactNotifier.value) {
             navCompactNotifier.value = false;
             _scrollAccum = 0;
           }
         } else if (n is ScrollEndNotification) {
-          // Once scrolling settles, spring the bar back to full size.
-          if (navCompactNotifier.value) navCompactNotifier.value = false;
+          // Just reset the accumulator — do NOT force-expand here. Forcing
+          // expand on every scroll end made a short drag (past the compact
+          // threshold, then released) flash compact→expand within the same
+          // gesture, which is what read as "too sensitive." The bar now only
+          // expands via a deliberate upward scroll or by reaching the top.
           _scrollAccum = 0;
         }
         return false;

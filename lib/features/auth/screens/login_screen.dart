@@ -6,6 +6,8 @@ import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/auth/screens/forgot_password_screen.dart';
 import 'package:bitemates/features/auth/screens/signup_screen.dart';
 import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
+import 'package:bitemates/main.dart' show SessionHandler;
+import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/providers/auth_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -116,10 +118,13 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     );
 
     if (success && mounted) {
+      final session = SupabaseConfig.auth.currentSession;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 600),
-          pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+          pageBuilder: (_, __, ___) => session != null
+              ? SessionHandler(session: session)
+              : const MainNavigationScreen(),
           transitionsBuilder: (_, animation, __, child) {
             return FadeTransition(opacity: animation, child: child);
           },
@@ -145,10 +150,13 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     try {
       final success = await authProvider.signInWithGoogle();
       if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 600),
-            pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+            pageBuilder: (_, __, ___) => session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
             transitionsBuilder: (_, animation, __, child) {
               return FadeTransition(opacity: animation, child: child);
             },
@@ -176,10 +184,13 @@ class _EmojiLoginBodyState extends State<EmojiLoginBody>
     try {
       final success = await authProvider.signInWithApple();
       if (success && mounted) {
+        final session = SupabaseConfig.auth.currentSession;
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 600),
-            pageBuilder: (_, __, ___) => const MainNavigationScreen(),
+            pageBuilder: (_, __, ___) => session != null
+                ? SessionHandler(session: session)
+                : const MainNavigationScreen(),
             transitionsBuilder: (_, animation, __, child) {
               return FadeTransition(opacity: animation, child: child);
             },
