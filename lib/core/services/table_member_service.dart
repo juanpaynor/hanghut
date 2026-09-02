@@ -121,10 +121,21 @@ class TableMemberService {
       // ═══ Location Distance Check ═══
       final tableLat = (table['latitude'] as num?)?.toDouble();
       final tableLng = (table['longitude'] as num?)?.toDouble();
+      final locationName = (table['location_name'] as String?)?.trim();
+      // A TBD / location-less hangout has no real place to be near, so it must
+      // NOT enforce a join radius. These are stored either as 'TBD' with the
+      // host's incidental coords, or at null-island (0,0) when the host had no
+      // fix — and 0,0 is ~thousands of km from any real user, which would
+      // otherwise reject EVERY joiner ("no one can join").
+      final hasFixedLocation =
+          tableLat != null &&
+          tableLng != null &&
+          !(tableLat == 0 && tableLng == 0) &&
+          (locationName == null || locationName.toUpperCase() != 'TBD');
       final maxDistKm =
           (table['max_join_distance_km'] as num?)?.toDouble() ??
           100.0; // default 100km
-      if (tableLat != null && tableLng != null) {
+      if (hasFixedLocation) {
         try {
           bool locationPermissionOk = false;
           LocationPermission permission = await Geolocator.checkPermission();

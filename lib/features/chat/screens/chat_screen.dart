@@ -3629,6 +3629,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// The quick-tap reactions shown at the top of the long-press actions sheet.
+  static const List<String> _quickReactions = ['❤️', '😂', '😮', '😢', '🙏', '👍'];
+
   void _showMessageActions(Map<String, dynamic> message) {
     HapticFeedback.mediumImpact();
     final isOwnMessage = message['senderId'] == _currentUserId;
@@ -3654,6 +3657,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
+            // Quick-reaction row — long-press shows the emojis right here, so a
+            // reaction is a single tap instead of hunting through a "React" item.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: _quickReactions.map((emoji) {
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(context);
+                      HapticFeedback.selectionClick();
+                      _handleReaction(message['id'], emoji);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text(emoji, style: const TextStyle(fontSize: 30)),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const Divider(height: 1),
             ListTile(
               leading: Icon(
                 Icons.reply,
@@ -3714,22 +3739,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   _handleForward(message);
                 },
               ),
-            ListTile(
-              leading: Icon(
-                Icons.emoji_emotions_outlined,
-                color: Theme.of(context).iconTheme.color,
-              ),
-              title: Text(
-                'React',
-                style: TextStyle(
-                  color: Theme.of(context).textTheme.bodyLarge?.color,
-                ),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showEmojiPicker(message['id']);
-              },
-            ),
             if (isOwnMessage) ...[
               const Divider(),
               ListTile(
@@ -3799,75 +3808,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ],
         ),
       ),
-    );
-  }
-
-  void _showEmojiPicker(String messageId) {
-    final emojis = ['❤️', '😂', '😮', '😢', '🙏', '👍'];
-
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Emoji Picker',
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Material(
-            color: Colors.transparent,
-            child: Center(
-              child: ScaleTransition(
-                scale: CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeOutBack,
-                ),
-                child: FadeTransition(
-                  opacity: animation,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.grey[850]
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(30),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.2),
-                          blurRadius: 20,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: emojis.map((emoji) {
-                        return GestureDetector(
-                          onTap: () {
-                            Navigator.pop(context);
-                            _handleReaction(messageId, emoji);
-                          },
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 4),
-                            padding: const EdgeInsets.all(8),
-                            child: Text(
-                              emoji,
-                              style: const TextStyle(fontSize: 32),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 

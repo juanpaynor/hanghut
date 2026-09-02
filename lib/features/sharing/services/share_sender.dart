@@ -120,6 +120,11 @@ class ShareSender {
     String? senderPhoto,
   ) async {
     final messageId = const Uuid().v4();
+
+    // 1. The durable insert IS the send: it persists the message and fires the
+    //    server-side trigger that notifies recipients (who then receive it via
+    //    their own realtime subscription / on reload). If THIS fails, the share
+    //    genuinely failed.
     try {
       switch (t.chatType) {
         case 'trip':
@@ -162,7 +167,19 @@ class ShareSender {
             'is_forwarded': forwarded,
           });
       }
+    } catch (e) {
+      // Surface the real reason instead of swallowing it silently.
+      // ignore: avoid_print
+      print('❌ ShareSender: insert failed for ${t.chatType}:${t.tableId} — $e');
+      return false;
+    }
 
+    // 2. The Ably publish is only the live echo — best-effort. In the headless
+    //    share path the channel often isn't attached yet, and publishMessage
+    //    rethrows on error; if we let that fail the whole send the user sees
+    //    "Couldn't send" and double-sends on retry, even though the message was
+    //    already delivered. So never let an echo failure fail the send.
+    try {
       await _ably.publishMessage(
         channelName: t.channelId,
         content: content,
@@ -173,9 +190,11 @@ class ShareSender {
         messageId: messageId,
         isForwarded: forwarded,
       );
-      return true;
     } catch (e) {
-      return false;
+      // ignore: avoid_print
+      print('⚠️ ShareSender: live echo failed for ${t.channelId} '
+          '(message already delivered) — $e');
     }
+    return true;
   }
 }

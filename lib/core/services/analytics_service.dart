@@ -51,6 +51,17 @@ class AnalyticsService {
     );
   }
 
+  /// Entry-point instrumentation for hangout creation. [source] = where the
+  /// user launched the create flow from (e.g. 'fab_primary', 'fab_dial',
+  /// 'empty_state_discover'). Pair with `create_table` (completion) to tell a
+  /// discovery gap (few starts) apart from flow friction (starts but no finish).
+  Future<void> logHangoutCreateStart(String source) async {
+    await _analytics.logEvent(
+      name: 'hangout_create_start',
+      parameters: {'source': source},
+    );
+  }
+
   Future<void> logSendMessage(String chatType) async {
     await _analytics.logEvent(
       name: 'send_message',

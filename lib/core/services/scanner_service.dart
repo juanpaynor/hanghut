@@ -67,12 +67,18 @@ class ScannerService {
       final response = await SupabaseConfig.client
           .from('events')
           .select(
-            'id, title, start_datetime, venue_name, cover_image_url, '
+            'id, title, start_datetime, end_datetime, venue_name, cover_image_url, '
             'tickets_sold, capacity',
           )
           .inFilter('organizer_id', partnerIds)
           .inFilter('status', ['active', 'hidden'])
-          .gte('start_datetime', todayMidnight)
+          // "Still relevant" = hasn't FINISHED before today. Gate on end_datetime
+          // so a multi-day event stays scannable on its later days (e.g. day 2);
+          // fall back to start_datetime when an event has no end set.
+          .or(
+            'end_datetime.gte.$todayMidnight,'
+            'and(end_datetime.is.null,start_datetime.gte.$todayMidnight)',
+          )
           .order('start_datetime', ascending: true);
 
       return List<Map<String, dynamic>>.from(response as List);

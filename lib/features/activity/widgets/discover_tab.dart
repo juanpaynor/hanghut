@@ -1396,7 +1396,9 @@ class _EventRailCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
+    final dateStr = event.isMultiDay
+        ? event.dateRangeWithTimeLabel
+        : DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
     final isFree = event.displayFromPrice <= 0;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 

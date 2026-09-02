@@ -403,8 +403,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
 
     final venueLocked =
         widget.event.hideVenueUntilRegistered && !_userHasTicket;
-    final dateStr =
-        DateFormat('EEE, MMM d · h:mm a').format(widget.event.startLocal);
+    final dateStr = widget.event.isMultiDay
+        ? widget.event.dateRangeWithTimeLabel
+        : DateFormat('EEE, MMM d · h:mm a').format(widget.event.startLocal);
     final subtitle = (venueLocked || widget.event.venueName.isEmpty)
         ? dateStr
         : '$dateStr  ·  ${widget.event.venueName}';
@@ -694,8 +695,10 @@ class _EventDetailModalState extends State<EventDetailModal> {
         children: [
           _infoRow(
             Icons.calendar_today_rounded,
-            DateFormat('EEEE, MMM d  •  h:mm a')
-                .format(widget.event.startLocal),
+            widget.event.isMultiDay
+                ? widget.event.dateRangeWithTimeLabel
+                : DateFormat('EEEE, MMM d  •  h:mm a')
+                      .format(widget.event.startLocal),
           ),
           divider,
           _infoRow(
@@ -1335,7 +1338,9 @@ class _OrganizerEventCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      DateFormat('MMM d').format(event.startLocal),
+                      event.isMultiDay
+                          ? event.dateRangeLabel
+                          : DateFormat('MMM d').format(event.startLocal),
                       style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                     ),
                   ],

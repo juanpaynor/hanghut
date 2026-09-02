@@ -1,3 +1,5 @@
+import 'package:bitemates/core/utils/date_range.dart';
+
 class Event {
   final String id;
   final String title;
@@ -145,6 +147,16 @@ class Event {
   /// startDatetime/endDatetime for comparisons and serialization (instants).
   DateTime get startLocal => startDatetime.toLocal();
   DateTime? get endLocal => endDatetime?.toLocal();
+
+  /// True when the event spans more than one calendar day.
+  bool get isMultiDay => isMultiDayRange(startDatetime, endDatetime);
+
+  /// Compact multi-day span like "Aug 29 – 30". Only call when [isMultiDay].
+  String get dateRangeLabel => formatDateRange(startDatetime, endDatetime!);
+
+  /// Multi-day span plus start time, "Aug 29 – 30 · 7:00 PM". Only when [isMultiDay].
+  String get dateRangeWithTimeLabel =>
+      formatDateRangeWithTime(startDatetime, endDatetime!);
 
   int get ticketsAvailable => capacity - ticketsSold;
   bool get isSoldOut => ticketsAvailable <= 0;

@@ -965,8 +965,10 @@ class _StorefrontEventTile extends StatelessWidget {
                           const SizedBox(width: 5),
                           Flexible(
                             child: Text(
-                              DateFormat('EEE, MMM d • h:mm a')
-                                  .format(event.startLocal),
+                              event.isMultiDay
+                                  ? event.dateRangeWithTimeLabel
+                                  : DateFormat('EEE, MMM d • h:mm a')
+                                        .format(event.startLocal),
                               style: TextStyle(
                                 fontSize: 12.5,
                                 color: Colors.grey[600],

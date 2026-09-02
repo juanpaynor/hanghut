@@ -349,9 +349,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     }
   }
 
-  void _showCreateTableModal() {
+  void _showCreateTableModal({String source = 'fab_dial'}) {
     _closeDial();
     AnalyticsService().logScreenView('create_hangout_flow');
+    AnalyticsService().logHangoutCreateStart(source);
     final position = _mapScreenKey.currentState?.getCurrentPosition();
 
     Navigator.of(context).push(

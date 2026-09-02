@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/table_service.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 
 /// Dedicated "Hangouts" browse tab in Explore — a paginated grid of open
 /// hangouts with quick vibe filters. Split out of DiscoverTab so Discover can
@@ -165,14 +167,17 @@ class _HangoutsTabState extends State<HangoutsTab> {
 
     final items = _filtered;
     if (items.isEmpty) {
+      final noFilters = _vibeFilters.isEmpty;
       return _messageState(
         icon: Icons.groups_outlined,
-        title: _vibeFilters.isEmpty
+        title: noFilters
             ? 'No open hangouts right now'
             : 'Nothing matches these vibes',
-        subtitle: _vibeFilters.isEmpty
-            ? 'Check back soon, or start your own from the + button.'
+        subtitle: noFilters
+            ? 'Be the first — start one and see who\'s around.'
             : 'Try clearing a filter.',
+        ctaLabel: noFilters ? 'Start a hangout' : null,
+        onCta: noFilters ? _startHangout : null,
       );
     }
 
@@ -293,10 +298,25 @@ class _HangoutsTabState extends State<HangoutsTab> {
     );
   }
 
+  void _startHangout() {
+    AnalyticsService().logHangoutCreateStart('empty_state_discover');
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CreateHangoutFlow(
+          onTableCreated: () {
+            if (mounted) _loadFirst();
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _messageState({
     required IconData icon,
     required String title,
     required String subtitle,
+    String? ctaLabel,
+    VoidCallback? onCta,
   }) {
     // Wrapped in a scroll view so pull-to-refresh works on the empty state too.
     return LayoutBuilder(
@@ -326,6 +346,29 @@ class _HangoutsTabState extends State<HangoutsTab> {
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: Colors.grey[500]),
                   ),
+                  if (ctaLabel != null && onCta != null) ...[
+                    const SizedBox(height: 18),
+                    ElevatedButton.icon(
+                      onPressed: onCta,
+                      icon: const Icon(Icons.add, size: 20),
+                      label: Text(ctaLabel),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 22,
+                          vertical: 12,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -1,4 +1,5 @@
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/core/utils/date_range.dart';
 
 class Ticket {
   final String id;
@@ -55,9 +56,12 @@ class Ticket {
       eventId: json['event_id'] as String,
       eventTitle: (json['event_title'] ?? 'Event').toString(),
       eventVenue: (json['event_venue'] ?? 'Venue').toString(),
-      eventDateTime: DateTime.parse(json['event_start'].toString()),
+      // These are timestamptz from the DB (UTC). Convert to the device's local
+      // zone so the ticket shows the real event time — without .toLocal() a
+      // 7:00 PM Manila (UTC+8) event renders as its raw 11:00 UTC value.
+      eventDateTime: DateTime.parse(json['event_start'].toString()).toLocal(),
       eventEndDateTime: json['event_end'] != null
-          ? DateTime.parse(json['event_end'].toString())
+          ? DateTime.parse(json['event_end'].toString()).toLocal()
           : null,
       eventCoverImage: json['event_cover_image']?.toString(),
       ticketNumber: (json['ticket_number'] ?? '').toString(),
@@ -66,9 +70,9 @@ class Ticket {
       pricePaid: parsedPrice,
       isUsed: statusString == 'used',
       usedAt: json['checked_in_at'] != null
-          ? DateTime.parse(json['checked_in_at'].toString())
+          ? DateTime.parse(json['checked_in_at'].toString()).toLocal()
           : null,
-      createdAt: DateTime.parse(json['purchase_date'].toString()),
+      createdAt: DateTime.parse(json['purchase_date'].toString()).toLocal(),
       tier: (json['tier'] as String?)?.trim().isEmpty ?? true
           ? null
           : json['tier'] as String?,
@@ -110,6 +114,16 @@ class Ticket {
         .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
         .join(' ');
   }
+
+  /// True when the event spans more than one calendar day.
+  bool get isMultiDay => isMultiDayRange(eventDateTime, eventEndDateTime);
+
+  /// Compact multi-day span like "Aug 29 – 30". Only call when [isMultiDay].
+  String get dateRangeLabel => formatDateRange(eventDateTime, eventEndDateTime!);
+
+  /// Multi-day span plus start time, "Aug 29 – 30 · 7:00 PM". Only when [isMultiDay].
+  String get dateRangeWithTimeLabel =>
+      formatDateRangeWithTime(eventDateTime, eventEndDateTime!);
 
   // Status getters
   bool get isCancelled => status == 'cancelled';

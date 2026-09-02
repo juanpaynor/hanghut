@@ -209,7 +209,9 @@ class _EventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
+    final dateStr = event.isMultiDay
+        ? event.dateRangeWithTimeLabel
+        : DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
 
     return GestureDetector(
       onTap: () {

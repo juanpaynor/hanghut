@@ -1776,9 +1776,9 @@ class _EventSummaryCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 _InfoRow(
                   icon: Icons.calendar_today,
-                  text: DateFormat(
-                    'MMM d, y • h:mm a',
-                  ).format(event.startLocal),
+                  text: event.isMultiDay
+                      ? event.dateRangeWithTimeLabel
+                      : DateFormat('MMM d, y • h:mm a').format(event.startLocal),
                 ),
               ],
             ),

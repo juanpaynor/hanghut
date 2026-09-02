@@ -130,9 +130,11 @@ class TicketCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        DateFormat(
-                          'MMM d, y • h:mm a',
-                        ).format(ticket.eventDateTime),
+                        ticket.isMultiDay
+                            ? ticket.dateRangeWithTimeLabel
+                            : DateFormat(
+                                'MMM d, y • h:mm a',
+                              ).format(ticket.eventDateTime),
                         style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                     ],
@@ -322,10 +324,12 @@ class _TicketDetailModal extends StatelessWidget {
                   ],
                   _DetailRow(
                     icon: Icons.calendar_today,
-                    label: 'Date & Time',
-                    value: DateFormat(
-                      'EEEE, MMMM d, y\nh:mm a',
-                    ).format(ticket.eventDateTime),
+                    label: ticket.isMultiDay ? 'Dates' : 'Date & Time',
+                    value: ticket.isMultiDay
+                        ? ticket.dateRangeWithTimeLabel
+                        : DateFormat(
+                            'EEEE, MMMM d, y\nh:mm a',
+                          ).format(ticket.eventDateTime),
                   ),
                   const SizedBox(height: 16),
                   _DetailRow(

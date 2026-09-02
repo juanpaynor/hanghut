@@ -119,8 +119,12 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
 
     final payload = widget.payload.withNote(_captionController.text);
     final result = await ShareSender.send(targets, payload);
-    for (var i = 0; i < result.sent; i++) {
-      EventAnalyticsService.instance.logShare(widget.payload.id);
+    // event_interactions.event_id is FK'd to events, so only log share
+    // analytics for actual events — a post/hangout/experience id isn't there.
+    if (widget.payload.type == ShareEntityType.event) {
+      for (var i = 0; i < result.sent; i++) {
+        EventAnalyticsService.instance.logShare(widget.payload.id);
+      }
     }
 
     if (!mounted) return;
@@ -147,7 +151,9 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
   void _shareExternally() {
     if (_sending) return;
     Navigator.of(context).pop();
-    EventAnalyticsService.instance.logShare(widget.payload.id);
+    if (widget.payload.type == ShareEntityType.event) {
+      EventAnalyticsService.instance.logShare(widget.payload.id);
+    }
     SharePlus.instance.share(ShareParams(text: widget.payload.shareText()));
   }
 
