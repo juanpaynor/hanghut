@@ -49,27 +49,8 @@ class PushNotificationService {
           sound: true,
         );
 
-        // 3. Get & Save Token
-        String? token;
-
-        if (Platform.isIOS) {
-          // On iOS, we must get the APNs token first before FCM token
-          String? apnsToken = await _fcm.getAPNSToken();
-          print('🔔 APNs Token: $apnsToken');
-          if (apnsToken != null) {
-            token = await _fcm.getToken();
-          } else {
-            // Wait a bit and try again, it sometimes takes a moment
-            await Future.delayed(const Duration(seconds: 2));
-            apnsToken = await _fcm.getAPNSToken();
-            print('🔔 APNs Token (Retry): $apnsToken');
-            if (apnsToken != null) {
-              token = await _fcm.getToken();
-            }
-          }
-        } else {
-          token = await _fcm.getToken();
-        }
+        // 3. Get & Save Token (APNs-aware on iOS; see _fetchFcmToken)
+        final String? token = await _fetchFcmToken();
 
         if (token != null) {
           print('🔔 FCM Token: $token');
@@ -413,15 +394,35 @@ class PushNotificationService {
     }
   }
 
-  /// Call this after login to ensure the FCM token is saved for the new session
-  Future<void> saveTokenOnLogin() async {
+  /// Reliably obtain the FCM token. On iOS the APNs token must be present first
+  /// and can arrive a moment after launch/login, so poll for it briefly. Returns
+  /// null when unavailable (e.g. the iOS Simulator never delivers an APNs token),
+  /// so callers just skip saving instead of throwing `apns-token-not-set`.
+  Future<String?> _fetchFcmToken() async {
     try {
-      final token = await _fcm.getToken();
-      if (token != null) {
-        await _saveTokenToSupabase(token);
+      if (Platform.isIOS) {
+        String? apns = await _fcm.getAPNSToken();
+        for (var i = 0; i < 5 && apns == null; i++) {
+          await Future.delayed(const Duration(seconds: 2));
+          apns = await _fcm.getAPNSToken();
+        }
+        if (apns == null) {
+          print('⚠️ FCM: APNs token unavailable (Simulator?) — skipping fetch');
+          return null;
+        }
       }
+      return await _fcm.getToken();
     } catch (e) {
-      print('❌ FCM: Error saving token on login: $e');
+      print('❌ FCM: Error fetching token: $e');
+      return null;
+    }
+  }
+
+  /// Call this after login to ensure the FCM token is saved for the new session.
+  Future<void> saveTokenOnLogin() async {
+    final token = await _fetchFcmToken();
+    if (token != null) {
+      await _saveTokenToSupabase(token);
     }
   }
 
