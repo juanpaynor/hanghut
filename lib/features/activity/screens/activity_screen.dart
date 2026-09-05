@@ -48,6 +48,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
           ),
         ),
         body: TabBarView(
+          // Deck cards own the horizontal swipe on Discover; disabling the pager
+          // swipe removes the gesture fight (tabs still switch by tapping).
+          physics: const NeverScrollableScrollPhysics(),
           children: [
             DiscoverTab(onHangoutTap: widget.onHangoutTap),
             HangoutsTab(onHangoutTap: widget.onHangoutTap),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -8,6 +9,7 @@ import 'package:bitemates/core/services/event_category_service.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/features/activity/widgets/discover_deck.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -202,11 +204,66 @@ class _DiscoverTabState extends State<DiscoverTab>
     }
   }
 
+  // ── Featured (the editorial hero) ──────────────────────────────────────────
+  /// The single "most viral and selling" upcoming event to headline the page.
+  /// Score blends how HOT (sell-through), how BIG (log-scaled volume) and how
+  /// SOON it is, so one huge-capacity show can't camp the hero forever and a
+  /// fast-selling imminent event surfaces. Requires a cover image (the hero is
+  /// image-led) and excludes sold-out events. Views/shares aren't tracked yet —
+  /// when they are, fold velocity in here for true "viral".
+  Event? get _featuredEvent {
+    Event? best;
+    double bestScore = -1;
+    for (final e in _deckCandidates) {
+      final score = _hotScore(e);
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  /// Upcoming, image-led, in-stock events — the pool the deck and hero draw from.
+  Iterable<Event> get _deckCandidates {
+    final now = DateTime.now();
+    return _events.where((e) =>
+        e.startDatetime.isAfter(now) &&
+        (e.coverImageUrl?.isNotEmpty ?? false) &&
+        !e.isSoldOut);
+  }
+
+  /// Blends how HOT (sell-through), how BIG (log-scaled volume) and how SOON an
+  /// event is, so one huge show can't camp the top and imminent fast-sellers
+  /// surface. Views/shares aren't tracked yet — fold velocity in here later.
+  double _hotScore(Event e) {
+    final now = DateTime.now();
+    final sellThrough =
+        e.capacity > 0 ? (e.ticketsSold / e.capacity).clamp(0.0, 1.0) : 0.0;
+    final volume =
+        (math.log(e.ticketsSold + 1) / math.log(1000)).clamp(0.0, 1.0);
+    final daysOut = e.startDatetime.difference(now).inHours / 24.0;
+    final recency = 1.0 / (1.0 + daysOut / 14.0);
+    return sellThrough * 0.45 + volume * 0.35 + recency * 0.20;
+  }
+
+  /// The swipe-deck line-up: the top ~12 hottest upcoming events (the "For You"
+  /// ranking). Swipes are neutral; the deck's buttons train taste.
+  List<Event> get _deckEvents {
+    final list = _deckCandidates.toList()
+      ..sort((a, b) => _hotScore(b).compareTo(_hotScore(a)));
+    return list.take(12).toList();
+  }
+
   // ── Curated rails (default view) ───────────────────────────────────────────
   List<Event> get _trendingEvents {
+    final featuredId = _featuredEvent?.id;
     final list = [..._events]
       ..sort((a, b) => b.ticketsSold.compareTo(a.ticketsSold));
-    return list.where((e) => e.ticketsSold > 0).take(10).toList();
+    return list
+        .where((e) => e.ticketsSold > 0 && e.id != featuredId)
+        .take(10)
+        .toList();
   }
 
   List<Event> get _thisWeekendEvents {
@@ -534,11 +591,15 @@ class _DiscoverTabState extends State<DiscoverTab>
                         ),
                       );
                     }),
-                    // Date + sort live on this same row (events only)
+                    // Date + sort + category all live on this single row now
+                    // (events only) — the category chip row was removed to
+                    // declutter the top; it opens as a sheet instead.
                     if (_showEvents) ...[
                       _datePill(),
                       const SizedBox(width: 8),
                       _sortPill(),
+                      const SizedBox(width: 8),
+                      _categoryPill(),
                     ],
                   ],
                 ),
@@ -561,21 +622,6 @@ class _DiscoverTabState extends State<DiscoverTab>
                 )
               : const SizedBox(width: double.infinity, height: 0),
         ),
-        // Category chips
-        if (_showEvents) ...[
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 34,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              scrollDirection: Axis.horizontal,
-              children: [
-                _categoryChip('All', null),
-                ..._categories.map((c) => _categoryChip(c.display, c.key)),
-              ],
-            ),
-          ),
-        ],
         const SizedBox(height: 8),
       ],
     );
@@ -643,64 +689,152 @@ class _DiscoverTabState extends State<DiscoverTab>
     );
   }
 
-  Widget _categoryChip(String label, String? key) {
-    final selected = _eventCategory == key;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  // Category now lives in a pill → bottom sheet (was a second chip row).
+  Widget _categoryPill() {
+    final active = _eventCategory != null;
+    String label = 'Category';
+    if (active) {
+      final match = _categories.where((c) => c.key == _eventCategory);
+      if (match.isNotEmpty) label = match.first.display;
+    }
     return GestureDetector(
-      onTap: () => setState(() => _eventCategory = selected ? null : key),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF6C63FF).withValues(alpha: 0.20)
-              : (isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.04)),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected
-                ? const Color(0xFF6C63FF)
-                : (isDark
-                    ? Colors.white.withValues(alpha: 0.16)
-                    : Colors.black.withValues(alpha: 0.08)),
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected
-                ? const Color(0xFF8E88FF)
-                : (isDark ? Colors.white : Colors.black87),
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            fontSize: 12.5,
-          ),
+      onTap: _openCategorySheet,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: _glassPill(active: active),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.tune, size: 15, color: _glassText(active)),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: _glassText(active),
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+            if (active) ...[
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: () => setState(() => _eventCategory = null),
+                child: const Icon(Icons.close, size: 15, color: Colors.white),
+              ),
+            ],
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionHeader(String title, {VoidCallback? onSeeAll}) {
+  void _openCategorySheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              const Text('Category',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      title: const Text('All categories'),
+                      trailing: _eventCategory == null
+                          ? const Icon(Icons.check, color: Color(0xFF6C63FF))
+                          : null,
+                      onTap: () {
+                        setState(() => _eventCategory = null);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                    ..._categories.map((c) => ListTile(
+                          title: Text(c.display),
+                          trailing: _eventCategory == c.key
+                              ? const Icon(Icons.check,
+                                  color: Color(0xFF6C63FF))
+                              : null,
+                          onTap: () {
+                            setState(() => _eventCategory = c.key);
+                            Navigator.pop(ctx);
+                          },
+                        )),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSectionHeader(String title,
+      {String? subtitle, VoidCallback? onSeeAll}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 10),
+      padding: const EdgeInsets.fromLTRB(16, 22, 16, 12),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          // Accent tick — a small editorial marker in place of emoji.
+          Container(
+            width: 3,
+            height: subtitle != null ? 30 : 20,
+            margin: const EdgeInsets.only(right: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF6C63FF),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                    color: isDark ? Colors.white : const Color(0xFF15131E),
+                  ),
+                ),
+                if (subtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: isDark ? Colors.white54 : Colors.grey[500],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
           if (onSeeAll != null)
             GestureDetector(
               onTap: onSeeAll,
               child: const Text(
-                'See All',
+                'See all',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 13.5,
                   color: Color(0xFF6C63FF),
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -725,7 +859,7 @@ class _DiscoverTabState extends State<DiscoverTab>
           onRefresh: _load,
           child: ListView(
             controller: _scrollController,
-            padding: EdgeInsets.only(top: _headerHeight + 8, bottom: 32),
+            padding: EdgeInsets.only(top: _headerHeight + 8, bottom: 110),
             children: [
               if (_query.trim().isNotEmpty || _isFiltering)
                 ..._buildFilteredView()
@@ -793,12 +927,32 @@ class _DiscoverTabState extends State<DiscoverTab>
     final hasContent = _events.isNotEmpty || _experiences.isNotEmpty;
     if (!hasContent) return [_buildGlobalEmpty()];
 
+    final featured = _featuredEvent;
+    final deck = _deckEvents;
+    final deckIds = deck.map((e) => e.id).toSet();
+    List<Event> notInDeck(List<Event> l) =>
+        l.where((e) => !deckIds.contains(e.id)).toList();
     return [
       if (_showEvents && _events.isNotEmpty) ...[
-        _buildEventRail('🔥 Trending', _trendingEvents),
-        _buildEventRail('📅 This Weekend', _thisWeekendEvents),
-        _buildEventRail('🎟️ Free', _freeEvents),
-        _buildSectionHeader('All Events'),
+        // Swipe deck headlines the screen; falls back to the editorial hero when
+        // no image-led events are available to deck.
+        if (deck.isNotEmpty)
+          DiscoverDeck(
+            events: deck,
+            onOpen: (e) => EventDetailModal.show(context, e),
+          )
+        else if (featured != null)
+          _FeaturedHero(
+            event: featured,
+            onTap: () => EventDetailModal.show(context, featured),
+          ),
+        _buildEventRail('Trending', notInDeck(_trendingEvents),
+            subtitle: 'Selling fast right now'),
+        _buildEventRail('This weekend', notInDeck(_thisWeekendEvents),
+            subtitle: 'The next few days'),
+        _buildEventRail('Free', notInDeck(_freeEvents),
+            subtitle: 'No ticket needed'),
+        _buildSectionHeader('All events'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _buildEventsGrid(),
@@ -806,7 +960,7 @@ class _DiscoverTabState extends State<DiscoverTab>
         const SizedBox(height: 8),
       ],
       if (_showExperiences && _experiences.isNotEmpty) ...[
-        _buildSectionHeader('✨ Experiences'),
+        _buildSectionHeader('Experiences', subtitle: 'Curated, hosted, small'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _buildExperiencesGrid(_experiences),
@@ -905,14 +1059,14 @@ class _DiscoverTabState extends State<DiscoverTab>
   }
 
   // ── Curated event rail (horizontal) ────────────────────────────────────────
-  Widget _buildEventRail(String title, List<Event> events) {
+  Widget _buildEventRail(String title, List<Event> events, {String? subtitle}) {
     if (events.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionHeader(title),
+        _buildSectionHeader(title, subtitle: subtitle),
         SizedBox(
-          height: 222,
+          height: 224,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1530,6 +1684,247 @@ class _EventRailCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The editorial hero — a full-bleed, image-led headline card for the single
+/// most viral/selling upcoming event. Tapping anywhere opens the event.
+class _FeaturedHero extends StatelessWidget {
+  final Event event;
+  final VoidCallback onTap;
+
+  const _FeaturedHero({required this.event, required this.onTap});
+
+  static const _accent = Color(0xFF6C63FF);
+
+  @override
+  Widget build(BuildContext context) {
+    final dateStr = event.isMultiDay
+        ? event.dateRangeWithTimeLabel
+        : DateFormat('EEE, MMM d · h:mm a').format(event.startLocal);
+    final isFree = event.displayFromPrice <= 0;
+    final kicker =
+        event.category.trim().isNotEmpty ? event.category.toUpperCase() : 'FEATURED';
+    final going = event.ticketsSold;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 400,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: _accent.withValues(alpha: 0.18),
+                blurRadius: 26,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Cover image
+              event.coverImageUrl != null
+                  ? CachedNetworkImage(
+                      imageUrl: event.coverImageUrl!,
+                      fit: BoxFit.cover,
+                      placeholder: (_, __) => Container(color: Colors.grey[400]),
+                      errorWidget: (_, __, ___) =>
+                          Container(color: Colors.grey[400]),
+                    )
+                  : Container(color: Colors.grey[400]),
+
+              // Legibility scrim — dark at the bottom where the text sits.
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Color(0x33000000),
+                      Color(0xE6000000),
+                    ],
+                    stops: [0.30, 0.62, 1.0],
+                  ),
+                ),
+              ),
+
+              // "Trending now" eyebrow
+              Positioned(
+                top: 16,
+                left: 16,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _accent,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _accent.withValues(alpha: 0.5),
+                        blurRadius: 12,
+                      ),
+                    ],
+                  ),
+                  child: const Text(
+                    '🔥  TRENDING NOW',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ),
+              ),
+
+              // Low-availability nudge (featured is never sold out)
+              if (event.isLowAvailability)
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.amber[800],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${event.ticketsAvailable} left',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Bottom content
+              Positioned(
+                left: 20,
+                right: 20,
+                bottom: 18,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      kicker,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      event.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 27,
+                        height: 1.05,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.6,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _heroMetaRow(Icons.calendar_today_outlined, dateStr),
+                    const SizedBox(height: 5),
+                    _heroMetaRow(Icons.location_on_outlined, event.venueName),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 13, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isFree ? const Color(0xFF22A06B) : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            isFree ? 'FREE' : event.priceLabel(),
+                            style: TextStyle(
+                              color: isFree ? Colors.white : const Color(0xFF15131E),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        if (going >= 10) ...[
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              '🔥 $going going',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: _accent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text(
+                            'Get tickets  →',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _heroMetaRow(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: Colors.white70),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

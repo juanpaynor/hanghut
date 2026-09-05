@@ -108,10 +108,12 @@ class SeatSection {
   // a quantity-based zone (no individual seats): tap opens a stepper instead
   // of zooming to seat dots.
   final String salesMode;
-  final int availableCount;
+  // Mutable so the lightweight reconciling poll (get_event_seat_status) can
+  // refresh remaining availability in place without rebuilding the whole map.
+  int availableCount;
   final List<Seat> seats;
 
-  const SeatSection({
+  SeatSection({
     required this.id,
     required this.label,
     required this.color,
@@ -125,7 +127,11 @@ class SeatSection {
   });
 
   bool get isGa => salesMode == 'ga';
-  bool get isSoldOut => isGa && availableCount <= 0;
+
+  /// Sold out when nothing's left. `available_count` is returned on EVERY
+  /// section (seated + GA) per team_comms #282, so this now gates seated
+  /// sections too — not just GA zones.
+  bool get isSoldOut => availableCount <= 0;
 
   factory SeatSection.fromJson(Map<String, dynamic> j) => SeatSection(
         id: j['id'] as String,
@@ -236,5 +242,43 @@ class SeatMap {
     if (h.length == 6) h = 'FF$h';
     final v = int.tryParse(h, radix: 16);
     return v == null ? const Color(0xFF6366f1) : Color(v);
+  }
+}
+
+/// Result of get_event_seat_status — the lightweight reconciling poll. Carries
+/// only non-available seats (any seat NOT listed is available) and per-section
+/// remaining availability. [version] bumps only on structural/tier edits (NOT on
+/// holds/bookings), so callers use it to detect when a full map refetch is due.
+class SeatStatusSnapshot {
+  final int version;
+  final Map<String, String> taken; // seatId -> 'held' | 'booked' | 'disabled'
+  final Map<String, int> sectionAvailable; // sectionId -> available_count
+
+  const SeatStatusSnapshot({
+    required this.version,
+    required this.taken,
+    required this.sectionAvailable,
+  });
+
+  factory SeatStatusSnapshot.fromJson(Map<String, dynamic> j) {
+    final taken = <String, String>{};
+    for (final t in (j['taken'] as List?) ?? const []) {
+      if (t is Map && t['id'] != null) {
+        taken[t['id'].toString()] = (t['status'] ?? 'held').toString();
+      }
+    }
+    final sections = <String, int>{};
+    for (final s in (j['sections'] as List?) ?? const []) {
+      if (s is Map && s['id'] != null) {
+        final v = s['available_count'];
+        sections[s['id'].toString()] =
+            v is int ? v : int.tryParse('$v') ?? 0;
+      }
+    }
+    return SeatStatusSnapshot(
+      version: (j['version'] as num?)?.toInt() ?? 0,
+      taken: taken,
+      sectionAvailable: sections,
+    );
   }
 }

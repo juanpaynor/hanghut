@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -74,6 +75,10 @@ class _SocialPostCardState extends State<SocialPostCard> {
   Map<String, dynamic>? _attachedEvent;
   bool _isLoadingEvent = false;
   late int _commentCount;
+
+  // Immersive (media-forward) card carousel state.
+  final PageController _carouselController = PageController();
+  int _carouselIndex = 0;
 
   // Inline video playback
   VideoPlayerController? _videoController;
@@ -206,6 +211,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
       _FeedVideoManager.instance.release(_videoController!);
     }
     _videoController?.dispose();
+    _carouselController.dispose();
     super.dispose();
   }
 
@@ -325,6 +331,40 @@ class _SocialPostCardState extends State<SocialPostCard> {
       } catch (e) {
         debugPrint('⚠️ Error parsing timestamp: $e');
       }
+    }
+
+    // Media-forward immersive card for photo/GIF posts (team_comms n/a — design
+    // ask). Video keeps the classic layout (its player is aspect-driven with its
+    // own controls); event-attached & story posts stay classic too.
+    final hasVideo = videoUrl != null && videoUrl.isNotEmpty;
+
+    // Event-attached posts → immersive with the event cover as the media and the
+    // event info (date / title / venue / price / Get Tickets) overlaid.
+    final evCover = _attachedEvent?['cover_image_url']?.toString();
+    if (!isStory && _attachedEvent != null && evCover != null && evCover.isNotEmpty) {
+      return _buildImmersiveEventCard(
+        displayName: displayName,
+        avatarUrl: avatarUrl,
+        user: user,
+        postTime: postTime,
+      );
+    }
+
+    final useImmersive = !isStory &&
+        _attachedEvent == null &&
+        widget.post['event_id'] == null && // event handled above
+        !hasVideo &&
+        (images.isNotEmpty || (gifUrl != null && gifUrl.isNotEmpty));
+    if (useImmersive) {
+      return _buildImmersiveCard(
+        content: content,
+        images: images,
+        gifUrl: gifUrl,
+        displayName: displayName,
+        avatarUrl: avatarUrl,
+        user: user,
+        postTime: postTime,
+      );
     }
 
     return Column(
@@ -757,6 +797,663 @@ class _SocialPostCardState extends State<SocialPostCard> {
   }
 
   /// Build inline video player (tap to play/pause, mute button, double-tap for fullscreen)
+  // ══════════════════════════════════════════════════════════════════════════
+  // Immersive (media-forward) card — photo/GIF posts. Full-bleed media with a
+  // floating author pill, overlaid ⋮ menu, a vertical action rail, carousel dots
+  // and an overlaid caption. Video/event/story posts keep the classic layout.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  static String _compact(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
+    return '$n';
+  }
+
+  Widget _buildImmersiveCard({
+    required String content,
+    required List<String> images,
+    String? gifUrl,
+    required String displayName,
+    String? avatarUrl,
+    Map<String, dynamic>? user,
+    DateTime? postTime,
+  }) {
+    final multi = images.length > 1;
+    Widget imgPlaceholder() => Container(color: Colors.grey[800]);
+
+    void openMedia() {
+      // Story taps route out via the feed; otherwise open the image full-screen
+      // (there is no post-detail screen — widget.onTap is a no-op for posts).
+      if (widget.post['is_story'] == true) {
+        widget.onTap?.call();
+        return;
+      }
+      final url = (gifUrl != null && gifUrl.isNotEmpty)
+          ? gifUrl
+          : (images.isNotEmpty
+              ? images[_carouselIndex.clamp(0, images.length - 1)]
+              : null);
+      if (url != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FullScreenImageViewer(imageUrl: url),
+          ),
+        );
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      child: GestureDetector(
+        onTap: openMedia,
+        onDoubleTap: () {
+          if (!_isLiked) _handleLike();
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: AspectRatio(
+            aspectRatio: 3 / 4,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Media
+                if (gifUrl != null && gifUrl.isNotEmpty)
+                  Image.network(
+                    gifUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => imgPlaceholder(),
+                  )
+                else if (multi)
+                  PageView.builder(
+                    controller: _carouselController,
+                    onPageChanged: (i) => setState(() => _carouselIndex = i),
+                    itemCount: images.length,
+                    itemBuilder: (_, i) => CachedNetworkImage(
+                      imageUrl: images[i],
+                      fit: BoxFit.cover,
+                      memCacheWidth: 1200,
+                      placeholder: (_, __) => imgPlaceholder(),
+                      errorWidget: (_, __, ___) => imgPlaceholder(),
+                    ),
+                  )
+                else
+                  CachedNetworkImage(
+                    imageUrl: images.first,
+                    fit: BoxFit.cover,
+                    memCacheWidth: 1200,
+                    placeholder: (_, __) => imgPlaceholder(),
+                    errorWidget: (_, __, ___) => imgPlaceholder(),
+                  ),
+
+                // Legibility scrims (top for pill/menu, bottom for caption/rail).
+                // Ramps to near-opaque at the bottom so white text stays legible
+                // even over a light/white poster.
+                const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x73000000),
+                          Color(0x00000000),
+                          Color(0x80000000),
+                          Color(0xF7000000),
+                        ],
+                        stops: [0.0, 0.30, 0.60, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Author pill
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  right: 58,
+                  child: _immersiveAuthorPill(
+                      displayName, avatarUrl, user, postTime),
+                ),
+
+                // More menu
+                Positioned(
+                  top: 12,
+                  right: 10,
+                  child: _immersiveMoreMenu(displayName),
+                ),
+
+                // Vertical action rail
+                Positioned(right: 8, bottom: 22, child: _immersiveActionRail()),
+
+                // Carousel dots
+                if (multi)
+                  Positioned(
+                    left: 16,
+                    bottom: content.isNotEmpty ? 58 : 18,
+                    child: Row(
+                      children: List.generate(images.length, (i) {
+                        final active = i == _carouselIndex;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: active ? 18 : 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(right: 4),
+                          decoration: BoxDecoration(
+                            color: active ? Colors.white : Colors.white54,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+
+                // Caption
+                if (content.isNotEmpty)
+                  Positioned(
+                    left: 16,
+                    right: 60,
+                    bottom: 16,
+                    child: Text(
+                      content,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14.5,
+                        height: 1.3,
+                        fontWeight: FontWeight.w500,
+                        shadows: [
+                          Shadow(color: Color(0x99000000), blurRadius: 8),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImmersiveEventCard({
+    required String displayName,
+    String? avatarUrl,
+    Map<String, dynamic>? user,
+    DateTime? postTime,
+  }) {
+    const accent = Color(0xFF6C63FF);
+    final ev = _attachedEvent!;
+    final cover = ev['cover_image_url'].toString();
+    final title = (ev['title'] ?? 'Event').toString();
+    final venue = (ev['venue_name'] ?? '').toString();
+    final price = ev['ticket_price'];
+    final isFree = price == null || (price is num && price <= 0);
+    String whenStr = '';
+    final raw = ev['start_datetime']?.toString();
+    if (raw != null) {
+      final dt = DateTime.tryParse(raw)?.toLocal();
+      if (dt != null) whenStr = DateFormat('MMM d · h:mm a').format(dt);
+    }
+    void open() {
+      final event = _attachedEventModel();
+      if (event != null) EventDetailModal.show(context, event);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      child: GestureDetector(
+        onTap: open,
+        onDoubleTap: () {
+          if (!_isLiked) _handleLike();
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: AspectRatio(
+            aspectRatio: 3 / 4,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CachedNetworkImage(
+                  imageUrl: cover,
+                  fit: BoxFit.cover,
+                  // Cap decode size — a full-res poster decoded at native size is
+                  // a common scroll-jank source in a phone-width card.
+                  memCacheWidth: 1200,
+                  placeholder: (_, __) => Container(color: Colors.grey[800]),
+                  errorWidget: (_, __, ___) => Container(color: Colors.grey[800]),
+                ),
+
+                // Stronger bottom scrim — the info block needs more contrast,
+                // and must stay legible over light/white event posters.
+                const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x73000000),
+                          Color(0x00000000),
+                          Color(0x80000000),
+                          Color(0xF7000000),
+                        ],
+                        stops: [0.0, 0.28, 0.58, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  right: 58,
+                  child: _immersiveAuthorPill(
+                      displayName, avatarUrl, user, postTime),
+                ),
+                Positioned(
+                  top: 12,
+                  right: 10,
+                  child: _immersiveMoreMenu(displayName),
+                ),
+                // Rail sits higher so it never collides with the info block.
+                Positioned(right: 8, bottom: 150, child: _immersiveActionRail()),
+
+                // Event info block
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (whenStr.isNotEmpty)
+                        Text(
+                          whenStr.toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.0,
+                            shadows: [
+                              Shadow(color: Color(0x99000000), blurRadius: 6),
+                            ],
+                          ),
+                        ),
+                      const SizedBox(height: 5),
+                      Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 23,
+                          height: 1.08,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          shadows: [
+                            Shadow(color: Color(0x99000000), blurRadius: 10),
+                          ],
+                        ),
+                      ),
+                      if (venue.isNotEmpty) ...[
+                        const SizedBox(height: 7),
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on_outlined,
+                                size: 14, color: Colors.white70),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                venue,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  shadows: [
+                                    Shadow(
+                                        color: Color(0x99000000),
+                                        blurRadius: 6),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 13),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: isFree
+                                  ? const Color(0xFF22A06B)
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(11),
+                            ),
+                            child: Text(
+                              isFree
+                                  ? 'FREE'
+                                  : '₱${(price as num).toStringAsFixed(0)}',
+                              style: TextStyle(
+                                color:
+                                    isFree ? Colors.white : const Color(0xFF15131E),
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          GestureDetector(
+                            onTap: open,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 15, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: accent,
+                                borderRadius: BorderRadius.circular(11),
+                              ),
+                              child: const Text(
+                                'Get Tickets  →',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _immersiveAuthorPill(String displayName, String? avatarUrl,
+      Map<String, dynamic>? user, DateTime? postTime) {
+    final username = user?['username']?.toString();
+    final verified =
+        user?['is_verified'] == true || user?['verified'] == true;
+    final sub = [
+      if (username != null && username.isNotEmpty) '@$username',
+      if (postTime != null) timeago.format(postTime),
+    ].join(' · ');
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => UserProfileScreen(userId: widget.post['user_id']),
+        ),
+      ),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.38),
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: Colors.white24,
+              backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                  ? CachedNetworkImageProvider(avatarUrl)
+                  : null,
+              child: avatarUrl == null || avatarUrl.isEmpty
+                  ? Text(
+                      displayName.isNotEmpty
+                          ? displayName[0].toUpperCase()
+                          : 'U',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                      ),
+                      if (verified) ...[
+                        const SizedBox(width: 3),
+                        const Icon(Icons.verified,
+                            color: Color(0xFF4FA0FF), size: 14),
+                      ],
+                    ],
+                  ),
+                  if (sub.isNotEmpty)
+                    Text(
+                      sub,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 11),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _immersiveActionRail() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _railAction(
+          icon: _isLiked ? Icons.favorite : Icons.favorite_border_rounded,
+          label: _likeCount > 0 ? _compact(_likeCount) : '',
+          color: _isLiked ? Colors.red : Colors.white,
+          onTap: _handleLike,
+        ),
+        const SizedBox(height: 16),
+        _railAction(
+          icon: Icons.chat_bubble_outline_rounded,
+          label: _commentCount > 0 ? _compact(_commentCount) : '',
+          color: Colors.white,
+          onTap: () => showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (_) => CommentsBottomSheet(post: widget.post),
+          ),
+        ),
+        if (_isShareable) ...[
+          const SizedBox(height: 16),
+          _railAction(
+            icon: Icons.send_outlined,
+            label: '',
+            color: Colors.white,
+            onTap: () => ShareToChatSheet.show(
+              context,
+              SharePayload.fromPost(widget.post),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _railAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            color: color,
+            size: 29,
+            shadows: const [Shadow(color: Color(0x99000000), blurRadius: 8)],
+          ),
+          if (label.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                shadows: [Shadow(color: Color(0x99000000), blurRadius: 6)],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _immersiveMoreMenu(String displayName) {
+    final isOwner =
+        widget.post['user_id'] == SupabaseConfig.client.auth.currentUser?.id;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.38),
+        shape: BoxShape.circle,
+      ),
+      child: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_horiz, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'report') {
+            ReportModal.show(
+              context,
+              targetType: 'post',
+              targetId: widget.post['id'],
+              targetName: 'Post by $displayName',
+            );
+          } else if (value == 'edit') {
+            final result = await Navigator.of(context).push<Map<String, dynamic>?>(
+              PageRouteBuilder(
+                opaque: false,
+                barrierDismissible: true,
+                barrierColor: Colors.black54,
+                transitionDuration: const Duration(milliseconds: 300),
+                reverseTransitionDuration: const Duration(milliseconds: 250),
+                pageBuilder: (context, animation, secondaryAnimation) =>
+                    EditPostModal(post: widget.post),
+                transitionsBuilder:
+                    (context, animation, secondaryAnimation, child) =>
+                        FadeTransition(
+                  opacity: CurvedAnimation(
+                      parent: animation, curve: Curves.easeOut),
+                  child: child,
+                ),
+              ),
+            );
+            if (result != null && mounted) {
+              widget.onPostEdited?.call(result);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Post updated')),
+                );
+              }
+            }
+          } else if (value == 'delete') {
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Delete Post'),
+                content:
+                    const Text('Are you sure you want to delete this post?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    child: const Text('Delete'),
+                  ),
+                ],
+              ),
+            );
+            if (confirm == true && context.mounted) {
+              final success =
+                  await SocialService().deletePost(widget.post['id']);
+              if (success && context.mounted) {
+                widget.onPostDeleted?.call(widget.post['id']);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Post deleted')),
+                );
+              }
+            }
+          }
+        },
+        itemBuilder: (context) => isOwner
+            ? const [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Row(children: [
+                    Icon(Icons.edit_outlined, color: Colors.black87),
+                    SizedBox(width: 8),
+                    Text('Edit Post'),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Row(children: [
+                    Icon(Icons.delete_outline, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete Post', style: TextStyle(color: Colors.red)),
+                  ]),
+                ),
+              ]
+            : const [
+                PopupMenuItem(
+                  value: 'report',
+                  child: Row(children: [
+                    Icon(Icons.flag_outlined, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Report Post', style: TextStyle(color: Colors.red)),
+                  ]),
+                ),
+              ],
+      ),
+    );
+  }
+
   Widget _buildVideoThumbnail(String videoUrl, String? posterUrl) {
     if (_videoInitialized && _videoController != null) {
       final isPlaying = _videoController!.value.isPlaying;

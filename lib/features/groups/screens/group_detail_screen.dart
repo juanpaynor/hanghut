@@ -12,6 +12,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/groups/screens/edit_group_screen.dart';
 import 'package:bitemates/features/groups/screens/group_chat_screen.dart';
 import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
+import 'package:bitemates/features/run_clubs/screens/club_routes_screen.dart';
+import 'package:bitemates/features/run_clubs/screens/club_runs_screen.dart';
 
 /// Minimal group detail: cover → meta → tabs (Chat | Members | About)
 class GroupDetailScreen extends StatefulWidget {
@@ -190,6 +192,31 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     );
   }
 
+  void _openRuns() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ClubRunsScreen(
+          groupId: widget.groupId,
+          clubName: _group?['name'] as String?,
+        ),
+      ),
+    );
+  }
+
+  void _openRoutes() {
+    final g = _group;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ClubRoutesScreen(
+          groupId: widget.groupId,
+          clubName: g?['name'] as String?,
+          clubLat: (g?['location_lat'] as num?)?.toDouble(),
+          clubLng: (g?['location_lng'] as num?)?.toDouble(),
+        ),
+      ),
+    );
+  }
+
   void _shareGroup() {
     final name = _group?['name'] ?? 'a group';
     SharePlus.instance.share(
@@ -242,6 +269,16 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 onTap: () => Navigator.pop(context),
               ),
               actions: [
+                if (_isMember || _isAdmin)
+                  _circleIconButton(
+                    icon: Icons.event,
+                    onTap: _openRuns,
+                  ),
+                if (_isMember || _isAdmin)
+                  _circleIconButton(
+                    icon: Icons.map_outlined,
+                    onTap: _openRoutes,
+                  ),
                 if (_isMember || _isAdmin)
                   _circleIconButton(
                     icon: Icons.more_horiz,

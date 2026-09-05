@@ -182,6 +182,47 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     final filters = rawFilters is Map ? Map<String, dynamic>.from(rawFilters) : <String, dynamic>{};
     final metaVisibility = metadata['visibility'] as String? ?? 'public';
 
+    // Immersive (media-forward) hangout card — full-bleed cover with the
+    // activity info + Join overlaid. Video hangouts keep the classic layout (the
+    // player is aspect-driven with its own controls). When there's no uploaded
+    // photo we fall back to the Mapbox static map as the cover so location-only
+    // activities get the same immersive treatment.
+    final imageUrlStr = imageUrl?.toString();
+    if (videoUrl == null || videoUrl.isEmpty) {
+      String? coverUrl;
+      bool coverIsMap = false;
+      if (imageUrlStr != null && imageUrlStr.isNotEmpty) {
+        coverUrl = imageUrlStr;
+      } else {
+        final lat = widget.post['latitude'];
+        final lng = widget.post['longitude'];
+        final mapboxToken = dotenv.env['MAPBOX_PUBLIC_TOKEN'];
+        if (lat != null && lng != null && mapboxToken != null) {
+          // 3:4 crop to match the immersive frame (600x800@2x).
+          coverUrl =
+              'https://api.mapbox.com/styles/v1/mapbox/light-v11/static/'
+              'pin-l+3F51B5($lng,$lat)/$lng,$lat,15,0/600x800@2x'
+              '?access_token=$mapboxToken';
+          coverIsMap = true;
+        }
+      }
+
+      if (coverUrl != null) {
+        return _buildImmersiveHangout(
+          metadata: metadata,
+          user: user,
+          title: customTitle.toString(),
+          desc: currentDesc,
+          activityType: activityType.toString(),
+          imageUrl: coverUrl,
+          venueName: venueName.toString(),
+          scheduledTime: scheduledTime,
+          commentCount: commentCount,
+          isMapCover: coverIsMap,
+        );
+      }
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -944,6 +985,413 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
     if (status != null && status != 'open') return true;
 
     return false;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Immersive (media-forward) hangout card
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildImmersiveHangout({
+    required Map<String, dynamic> metadata,
+    required dynamic user,
+    required String title,
+    required dynamic desc,
+    required String activityType,
+    required String imageUrl,
+    required String venueName,
+    required DateTime? scheduledTime,
+    required int commentCount,
+    bool isMapCover = false,
+  }) {
+    final isOwner =
+        widget.post['user_id'] == SupabaseConfig.client.auth.currentUser?.id;
+    final descStr = desc?.toString() ?? '';
+    final avatarUrl = user?['avatar_url'] as String?;
+    final displayName = (user?['display_name'] ?? 'Someone').toString();
+
+    void openProfile() {
+      if (user != null && user['id'] != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UserProfileScreen(userId: user['id']),
+          ),
+        );
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      child: GestureDetector(
+        onTap: _isTableEnded ? null : widget.onTap,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: AspectRatio(
+            aspectRatio: 3 / 4,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.cover,
+                  memCacheWidth: 1200,
+                  placeholder: (_, __) => Container(color: Colors.grey[800]),
+                  errorWidget: (_, __, ___) => Container(color: Colors.grey[800]),
+                ),
+                const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x73000000),
+                          Color(0x00000000),
+                          Color(0x80000000),
+                          Color(0xF7000000),
+                        ],
+                        stops: [0.0, 0.28, 0.58, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  right: 58,
+                  child: _immHangoutPill(openProfile, avatarUrl, displayName,
+                      _getActivityDescription(activityType)),
+                ),
+                if (isOwner)
+                  Positioned(top: 12, right: 10, child: _immHangoutMenu()),
+                if (!_isTableEnded)
+                  Positioned(right: 8, bottom: 190, child: _immHangoutRail(commentCount)),
+
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isMapCover) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.indigo,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  activityType.toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 10,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                            ],
+                            Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 21,
+                                height: 1.1,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.4,
+                                shadows: [
+                                  Shadow(color: Color(0x99000000), blurRadius: 10),
+                                ],
+                              ),
+                            ),
+                            if (descStr.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                descStr,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  shadows: [
+                                    Shadow(
+                                        color: Color(0x99000000), blurRadius: 6),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 8),
+                            _immHangoutMetaRow(
+                                Icons.location_on_outlined, venueName),
+                            if (scheduledTime != null) ...[
+                              const SizedBox(height: 3),
+                              _immHangoutMetaRow(
+                                Icons.access_time_rounded,
+                                DateFormat('EEE, MMM d • h:mm a')
+                                    .format(scheduledTime),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      _buildJoinButton(metadata),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _immHangoutMetaRow(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: Colors.white70),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+              shadows: [Shadow(color: Color(0x99000000), blurRadius: 6)],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _immHangoutPill(VoidCallback onProfile, String? avatarUrl,
+      String name, String subtitle) {
+    return GestureDetector(
+      onTap: onProfile,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.38),
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: Colors.white24,
+              backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                  ? NetworkImage(avatarUrl)
+                  : null,
+              child: avatarUrl == null || avatarUrl.isEmpty
+                  ? const Icon(Icons.person, size: 16, color: Colors.white)
+                  : null,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _immHangoutRail(int commentCount) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _immRailAction(
+          icon: _isLiked ? Icons.favorite : Icons.favorite_border_rounded,
+          label: _likeCount > 0 ? '$_likeCount' : '',
+          color: _isLiked ? Colors.red : Colors.white,
+          onTap: _handleLike,
+        ),
+        const SizedBox(height: 16),
+        _immRailAction(
+          icon: Icons.chat_bubble_outline_rounded,
+          label: commentCount > 0 ? '$commentCount' : '',
+          color: Colors.white,
+          onTap: () => showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (_) => CommentsBottomSheet(post: widget.post),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _immRailAction(
+          icon: Icons.send_outlined,
+          label: '',
+          color: Colors.white,
+          onTap: () {
+            final payload = SharePayload.fromHangout(widget.post);
+            if (payload != null) ShareToChatSheet.show(context, payload);
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _immRailAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              color: color,
+              size: 29,
+              shadows: const [Shadow(color: Color(0x99000000), blurRadius: 8)]),
+          if (label.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                shadows: [Shadow(color: Color(0x99000000), blurRadius: 6)],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _immHangoutMenu() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.38),
+        shape: BoxShape.circle,
+      ),
+      child: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_horiz, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'edit') {
+            final result = await Navigator.of(context)
+                .push<Map<String, dynamic>?>(
+              PageRouteBuilder(
+                opaque: false,
+                barrierDismissible: true,
+                barrierColor: Colors.black54,
+                transitionDuration: const Duration(milliseconds: 300),
+                reverseTransitionDuration: const Duration(milliseconds: 250),
+                pageBuilder: (context, animation, secondaryAnimation) =>
+                    EditPostModal(post: widget.post),
+                transitionsBuilder:
+                    (context, animation, secondaryAnimation, child) =>
+                        FadeTransition(
+                  opacity:
+                      CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                  child: child,
+                ),
+              ),
+            );
+            if (result != null && mounted) {
+              widget.onPostEdited?.call(result);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Post updated')),
+                );
+              }
+            }
+          } else if (value == 'delete') {
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Delete Hangout Post'),
+                content: const Text(
+                    'Are you sure you want to delete this hangout post?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    child: const Text('Delete'),
+                  ),
+                ],
+              ),
+            );
+            if (confirm == true && context.mounted) {
+              final success =
+                  await SocialService().deletePost(widget.post['id']);
+              if (success && context.mounted) {
+                widget.onPostDeleted?.call(widget.post['id']);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Hangout post deleted')),
+                );
+              }
+            }
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: 'edit',
+            child: Row(children: [
+              Icon(Icons.edit_outlined, color: Colors.black87),
+              SizedBox(width: 8),
+              Text('Edit Post'),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'delete',
+            child: Row(children: [
+              Icon(Icons.delete_outline, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Delete Post', style: TextStyle(color: Colors.red)),
+            ]),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildJoinButton(Map<String, dynamic> metadata) {

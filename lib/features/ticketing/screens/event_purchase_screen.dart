@@ -74,6 +74,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   bool _hasSeatMap = false;
   List<String> _selectedSeatIds = [];
   List<Seat> _selectedSeats = [];
+  // The picker's seat-hold session. MUST be sent as seat_session_id so
+  // assign_seats_to_intent recognises the buyer's own holds instead of rejecting
+  // them (team_comms #291 Trap 1). Null for GA / no seated selection.
+  String? _seatSessionId;
   // True when the picker returned a GA (quantity-based) zone selection —
   // seat_ids stays empty by design, so validation/UI must check this instead
   // of _selectedSeatIds.isNotEmpty (team_comms #178).
@@ -145,6 +149,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     setState(() {
       _selectedSeatIds = result.seatIds;
       _selectedSeats = result.seats;
+      _seatSessionId = result.sessionId; // null for GA — holds are seated-only
       _quantity = result.quantity;
       _isGaSelection = result.isGa;
       // Map the picked tier to a checkout tier for pricing, if it resolves.
@@ -662,6 +667,12 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         'has_subscriber_discount': true,
       // Assigned seating: count must equal quantity, all same tier.
       if (_selectedSeatIds.isNotEmpty) 'seat_ids': _selectedSeatIds,
+      // Threads the picker's hold session so assign_seats_to_intent recognises
+      // our own holds (mandatory once we hold — #291 Trap 1). seat_ids must
+      // exactly match the still-held set or the request fails SEATS_EXPIRED
+      // (Trap 2); the picker guarantees that.
+      if (_seatSessionId != null && _selectedSeatIds.isNotEmpty)
+        'seat_session_id': _seatSessionId,
     };
 
     EventAnalyticsService.instance.logCheckoutStarted(widget.event.id);
@@ -675,11 +686,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       try {
         final err = response.data;
         if (err is Map && err['error'] != null) {
+          final code = err['error']['code'];
           // Seat race: another buyer took a seat between pick and pay.
-          if (err['error']['code'] == 'SEATS_UNAVAILABLE') {
+          // SEATS_EXPIRED: the buyer's own hold lapsed (12-min TTL) while they
+          // sat on checkout. Both bounce back to re-pick via the same path.
+          if (code == 'SEATS_UNAVAILABLE' || code == 'SEATS_EXPIRED') {
             throw _SeatsUnavailableException(
-              err['error']['message']?.toString() ??
-                  'Some seats are no longer available.',
+              code == 'SEATS_EXPIRED'
+                  ? 'Your seat hold expired.'
+                  : (err['error']['message']?.toString() ??
+                      'Some seats are no longer available.'),
             );
           }
           throw Exception(err['error']['message']);
@@ -799,6 +815,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         setState(() {
           _selectedSeatIds = [];
           _selectedSeats = [];
+          _seatSessionId = null;
           _isGaSelection = false;
           _currentStep = 0;
         });

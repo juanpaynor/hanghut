@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import 'package:bitemates/core/services/seat_map_service.dart';
+import 'package:bitemates/core/services/seat_realtime_service.dart';
 import 'package:bitemates/features/ticketing/models/seat_map.dart';
 
 /// Result returned to checkout when the user confirms a seat selection.
@@ -15,12 +17,19 @@ class SeatSelectionResult {
   final int quantity;
   final bool isGa;
 
+  /// The picker's seat-hold session. MUST be forwarded to checkout as
+  /// `seat_session_id` for seated selections, or assign_seats_to_intent treats
+  /// the buyer's own holds as competing and rejects them (#291 Trap 1). Null for
+  /// GA (quantity zones create no holds).
+  final String? sessionId;
+
   const SeatSelectionResult({
     required this.seatIds,
     required this.tierId,
     required this.seats,
     required this.quantity,
     this.isGa = false,
+    this.sessionId,
   });
 }
 
@@ -60,10 +69,31 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
   SeatSection? _gaSection;
   int _gaQuantity = 1;
 
-  // Live updates
-  RealtimeChannel? _channel;
-  Timer? _refetchTimer;
+  // Live updates: Ably per-section fast path (#284) + a reconciling status poll
+  // as the floor. _lastVersion detects structural/tier edits → full refetch.
+  SeatRealtimeService? _rt;
+  Timer? _reconcileTimer;
+  int? _lastVersion;
   Size? _viewport;
+
+  // Hold-on-tap (#289 option a / #291). One session per picker: used to hold via
+  // web and reused as seat_session_id at checkout. _origin is a separate random
+  // tag for echo discard (never the sessionId — that is a credential).
+  final String _seatSessionId = const Uuid().v4();
+  final String _origin = const Uuid().v4();
+  // Server-time expiry per held seat + our clock offset (serverNow − local), so
+  // the countdown is correct despite device-clock skew. Countdown targets the
+  // earliest-expiring hold. seat_holds TTL is 12min (do not hardcode — drive off
+  // expiresAt, #291 Q2).
+  final Map<String, DateTime> _holdExpiry = {};
+  Duration _clockSkew = Duration.zero;
+  Timer? _holdTimer;
+  Duration? _holdRemaining;
+  // Seats with a hold request in flight — guards against double-taps re-entering.
+  final Set<String> _pendingSeatIds = {};
+  // True once we hand seats to checkout, so dispose does NOT release them
+  // (checkout owns them via seat_session_id).
+  bool _proceeding = false;
 
   @override
   void initState() {
@@ -79,17 +109,70 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       _isLoading = false;
     });
     if (map != null) {
-      _channel = _service.subscribeSeatUpdates(widget.eventId, _onSeatUpdate);
-      // Periodic refetch picks up others' holds (not reflected in seats.status).
-      _refetchTimer = Timer.periodic(
-        const Duration(seconds: 30),
-        (_) => _refetch(),
+      // Fast path: per-section Ably subscribe (held/released/booked) — replaces
+      // the old postgres_changes channel, which couldn't see others' holds.
+      _rt = SeatRealtimeService(
+        eventId: widget.eventId,
+        sessionId: _seatSessionId,
+        origin: _origin,
+        onSeatUpdate: _onSeatUpdate,
+      );
+      // Authenticate now; subscribe to a single section's channel only when the
+      // buyer focuses it (see _focusSection / _backToOverview) — web meters
+      // deliveries, so per-section-on-focus is the required pattern (#289).
+      _rt!.start();
+      // Floor: a cheap status-only poll reconciles anything the fast path missed
+      // (dropped/late messages, expired holds). Aligned to web's 3s floor (#285).
+      _reconcileTimer = Timer.periodic(
+        const Duration(seconds: 3),
+        (_) => _reconcile(),
       );
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitToCanvas());
     }
   }
 
-  Future<void> _refetch() async {
+  /// Reconciling poll (the floor). Uses the lightweight get_event_seat_status;
+  /// only falls back to a full map refetch when [version] shows a structural or
+  /// tier edit (new sections/seats the light snapshot can't introduce).
+  Future<void> _reconcile() async {
+    final snap = await _service.getEventSeatStatus(widget.eventId);
+    if (!mounted || snap == null) return;
+    if (_lastVersion != null && snap.version != _lastVersion) {
+      _lastVersion = snap.version;
+      await _refetchFull();
+      return;
+    }
+    _lastVersion = snap.version;
+    _applyStatus(snap);
+  }
+
+  /// Applies a status snapshot onto the current map in place: any seat not in
+  /// [SeatStatusSnapshot.taken] is available; section availability is refreshed.
+  void _applyStatus(SeatStatusSnapshot snap) {
+    final map = _map;
+    if (map == null) return;
+    for (final section in map.sections) {
+      for (var i = 0; i < section.seats.length; i++) {
+        final seat = section.seats[i];
+        // Our own holds come back in taken[] as 'held' too — the RPC can't tell
+        // our session from anyone else's. Skip them, or the poll would grey out
+        // the buyer's own selection every 3s. Expiry of our holds is handled by
+        // the countdown, not the poll.
+        if (_selectedSeatIds.contains(seat.id)) continue;
+        final status = snap.taken[seat.id] ?? 'available';
+        if (seat.status != status) {
+          section.seats[i] = seat.copyWith(status: status);
+        }
+      }
+      final avail = snap.sectionAvailable[section.id];
+      if (avail != null) section.availableCount = avail;
+    }
+    _pruneSelection(map);
+    _reconcileGaSelection(map);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refetchFull() async {
     final map = await _service.getEventSeatMap(widget.eventId);
     if (!mounted || map == null) return;
     setState(() {
@@ -165,8 +248,15 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
 
   @override
   void dispose() {
-    _refetchTimer?.cancel();
-    if (_channel != null) _service.unsubscribe(_channel!);
+    _reconcileTimer?.cancel();
+    _holdTimer?.cancel();
+    // Leaving WITHOUT proceeding to checkout: free our holds so others aren't
+    // blocked for the full 12-min TTL. On proceed, checkout owns them via
+    // seat_session_id, so we keep them.
+    if (!_proceeding && _selectedSeatIds.isNotEmpty) {
+      _rt?.release(_selectedSeatIds.toList());
+    }
+    _rt?.dispose(); // fire-and-forget: closes the Ably connection + channels
     _transform.dispose();
     super.dispose();
   }
@@ -213,6 +303,7 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
         maxY = pts[i + 1] > maxY ? pts[i + 1] : maxY;
       }
       setState(() => _focused = section);
+      _rt?.setSection(section.id);
       _fitRect(minX, minY, maxX - minX, maxY - minY, vp, padding: 48);
       return;
     }
@@ -233,11 +324,13 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
     maxY += pad;
 
     setState(() => _focused = section);
+    _rt?.setSection(section.id);
     _fitRect(minX, minY, maxX - minX, maxY - minY, vp, padding: 24);
   }
 
   void _backToOverview() {
     setState(() => _focused = null);
+    _rt?.setSection(null); // level-1 overview: poll keeps availability fresh
     final vp = _viewport;
     if (vp != null) _fitToCanvas();
   }
@@ -255,6 +348,12 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       // Level 1 — hit-test section polygons.
       for (final section in map.sections) {
         if (_pointInPolygon(cx, cy, section.polygonPoints)) {
+          // Sold-out sections refuse the tap (#282) — no point letting a buyer
+          // dig in and only hit SEATS_UNAVAILABLE at checkout.
+          if (section.isSoldOut) {
+            _maybeSnack('${section.label} is sold out.');
+            return;
+          }
           // GA zones have no seats to zoom into — open the quantity stepper
           // directly instead of the seated level-2 flow.
           if (section.isGa) {
@@ -286,6 +385,10 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       for (final section in map.sections) {
         if (section.id != _focused!.id &&
             _pointInPolygon(cx, cy, section.polygonPoints)) {
+          if (section.isSoldOut) {
+            _maybeSnack('${section.label} is sold out.');
+            return;
+          }
           if (section.isGa) {
             setState(() => _focused = null);
             _selectGaSection(section);
@@ -298,7 +401,10 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
     }
   }
 
-  void _toggleSeat(Seat seat) {
+  Future<void> _toggleSeat(Seat seat) async {
+    // A hold/release for this seat is already in flight — ignore the re-tap.
+    if (_pendingSeatIds.contains(seat.id)) return;
+
     // Seated and GA selections are mutually exclusive. Clear immediately (own
     // setState) so the bottom bar updates even if the seat tap below turns
     // out to be a no-op (unavailable / max reached / tier mismatch).
@@ -309,14 +415,19 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       });
       _maybeSnack('Cleared your General Admission selection.');
     }
+
+    // DESELECT — drop locally and release the server hold (best-effort).
     if (_selectedSeatIds.contains(seat.id)) {
       setState(() {
         _selectedSeatIds.remove(seat.id);
+        _holdExpiry.remove(seat.id);
         if (_selectedSeatIds.isEmpty) {
           _tierLocked = false;
           _selectedTierId = null;
         }
       });
+      _recomputeCountdown();
+      _rt?.release([seat.id]);
       HapticFeedback.selectionClick();
       return;
     }
@@ -335,12 +446,116 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       return;
     }
 
+    // Optimistic select, then hold server-side; revert on failure (#289).
     setState(() {
+      _pendingSeatIds.add(seat.id);
       _selectedSeatIds.add(seat.id);
       _selectedTierId = seat.tierId;
       _tierLocked = true;
     });
     HapticFeedback.selectionClick();
+
+    final result = await (_rt?.hold(seat.id) ?? Future.value(SeatHoldResult.failed));
+    if (!mounted) return;
+
+    if (result.held) {
+      setState(() {
+        _pendingSeatIds.remove(seat.id);
+        if (result.expiresAt != null) {
+          _holdExpiry[seat.id] = result.expiresAt!;
+          if (result.serverNow != null) {
+            _clockSkew = result.serverNow!.difference(DateTime.now());
+          }
+        }
+      });
+      _recomputeCountdown();
+    } else {
+      // Revert the optimistic add — the hold did not take.
+      setState(() {
+        _pendingSeatIds.remove(seat.id);
+        _selectedSeatIds.remove(seat.id);
+        _holdExpiry.remove(seat.id);
+        if (_selectedSeatIds.isEmpty) {
+          _tierLocked = false;
+          _selectedTierId = null;
+        }
+      });
+      _recomputeCountdown();
+      _maybeSnack(_holdFailMessage(result));
+    }
+  }
+
+  /// held:false is ambiguous (#291): taken by another session, unavailable
+  /// (booked/disabled), or this session hit its per-order limit. Web populates
+  /// `reason` only when asked; until then absent → a neutral message.
+  String _holdFailMessage(SeatHoldResult r) {
+    switch (r.reason) {
+      case 'taken':
+        return 'Someone just grabbed that seat.';
+      case 'unavailable':
+        return 'That seat is no longer available.';
+      case 'limit':
+        return 'You\'ve reached the maximum seats for this order.';
+      default:
+        return 'That seat is no longer available.';
+    }
+  }
+
+  // ── Hold countdown ─────────────────────────────────────────────────────────
+
+  /// Starts/stops the 1s countdown ticker based on whether any hold is live.
+  void _recomputeCountdown() {
+    if (_holdExpiry.isEmpty) {
+      _holdTimer?.cancel();
+      _holdTimer = null;
+      if (_holdRemaining != null && mounted) {
+        setState(() => _holdRemaining = null);
+      }
+      return;
+    }
+    _holdTimer ??=
+        Timer.periodic(const Duration(seconds: 1), (_) => _tickCountdown());
+    _tickCountdown();
+  }
+
+  void _tickCountdown() {
+    if (_holdExpiry.isEmpty) {
+      _recomputeCountdown();
+      return;
+    }
+    // serverNow ≈ local + skew (from the hold response), so a wrong device clock
+    // doesn't expire holds early or late (#291 Q2).
+    final serverNow = DateTime.now().add(_clockSkew);
+    final expired = _holdExpiry.entries
+        .where((e) => !e.value.isAfter(serverNow))
+        .map((e) => e.key)
+        .toList();
+    if (expired.isNotEmpty) {
+      setState(() {
+        for (final id in expired) {
+          _selectedSeatIds.remove(id);
+          _holdExpiry.remove(id);
+        }
+        if (_selectedSeatIds.isEmpty) {
+          _tierLocked = false;
+          _selectedTierId = null;
+        }
+      });
+      // No release call: an expired hold is already swept server-side.
+      _maybeSnack('A seat hold expired — please reselect.');
+      _recomputeCountdown();
+      return;
+    }
+    final earliest =
+        _holdExpiry.values.reduce((a, b) => a.isBefore(b) ? a : b);
+    final remaining = earliest.difference(serverNow);
+    if (mounted) setState(() => _holdRemaining = remaining);
+  }
+
+  String _formatRemaining(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   /// GA zones have no individual seats — tap opens a quantity stepper capped
@@ -426,6 +641,13 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
       );
       return;
     }
+    // A hold is still resolving — its seat may yet be reverted, and checkout
+    // requires seat_ids to EXACTLY match the held set (#291 Trap 2). Wait.
+    if (_pendingSeatIds.isNotEmpty) {
+      _maybeSnack('Finishing reserving your seats…');
+      return;
+    }
+    _proceeding = true; // keep the holds — checkout claims them via sessionId
     Navigator.pop(
       context,
       SeatSelectionResult(
@@ -433,6 +655,7 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
         tierId: _selectedTierId,
         seats: _selectedSeats,
         quantity: _selectedSeatIds.length,
+        sessionId: _seatSessionId,
       ),
     );
   }
@@ -544,7 +767,10 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
     final isGa = _gaSection != null;
     final count = isGa ? _gaQuantity : _selectedSeatIds.length;
     final tier = _map?.tierById(isGa ? _gaSection!.tierId : _selectedTierId);
-    final canContinue = count > 0;
+    // Block Continue while a hold is resolving so checkout gets the exact held
+    // set (#291 Trap 2).
+    final canContinue = count > 0 && _pendingSeatIds.isEmpty;
+    final showTimer = !isGa && count > 0 && _holdRemaining != null;
     final selectedSeats = _selectedSeats;
     final labels = selectedSeats.map((s) => s.label).take(6).join(', ');
 
@@ -600,7 +826,45 @@ class _SeatMapPickerScreenState extends State<SeatMapPickerScreen> {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            if (showTimer) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: (_holdRemaining!.inSeconds <= 60
+                          ? Colors.red
+                          : Theme.of(context).primaryColor)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.timer_outlined,
+                      size: 15,
+                      color: _holdRemaining!.inSeconds <= 60
+                          ? Colors.red
+                          : Theme.of(context).primaryColor,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _formatRemaining(_holdRemaining!),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: _holdRemaining!.inSeconds <= 60
+                            ? Colors.red
+                            : Theme.of(context).primaryColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+            if (!showTimer) const SizedBox(width: 12),
             ElevatedButton(
               onPressed: canContinue ? _confirm : null,
               style: ElevatedButton.styleFrom(
@@ -770,21 +1034,54 @@ class _SeatMapPainter extends CustomPainter {
   void _paintBackground(Canvas canvas) {
     for (final shape in map.backgroundShapes) {
       final type = (shape['type'] ?? '').toString();
-      if (type == 'image') continue; // organizer tracing aid — skip
-      final fill = Paint()
-        ..color = SeatMap.hexColor((shape['fill'] ?? '#e5e7eb').toString())
-            .withValues(alpha: 0.5);
+      if (type == 'image') continue; // organizer tracing aid — skip (#282 item 6)
+
       final x = (shape['x'] as num?)?.toDouble() ?? 0;
       final y = (shape['y'] as num?)?.toDouble() ?? 0;
+      // #282 item 2: shapes can be rotated (degrees). Web rotates the group
+      // around its origin (x,y); mirror that with a translate+rotate so a
+      // rotated rect (e.g. a vertical BAR) lands correctly.
+      final rotation = (shape['rotation'] as num?)?.toDouble() ?? 0;
+      final rad = rotation * math.pi / 180.0;
+      final label = (shape['label'] ?? '').toString();
+
       switch (type) {
         case 'rect':
           final w = (shape['width'] as num?)?.toDouble() ?? 0;
           final h = (shape['height'] as num?)?.toDouble() ?? 0;
-          canvas.drawRect(Rect.fromLTWH(x, y, w, h), fill);
+          // #282 item 3: use the stored fill (full colour, not washed out).
+          final fill = Paint()
+            ..color = SeatMap.hexColor((shape['fill'] ?? '#e5e7eb').toString());
+          canvas.save();
+          canvas.translate(x, y);
+          if (rad != 0) canvas.rotate(rad);
+          canvas.drawRect(Rect.fromLTWH(0, 0, w, h), fill);
+          // #282 item 3: draw the shape's label centred, using its own font.
+          if (label.isNotEmpty) {
+            _paintTextCentered(
+              canvas,
+              label,
+              Offset(w / 2, h / 2),
+              (shape['fontSize'] as num?)?.toDouble() ?? 14,
+              SeatMap.hexColor((shape['fontColor'] ?? '#ffffff').toString()),
+            );
+          }
+          canvas.restore();
           break;
         case 'circle':
           final r = (shape['radius'] as num?)?.toDouble() ?? 0;
+          final fill = Paint()
+            ..color = SeatMap.hexColor((shape['fill'] ?? '#e5e7eb').toString());
           canvas.drawCircle(Offset(x, y), r, fill);
+          if (label.isNotEmpty) {
+            _paintTextCentered(
+              canvas,
+              label,
+              Offset(x, y),
+              (shape['fontSize'] as num?)?.toDouble() ?? 14,
+              SeatMap.hexColor((shape['fontColor'] ?? '#ffffff').toString()),
+            );
+          }
           break;
         case 'line':
           final pts = (shape['points'] as List?) ?? [];
@@ -802,13 +1099,17 @@ class _SeatMapPainter extends CustomPainter {
           }
           break;
         case 'text':
+          canvas.save();
+          canvas.translate(x, y);
+          if (rad != 0) canvas.rotate(rad);
           _paintText(
             canvas,
-            (shape['label'] ?? '').toString(),
-            Offset(x, y),
+            label,
+            Offset.zero,
             (shape['fontSize'] as num?)?.toDouble() ?? 14,
             SeatMap.hexColor((shape['fontColor'] ?? '#374151').toString()),
           );
+          canvas.restore();
           break;
       }
     }
@@ -824,7 +1125,7 @@ class _SeatMapPainter extends CustomPainter {
     path.close();
 
     final isSelectedGa = section.id == selectedGaSectionId;
-    final soldOut = section.isGa && section.isSoldOut;
+    final soldOut = section.isSoldOut;
     final base = map.sectionFill(section);
     final fill = Paint()
       ..style = PaintingStyle.fill
@@ -851,14 +1152,15 @@ class _SeatMapPainter extends CustomPainter {
       }
       cx /= n;
       cy /= n;
-      final label = section.isGa
-          ? '${section.label}\n${soldOut ? 'Sold out' : '${section.availableCount} left'}'
-          : section.label;
+      // Show availability on EVERY section now (seated + GA), per #282 — a
+      // buyer should see "N left" / "Sold out" before tapping in.
+      final label =
+          '${section.label}\n${soldOut ? 'Sold out' : '${section.availableCount} left'}';
       _paintText(
         canvas,
         label,
         Offset(cx - 10, cy - 8),
-        section.isGa ? 15 : 18,
+        15,
         soldOut ? Colors.grey : Colors.black87,
         bold: true,
       );
@@ -919,6 +1221,25 @@ class _SeatMapPainter extends CustomPainter {
       default:
         canvas.drawCircle(center, r, paint);
     }
+  }
+
+  /// Draws [text] centred on [center] (used for background-shape labels).
+  void _paintTextCentered(
+      Canvas canvas, String text, Offset center, double size, Color color) {
+    if (text.isEmpty) return;
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
   void _paintText(Canvas canvas, String text, Offset at, double size, Color color,

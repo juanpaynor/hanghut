@@ -1,4 +1,3 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/ticketing/models/seat_map.dart';
 
@@ -23,41 +22,29 @@ class SeatMapService {
     }
   }
 
-  /// Subscribes to live seat status changes for an event. Fires for
-  /// booked/released/disabled transitions. NOTE: holds are NOT reflected in
-  /// seats.status (overlaid from seat_holds, which has no event_id) — rely on a
-  /// periodic refetch for others' holds; checkout SEATS_UNAVAILABLE is the final
-  /// source of truth.
-  ///
-  /// [onSeatUpdate] receives the new seat id + status. Returns the channel so
-  /// the caller can `removeChannel` on dispose.
-  RealtimeChannel subscribeSeatUpdates(
-    String eventId,
-    void Function(String seatId, String status) onSeatUpdate,
-  ) {
-    final channel = SupabaseConfig.client
-        .channel('seat_map:$eventId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'seats',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'event_id',
-            value: eventId,
-          ),
-          callback: (payload) {
-            final rec = payload.newRecord;
-            final id = rec['id']?.toString();
-            final status = rec['status']?.toString();
-            if (id != null && status != null) onSeatUpdate(id, status);
-          },
-        )
-        .subscribe();
-    return channel;
+  /// Lightweight reconciling poll (team_comms #284: "keep a reconciling poll as
+  /// the floor"). Returns only what changes at runtime — seats that are NOT
+  /// available (holds folded in) plus per-section remaining availability — so it
+  /// is cheap enough to run every few seconds behind the Ably fast path.
+  /// Returns null when the event has no seat map.
+  Future<SeatStatusSnapshot?> getEventSeatStatus(String eventId) async {
+    try {
+      final result = await SupabaseConfig.client.rpc(
+        'get_event_seat_status',
+        params: {'p_event_id': eventId},
+      );
+      if (result is Map) {
+        return SeatStatusSnapshot.fromJson(Map<String, dynamic>.from(result));
+      }
+      return null;
+    } catch (e) {
+      print('⚠️ getEventSeatStatus failed: $e');
+      return null;
+    }
   }
 
-  void unsubscribe(RealtimeChannel channel) {
-    SupabaseConfig.client.removeChannel(channel);
-  }
+  // Live seat updates now run over Ably per section (see SeatRealtimeService,
+  // team_comms #284/#287) — postgres_changes could never see others' holds
+  // (seat_holds has no event_id), so the old subscribeSeatUpdates was removed in
+  // favour of the Ably fast path + getEventSeatStatus reconciling poll.
 }
