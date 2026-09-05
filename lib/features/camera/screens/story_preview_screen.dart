@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_compress/video_compress.dart';
+import 'package:flutter_compress/flutter_compress.dart';
 import '../widgets/story_overlay_widget.dart';
 
 class StoryPreviewScreen extends StatefulWidget {
@@ -146,12 +146,12 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       if (isVideo) {
         try {
           debugPrint('🖼️ Generating video thumbnail...');
-          final thumbnailFile = await VideoCompress.getFileThumbnail(
+          final thumbPath = await FlutterCompress.instance.getThumbnail(
             widget.videoFile!.path,
+            positionMs: 0, // First frame
             quality: 70,
-            position: 0, // First frame
           );
-          final thumbBytes = await thumbnailFile.readAsBytes();
+          final thumbBytes = await File(thumbPath).readAsBytes();
           final thumbFileName =
               '${user.id}_thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
           await supabase.storage
@@ -233,25 +233,29 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       debugPrint('🔄 Transcoding video to H.264 MP4...');
       if (mounted) setState(() => _uploadStatus = 'Processing video...');
 
-      final info = await VideoCompress.compressVideo(
+      // Force H.264 for universal playback (the whole point of this step);
+      // flutter_compress uses native hardware encoders, no FFmpeg binary.
+      final result = await FlutterCompress.instance.compress(
         videoFile.path,
-        quality: VideoQuality.MediumQuality,
-        deleteOrigin: false,
-        includeAudio: true,
+        const VideoCompressConfig(
+          codec: VideoCodec.h264,
+          quality: CompressQuality.medium,
+        ),
       );
 
-      if (info == null || info.file == null) {
-        debugPrint('⚠️ Transcode returned null, using original file');
+      final outFile = File(result.outputPath);
+      if (!await outFile.exists()) {
+        debugPrint('⚠️ Transcode produced no file, using original');
         return videoFile;
       }
 
       final originalSize = await videoFile.length();
-      final newSize = await info.file!.length();
+      final newSize = await outFile.length();
       debugPrint(
-        '✅ Transcode complete: ${(originalSize / 1024 / 1024).toStringAsFixed(1)}MB → ${(newSize / 1024 / 1024).toStringAsFixed(1)}MB',
+        '✅ Transcode complete (${result.codec}): ${(originalSize / 1024 / 1024).toStringAsFixed(1)}MB → ${(newSize / 1024 / 1024).toStringAsFixed(1)}MB',
       );
 
-      return info.file!;
+      return outFile;
     } catch (e) {
       debugPrint('⚠️ Transcode failed: $e — using original file');
       return videoFile;
