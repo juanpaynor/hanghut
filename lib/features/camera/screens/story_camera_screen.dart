@@ -1096,7 +1096,10 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
 
     try {
       if (Platform.isIOS) {
-        // Skip ProVideoEditor on iOS entirely because without FFmpeg it outputs corrupted bad data (-9405)
+        // iOS render still SKIPPED pending device verification on pro_video_editor
+        // 2.x. In 1.x it output corrupted data (-9405) without FFmpeg; the 2.x
+        // changelog does NOT confirm a fix. TODO(video-spike): on a real iPhone,
+        // confirm 2.x renders valid H.264 with no -9405, then remove this skip.
         debugPrint(
           '⚠️ Skipping video rendering on iOS, using raw camera video.',
         );
@@ -1104,13 +1107,21 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
       }
 
       // Attempt rendered export (works on Android via Media3, requires FFmpeg on iOS)
+      // pro_video_editor 2.x API: single-track videoSegments + imageLayers,
+      // and colorFilters are ui.ColorFilter (converted from the editor's
+      // color matrices).
       final renderData = VideoRenderData(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
-        video: EditorVideo.file(widget.videoFile.path),
+        videoSegments: [
+          VideoSegment(video: EditorVideo.file(widget.videoFile.path)),
+        ],
         outputFormat: VideoOutputFormat.mp4,
-        imageBytes: parameters.layers.isNotEmpty ? parameters.image : null,
+        imageLayers: parameters.layers.isNotEmpty
+            ? [ImageLayer(image: EditorLayerImage.memory(parameters.image))]
+            : const [],
         blur: parameters.blur,
-        colorMatrixList: parameters.colorFilters,
+        colorFilters:
+            parameters.colorFilters.map((m) => ColorFilter(matrix: m)).toList(),
       );
 
       final Directory directory = await getTemporaryDirectory();
