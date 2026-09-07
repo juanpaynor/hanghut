@@ -108,12 +108,14 @@ class _ForwardMessageSheetState extends State<ForwardMessageSheet> {
 
     final targets = _chats
         .where((c) => _selected.contains(_keyFor(c)))
-        .map((c) => ShareTarget(
-              chatType: (c['chat_type'] ?? 'table').toString(),
-              tableId: c['chat_id'].toString(),
-              channelId: _channelIdFor(c),
-              title: (c['title'] ?? 'Chat').toString(),
-            ))
+        .map(
+          (c) => ShareTarget(
+            chatType: (c['chat_type'] ?? 'table').toString(),
+            tableId: c['chat_id'].toString(),
+            channelId: _channelIdFor(c),
+            title: (c['title'] ?? 'Chat').toString(),
+          ),
+        )
         .toList();
 
     final result = await ShareSender.forward(
@@ -127,10 +129,11 @@ class _ForwardMessageSheetState extends State<ForwardMessageSheet> {
     final msg = result.sent == 0
         ? "Couldn't forward — please try again"
         : result.sent == 1
-            ? 'Forwarded ${widget.kindLabel} to ${targets.first.title}'
-            : 'Forwarded ${widget.kindLabel} to ${result.sent} chats';
-    ScaffoldMessenger.of(widget.hostContext)
-        .showSnackBar(SnackBar(content: Text(msg)));
+        ? 'Forwarded ${widget.kindLabel} to ${targets.first.title}'
+        : 'Forwarded ${widget.kindLabel} to ${result.sent} chats';
+    ScaffoldMessenger.of(
+      widget.hostContext,
+    ).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -138,60 +141,65 @@ class _ForwardMessageSheetState extends State<ForwardMessageSheet> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1B1B24) : Colors.white;
 
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.75,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white24 : Colors.black12,
-              borderRadius: BorderRadius.circular(2),
+    // Material, not a decorated Container: the ListTiles below paint their
+    // background and ink splashes onto the nearest Material ancestor, so a
+    // plain coloured box here would silently hide both.
+    return Material(
+      color: bg,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white24 : Colors.black12,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-            child: Row(
-              children: [
-                Text(
-                  'Forward to',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: isDark ? Colors.white : Colors.black87,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+              child: Row(
+                children: [
+                  Text(
+                    'Forward to',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              decoration: InputDecoration(
-                hintText: 'Search chats',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                isDense: true,
-                filled: true,
-                fillColor:
-                    isDark ? Colors.white10 : Colors.black.withOpacity(0.04),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search chats',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  isDense: true,
+                  filled: true,
+                  fillColor: isDark
+                      ? Colors.white10
+                      : Colors.black.withOpacity(0.04),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(child: _buildList(isDark)),
-          _buildSendBar(),
-        ],
+            const SizedBox(height: 8),
+            Expanded(child: _buildList(isDark)),
+            _buildSendBar(),
+          ],
+        ),
       ),
     );
   }
@@ -272,12 +280,16 @@ class _ForwardMessageSheetState extends State<ForwardMessageSheet> {
                             width: 22,
                             height: 22,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
                         : Text(
                             count == 1 ? 'Forward' : 'Forward to $count',
                             style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w800),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                   ),
                 ),

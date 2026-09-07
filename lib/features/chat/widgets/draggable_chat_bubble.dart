@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/features/shared/widgets/glass_circle.dart';
 
 class DraggableChatBubble extends StatefulWidget {
   final VoidCallback onTap;
@@ -7,11 +8,17 @@ class DraggableChatBubble extends StatefulWidget {
   /// Live total-unread count. When > 0 a red badge is shown on the bubble.
   final Stream<int>? unreadStream;
 
+  /// Render the bubble as liquid glass. The caller decides: a lens has no
+  /// backdrop to refract over the Mapbox platform view, so pass `false` there
+  /// to keep the solid accent bubble instead of a muddy disc.
+  final bool glassEnabled;
+
   const DraggableChatBubble({
     super.key,
     required this.onTap,
     this.initialY = 100,
     this.unreadStream,
+    this.glassEnabled = false,
   });
 
   @override
@@ -123,14 +130,7 @@ class _DraggableChatBubbleState extends State<DraggableChatBubble>
                   height: _bubbleSize,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color.lerp(Theme.of(context).primaryColor, Colors.white, 0.30)!,
-                        Theme.of(context).primaryColor,
-                      ],
-                    ),
+                    // Glow stays on the outer box — a lens cannot cast it.
                     boxShadow: [
                       BoxShadow(
                         color: Theme.of(context).primaryColor.withOpacity(0.3),
@@ -139,7 +139,16 @@ class _DraggableChatBubbleState extends State<DraggableChatBubble>
                       ),
                     ],
                   ),
-                  child: Stack(
+                  child: GlassCircle(
+                    size: _bubbleSize,
+                    tint: Theme.of(context).primaryColor,
+                    enabled: widget.glassEnabled,
+                    // Sized explicitly so the unread badge keeps anchoring to the
+                    // circle's corner rather than shrink-wrapping to the icon.
+                    child: SizedBox(
+                      width: _bubbleSize,
+                      height: _bubbleSize,
+                      child: Stack(
                     alignment: Alignment.center,
                     clipBehavior: Clip.none,
                     children: [
@@ -191,6 +200,8 @@ class _DraggableChatBubbleState extends State<DraggableChatBubble>
                           ),
                         ),
                     ],
+                  ),
+                    ),
                   ),
                 ),
               ),

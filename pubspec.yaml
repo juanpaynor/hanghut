@@ -99,6 +99,7 @@ dependencies:
   flutter_story_presenter: ^1.0.7
   flutter_widget_from_html_core: ^0.17.2
   flutter_compress: ^2.0.0
+  liquid_glass_easy: ^4.2.0
 
 dev_dependencies:
   flutter_launcher_icons: ^0.13.1

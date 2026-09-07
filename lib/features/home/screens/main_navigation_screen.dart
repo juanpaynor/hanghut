@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:bitemates/features/home/screens/feed_screen.dart';
 import 'package:bitemates/features/map/screens/map_screen.dart';
 import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
@@ -28,6 +29,18 @@ import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/gamification/services/creator_badge_service.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_earned_overlay.dart';
+import 'package:bitemates/features/shared/widgets/glass_circle.dart';
+
+/// Phase 0 spike: render the floating nav bar as a refracting liquid-glass lens
+/// instead of the plain BackdropFilter blur. Flip to `false` to fall straight
+/// back to the shipped frosted bar — the two paths render the same nav Row.
+///
+/// Kept behind a flag because the lens is shader-driven and reads the backdrop
+/// every frame, which is heavier than the blur it replaces, and because it sits
+/// over the Mapbox native platform view on the Map tab (which Flutter cannot
+/// sample — see the `_glass` helper in map_screen.dart). Gate rollout on a
+/// release build on a real mid-range Android device, not the simulator.
+const bool kLiquidGlassNavBar = false;
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
@@ -546,6 +559,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
             DraggableChatBubble(
               onTap: _showQuickChat,
               unreadStream: _chatUnreadStream,
+              // Deliberately left solid (glassEnabled defaults to false). This
+              // bubble floats above every surface — including open sheets like
+              // the inbox — so as a lens it re-read the backdrop on every frame
+              // of their open/close animations and made them stutter.
             ),
 
           // ── Speed Dial Scrim ──
@@ -621,6 +638,85 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     );
   }
 
+  /// The nav bar's glass surface — two interchangeable implementations behind
+  /// [kLiquidGlassNavBar]. Both present the same [child] at [barHeight], so
+  /// flipping the flag changes only the material, never the layout.
+  Widget _buildNavSurface({
+    required bool isDark,
+    required double barHeight,
+    required Widget child,
+  }) {
+    // Flutter cannot sample the Mapbox native platform view, so on the Map tab
+    // the lens has no backdrop to read and collapses into a flat grey slab.
+    // There we keep the frosted bar that shipped, which degrades cleanly.
+    final overPlatformView = _selectedIndex == 0;
+
+    if (kLiquidGlassNavBar && !overPlatformView) {
+      return LiquidGlassLens(
+        style: LiquidGlassStyle(
+          shape: LiquidGlassShape.continuousRoundedRectangle(
+            cornerRadius: 32,
+            borderWidth: 1,
+            borderColor: isDark
+                ? Colors.white.withOpacity(0.22)
+                : Colors.white.withOpacity(0.70),
+          ),
+          appearance: LiquidGlassAppearance(
+            // Almost no blur on purpose. The refraction is what should read as
+            // glass; any real sigma on top of it turns the bar into a milky slab.
+            blur: const LiquidGlassBlur(sigmaX: 3, sigmaY: 3),
+            // The tint is what guarantees the icons a consistent ground: with
+            // near-clear glass, busy content (a red gig poster, say) reads
+            // straight through and no fixed icon colour survives it. Enough to
+            // hold the labels, still well short of the frosted slab.
+            color: isDark
+                ? Colors.black.withOpacity(0.42)
+                : Colors.white.withOpacity(0.32),
+          ),
+          // Now that the surface is clear, the bend carries the effect.
+          refraction: const LiquidGlassRefraction(
+            distortion: 0.14,
+            distortionWidth: 22,
+          ),
+        ),
+        child: SizedBox(height: barHeight, child: child),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(32),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          height: barHeight,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      Colors.grey[900]!.withOpacity(0.74),
+                      Colors.grey[850]!.withOpacity(0.62),
+                    ]
+                  : [
+                      Colors.white.withOpacity(0.58),
+                      Colors.white.withOpacity(0.40),
+                    ],
+            ),
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withOpacity(0.18)
+                  : Colors.white.withOpacity(0.65),
+              width: 1,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
   Widget _buildFloatingNavBar(BuildContext context, bool navCompact) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -666,45 +762,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                   ),
                 ],
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(32),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                  child: Container(
-                    height: barHeight,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: isDark
-                            ? [
-                                Colors.grey[900]!.withOpacity(0.74),
-                                Colors.grey[850]!.withOpacity(0.62),
-                              ]
-                            : [
-                                Colors.white.withOpacity(0.58),
-                                Colors.white.withOpacity(0.40),
-                              ],
-                      ),
-                      borderRadius: BorderRadius.circular(32),
-                      border: Border.all(
-                        color: isDark
-                            ? Colors.white.withOpacity(0.18)
-                            : Colors.white.withOpacity(0.65),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map', navCompact, itemKey: _keyNavMap),
-                        _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed', navCompact, itemKey: _keyNavFeed),
-                        const SizedBox(width: fabSize), // placeholder keeps spacing
-                        _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore', navCompact, itemKey: _keyNavExplore),
-                        _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile', navCompact, itemKey: _keyNavProfile),
-                      ],
-                    ),
-                  ),
+              child: _buildNavSurface(
+                isDark: isDark,
+                barHeight: barHeight,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildNavItem(0, Icons.map_outlined, Icons.map, 'Map', navCompact, itemKey: _keyNavMap),
+                    _buildNavItem(1, Icons.newspaper_outlined, Icons.newspaper, 'Feed', navCompact, itemKey: _keyNavFeed),
+                    const SizedBox(width: fabSize), // placeholder keeps spacing
+                    _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, 'Explore', navCompact, itemKey: _keyNavExplore),
+                    _buildNavItem(3, Icons.person_outline, Icons.person, 'Profile', navCompact, itemKey: _keyNavProfile),
+                  ],
                 ),
               ),
                 ),
@@ -722,14 +791,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                 width: fabSize,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color.lerp(Theme.of(context).primaryColor, Colors.white, 0.30)!,
-                      Theme.of(context).primaryColor,
-                    ],
-                  ),
+                  // Glow stays on the outer box — a lens cannot cast it.
                   boxShadow: [
                     BoxShadow(
                       color: Theme.of(context).primaryColor.withOpacity(0.4),
@@ -738,11 +800,23 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                     ),
                   ],
                 ),
-                child: AnimatedBuilder(
-                  animation: _dialController,
-                  builder: (_, __) => Transform.rotate(
-                    angle: _dialController.value * math.pi / 4,
-                    child: const Icon(Icons.add, color: Colors.white, size: 34),
+                child: GlassCircle(
+                  size: fabSize,
+                  tint: Theme.of(context).primaryColor,
+                  // Same platform-view limitation as the bar: no backdrop to
+                  // refract over the map, so fall back to the solid accent.
+                  // Also solid while the dial is open — it becomes the ✕ that
+                  // dismisses it, and a close affordance floating over a busy
+                  // cover has to stay unmistakable.
+                  enabled: kLiquidGlassNavBar &&
+                      _selectedIndex != 0 &&
+                      !_fabOpen,
+                  child: AnimatedBuilder(
+                    animation: _dialController,
+                    builder: (_, __) => Transform.rotate(
+                      angle: _dialController.value * math.pi / 4,
+                      child: const _PlusGlyph(size: 26, color: Colors.white),
+                    ),
                   ),
                 ),
               ),
@@ -883,7 +957,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     final isSelected = _selectedIndex == index;
     final activeColor = Theme.of(context).primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final inactiveColor = isDark ? Colors.white70 : Colors.grey[700]!;
+    // Darker than grey700 under glass: the bar is translucent, so an inactive
+    // item competes with whatever content is showing through it.
+    final inactiveColor = isDark ? Colors.white : Colors.grey[850]!;
+
+    // A soft halo in the glass's own direction — light behind dark glyphs,
+    // dark behind light ones. Cheap (no extra backdrop sampling) and keeps the
+    // labels readable over busy covers where the tint alone isn't enough.
+    final glyphShadows = <Shadow>[
+      Shadow(
+        color: isDark
+            ? Colors.black.withOpacity(0.55)
+            : Colors.white.withOpacity(0.75),
+        blurRadius: 4,
+      ),
+    ];
 
     return InkWell(
       key: itemKey,
@@ -909,6 +997,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                   isSelected ? iconFilled : iconOutlined,
                   color: isSelected ? activeColor : inactiveColor,
                   size: 26,
+                  shadows: glyphShadows,
                 ),
               ),
               // Label collapses to zero height + fades when compact
@@ -929,7 +1018,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                           color: isSelected ? activeColor : inactiveColor,
                           fontSize: 10,
                           fontWeight:
-                              isSelected ? FontWeight.bold : FontWeight.w500,
+                              isSelected ? FontWeight.bold : FontWeight.w600,
+                          shadows: glyphShadows,
                         ),
                       ),
                     ),
@@ -942,6 +1032,56 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       ),
     );
   }
+}
+
+/// The create FAB's plus, drawn rather than taken from the icon font.
+///
+/// `Icons.add` renders heavy, tight and flat-capped, which is most of what made
+/// the button read as a stock Material FAB. Two rounded-cap strokes at a
+/// lighter weight, given room inside the circle, read as deliberate — and the
+/// glyph is symmetric, so the dial's 45° turn still lands on a clean ✕.
+class _PlusGlyph extends StatelessWidget {
+  const _PlusGlyph({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _PlusPainter(color: color),
+    );
+  }
+}
+
+class _PlusPainter extends CustomPainter {
+  const _PlusPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      // Deliberately lighter than the icon font's ~3px at this size.
+      ..strokeWidth = size.width * 0.105;
+
+    final centre = size.width / 2;
+    // Inset by the cap radius so the rounded ends sit inside the box instead of
+    // being clipped flat by it.
+    final arm = centre - paint.strokeWidth / 2;
+
+    canvas.drawLine(
+        Offset(centre - arm, centre), Offset(centre + arm, centre), paint);
+    canvas.drawLine(
+        Offset(centre, centre - arm), Offset(centre, centre + arm), paint);
+  }
+
+  @override
+  bool shouldRepaint(_PlusPainter oldDelegate) => oldDelegate.color != color;
 }
 
 // ── Speed dial data ─────────────────────────────────────────────────────────

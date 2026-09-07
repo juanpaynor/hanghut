@@ -109,12 +109,14 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
 
     final targets = _chats
         .where((c) => _selected.contains(_keyFor(c)))
-        .map((c) => ShareTarget(
-              chatType: (c['chat_type'] ?? 'table').toString(),
-              tableId: c['chat_id'].toString(),
-              channelId: _channelIdFor(c),
-              title: (c['title'] ?? 'Chat').toString(),
-            ))
+        .map(
+          (c) => ShareTarget(
+            chatType: (c['chat_type'] ?? 'table').toString(),
+            tableId: c['chat_id'].toString(),
+            channelId: _channelIdFor(c),
+            title: (c['title'] ?? 'Chat').toString(),
+          ),
+        )
         .toList();
 
     final payload = widget.payload.withNote(_captionController.text);
@@ -144,8 +146,9 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
   }
 
   void _showSnack(String text) {
-    ScaffoldMessenger.of(widget.hostContext)
-        .showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.of(
+      widget.hostContext,
+    ).showSnackBar(SnackBar(content: Text(text)));
   }
 
   void _shareExternally() {
@@ -162,69 +165,74 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1B1B24) : Colors.white;
 
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.75,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white24 : Colors.black12,
-              borderRadius: BorderRadius.circular(2),
+    // Material, not a decorated Container: the ListTiles below paint their
+    // background and ink splashes onto the nearest Material ancestor, so a
+    // plain coloured box here would silently hide both.
+    return Material(
+      color: bg,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white24 : Colors.black12,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-            child: Row(
-              children: [
-                Text(
-                  'Share to',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: isDark ? Colors.white : Colors.black87,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+              child: Row(
+                children: [
+                  Text(
+                    'Share to',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
                   ),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: _shareExternally,
-                  icon: const Icon(Icons.share, size: 18),
-                  label: const Text('Outside HangHut'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: Theme.of(context).primaryColor,
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _shareExternally,
+                    icon: const Icon(Icons.share, size: 18),
+                    label: const Text('Outside HangHut'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Theme.of(context).primaryColor,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              decoration: InputDecoration(
-                hintText: 'Search chats',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                isDense: true,
-                filled: true,
-                fillColor:
-                    isDark ? Colors.white10 : Colors.black.withOpacity(0.04),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search chats',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  isDense: true,
+                  filled: true,
+                  fillColor: isDark
+                      ? Colors.white10
+                      : Colors.black.withOpacity(0.04),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(child: _buildList(isDark)),
-          _buildSendBar(isDark),
-        ],
+            const SizedBox(height: 8),
+            Expanded(child: _buildList(isDark)),
+            _buildSendBar(isDark),
+          ],
+        ),
       ),
     );
   }
@@ -322,30 +330,30 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
                       height: 52,
                       width: double.infinity,
                       child: ElevatedButton(
-                    onPressed: enabled ? _sendToSelected : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: _sending
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Text(
-                            count == 1 ? 'Send' : 'Send to $count',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
+                        onPressed: enabled ? _sendToSelected : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(context).primaryColor,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
                           ),
+                        ),
+                        child: _sending
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                count == 1 ? 'Send' : 'Send to $count',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
                       ),
                     ),
                   ],

@@ -1,47 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/gamification/models/creator_badge.dart';
 import 'package:bitemates/features/gamification/services/creator_badge_service.dart';
+import 'package:bitemates/features/gamification/widgets/creator_badge_criteria.dart';
+import 'package:bitemates/features/gamification/widgets/creator_badge_style.dart';
+import 'package:bitemates/features/gamification/widgets/stamp_share_card.dart';
 
-/// Shared styling for partner badges — tier colours + rarity from holder_count.
-class CreatorBadgeStyle {
-  static const tierColors = {
-    'bronze': Color(0xFFCD7F32),
-    'silver': Color(0xFFC0C0C0),
-    'gold': Color(0xFFFFD700),
-    'platinum': Color(0xFFE5E4E2),
-    'diamond': Color(0xFFB9F2FF),
-    'special': Color(0xFF8E88FF),
-  };
-
-  static Color tierColor(String tier) =>
-      tierColors[tier.toLowerCase()] ?? const Color(0xFF8E88FF);
-
-  /// Steam-style rarity from how many people hold the badge.
-  static ({String label, Color color}) rarity(int holderCount) {
-    if (holderCount > 0 && holderCount <= 10) {
-      return (label: 'Legendary', color: const Color(0xFFFFB020));
-    } else if (holderCount <= 50) {
-      return (label: 'Rare', color: const Color(0xFF9F7AEA));
-    } else if (holderCount <= 250) {
-      return (label: 'Uncommon', color: const Color(0xFF4299E1));
-    }
-    return (label: 'Common', color: const Color(0xFF8A8A99));
-  }
-
-  static String holderLabel(int n) {
-    if (n <= 0) return 'Be the first to earn this';
-    if (n == 1) return 'Held by 1 person';
-    return 'Held by ${_compact(n)} people';
-  }
-
-  static String _compact(int n) {
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
-    return '$n';
-  }
-}
+// Re-exported so the existing surfaces that reach CreatorBadgeStyle through this
+// file keep working after the extraction.
+export 'package:bitemates/features/gamification/widgets/creator_badge_style.dart';
 
 /// Profile "badge case" — a Steam-style showcase of partner badges a user has
 /// earned. Shows up to 6, with "See all" opening the full collection.
@@ -104,116 +71,98 @@ class _CreatorBadgeCaseState extends State<CreatorBadgeCase> {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [
-                  Colors.white.withValues(alpha: 0.10),
-                  Colors.white.withValues(alpha: 0.04),
-                ]
-              : [
-                  Colors.white.withValues(alpha: 0.95),
-                  Colors.white.withValues(alpha: 0.75),
-                ],
-        ),
-        borderRadius: BorderRadius.circular(20),
+        // Paper, not a glass trophy case. A stamp page should sit quiet so the
+        // partner art is the loudest thing in the section — and a flat ground
+        // is what makes ink-on-paper read as ink rather than as a gem.
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.04)
+            : const Color(0xFFFBFAF7),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.05),
+              ? Colors.white.withValues(alpha: 0.07)
+              : const Color(0xFFEAE5DA),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.primaryColor.withValues(alpha: 0.10),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [Color(0xFFA5B0FF), AppTheme.primaryColor],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: const Icon(
-                  Icons.workspace_premium_rounded,
-                  size: 16,
-                  color: Colors.white,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Stamps',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          '${_earned.length}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                            color: isDark ? Colors.white38 : Colors.black38,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 1),
+                    // Says the mechanic out loud. A stamp means you were there,
+                    // which is what separates these from anything you can buy.
+                    Text(
+                      widget.isOwnProfile
+                          ? 'Collected when you turn up'
+                          : 'Collected by turning up',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: isDark ? Colors.white38 : Colors.black38,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 10),
-              Text(
-                'Badge Case',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  color: isDark ? Colors.white : Colors.black87,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '${_earned.length}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.primaryColor,
-                  ),
-                ),
-              ),
-              const Spacer(),
               if (hasMore)
                 GestureDetector(
                   onTap: _openFullCase,
-                  child: Row(
-                    children: [
-                      Text(
-                        'See all',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.primaryColor,
-                        ),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 8, top: 2),
+                    child: Text(
+                      'See all',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white54 : Colors.black45,
                       ),
-                      const Icon(
-                        Icons.chevron_right_rounded,
-                        size: 18,
-                        color: AppTheme.primaryColor,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           SizedBox(
-            height: 92,
+            height: 108,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: featured.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 14),
+              separatorBuilder: (_, __) => const SizedBox(width: 16),
               itemBuilder: (context, i) {
                 final earned = featured[i];
                 return CreatorBadgeTile(
                   badge: earned.badge,
                   isDark: isDark,
+                  earnedAt: earned.earnedAt,
                   onTap: () => showCreatorBadgeDetail(context, earned),
                 );
               },
@@ -243,60 +192,109 @@ class CreatorBadgeTile extends StatelessWidget {
   final CreatorBadge badge;
   final bool isDark;
   final double size;
+  final DateTime? earnedAt;
   final VoidCallback? onTap;
+
+  /// Draw the name (and date) beneath the stamp.
+  ///
+  /// Off where the surrounding surface already names the badge — the detail
+  /// sheet does, and drawing it twice both duplicated the title and pushed the
+  /// Column past a caller that had sized its box for the stamp alone.
+  final bool showLabel;
 
   const CreatorBadgeTile({
     super.key,
     required this.badge,
     required this.isDark,
-    this.size = 60,
+    this.size = 64,
+    this.earnedAt,
     this.onTap,
+    this.showLabel = true,
   });
+
+  static const _months = [
+    'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+  ];
+
+  /// A small per-badge tilt so a row reads as pressed by hand rather than laid
+  /// out on a grid. Derived from the id, so a given stamp always leans the same
+  /// way — it must not reshuffle on every rebuild. Kept under 3°: enough to feel
+  /// stamped, not so much that the art looks crooked.
+  double get _tilt => ((badge.id.hashCode.abs() % 9) - 4) * 0.012;
 
   @override
   Widget build(BuildContext context) {
     final tierColor = CreatorBadgeStyle.tierColor(badge.tier);
+    final ink = isDark ? Colors.white : Colors.black;
 
     return GestureDetector(
       onTap: onTap,
       child: SizedBox(
-        width: size + 8,
+        // Extra width is room for the label to wrap into; without one the tile
+        // is exactly the stamp, so a caller can size a box to `size` and have it
+        // fit precisely.
+        width: showLabel ? size + 14 : size,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: size,
-              height: size,
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [tierColor, tierColor.withValues(alpha: 0.55)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: tierColor.withValues(alpha: 0.4),
-                    blurRadius: 10,
-                    spreadRadius: 1,
+            Transform.rotate(
+              angle: _tilt,
+              child: Container(
+                width: size,
+                height: size,
+                padding: const EdgeInsets.all(3),
+                // Double ring — the giveaway of a rubber stamp, and the piece
+                // web asked for in #237: a consistent platform frame that
+                // partner art cannot impersonate. No glow, no gradient; ink on
+                // paper doesn't luminesce.
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: tierColor.withValues(alpha: 0.85),
+                    width: 1.6,
                   ),
-                ],
+                ),
+                child: Container(
+                  padding: const EdgeInsets.all(2.5),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: tierColor.withValues(alpha: 0.40),
+                      width: 1,
+                    ),
+                  ),
+                  // Art renders faithfully inside the frame — partners paid for
+                  // that design, so the stamp treatment lives in the rings, not
+                  // in a filter over their work.
+                  child: ClipOval(child: _art(tierColor)),
+                ),
               ),
-              child: ClipOval(child: _art(tierColor)),
             ),
-            const SizedBox(height: 6),
-            Text(
-              badge.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white70 : Colors.black87,
+            if (showLabel) ...[
+              const SizedBox(height: 7),
+              Text(
+                badge.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  color: ink.withValues(alpha: isDark ? 0.82 : 0.80),
+                ),
               ),
-            ),
+              if (earnedAt != null)
+                Text(
+                  "${_months[earnedAt!.month - 1]} '${earnedAt!.year % 100}",
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.6,
+                    color: ink.withValues(alpha: isDark ? 0.35 : 0.32),
+                  ),
+                ),
+            ],
           ],
         ),
       ),
@@ -317,21 +315,20 @@ class CreatorBadgeTile extends StatelessWidget {
     return _defaultFrame(tierColor);
   }
 
-  /// Consistent fallback: a tier-tinted disc with a generic emblem, used when
-  /// art is absent or suppressed by the admin kill-switch (team_comms #237).
+  /// Consistent fallback used when art is absent or suppressed by the admin
+  /// kill-switch (team_comms #237). An earned stamp must still read as earned,
+  /// so this is a blank inked disc rather than an error state — it looks like a
+  /// stamp whose design simply isn't showing, which is exactly what it is.
   Widget _defaultFrame(Color tierColor) {
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [tierColor.withValues(alpha: 0.35), Colors.white],
-          radius: 0.95,
-        ),
+        color: tierColor.withValues(alpha: isDark ? 0.20 : 0.13),
       ),
       child: Icon(
-        Icons.workspace_premium_rounded,
-        size: size * 0.5,
-        color: tierColor,
+        Icons.local_activity_outlined,
+        size: size * 0.42,
+        color: tierColor.withValues(alpha: 0.85),
       ),
     );
   }
@@ -344,6 +341,10 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final tierColor = CreatorBadgeStyle.tierColor(badge.tier);
   final rarity = CreatorBadgeStyle.rarity(badge.holderCount);
+  final earnedReason = CreatorBadgeCriteria.earnedSummary(
+    badge.criteria,
+    grantType: earned.grantType,
+  );
 
   showModalBottomSheet(
     context: context,
@@ -366,10 +367,13 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          SizedBox(
-            width: 116,
-            height: 116,
-            child: CreatorBadgeTile(badge: badge, isDark: isDark, size: 116),
+          CreatorBadgeTile(
+            badge: badge,
+            isDark: isDark,
+            size: 116,
+            // The sheet titles the badge in 22pt directly below; the tile's own
+            // label would repeat it and overflow the box.
+            showLabel: false,
           ),
           const SizedBox(height: 18),
           Text(
@@ -402,6 +406,45 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
               ),
             ),
           ],
+          // How it was earned — the point of a stamp is what you did to get it,
+          // and without this the sheet only ever says what you have.
+          if (earnedReason.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : Colors.black.withValues(alpha: 0.035),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'HOW YOU EARNED IT',
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.3,
+                      color: isDark ? Colors.white38 : Colors.black38,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    earnedReason,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 18),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -427,6 +470,35 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
             style: TextStyle(
               fontSize: 12,
               color: isDark ? Colors.white38 : Colors.black38,
+            ),
+          ),
+          const SizedBox(height: 22),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                // Close the detail first: the share card is itself a sheet, and
+                // stacking two leaves the user two Backs from where they were.
+                Navigator.of(context).pop();
+                showStampShareCard(
+                  context,
+                  badge,
+                  earnedAt: earned.earnedAt.toLocal(),
+                  grantType: earned.grantType,
+                );
+              },
+              icon: const Icon(Icons.ios_share_rounded, size: 17),
+              label: const Text('Share this stamp'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                foregroundColor: isDark ? Colors.white : Colors.black87,
+                side: BorderSide(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
             ),
           ),
         ],
@@ -480,7 +552,7 @@ class CreatorBadgeCaseScreen extends StatelessWidget {
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         surfaceTintColor: Theme.of(context).scaffoldBackgroundColor,
         elevation: 0,
-        title: Text(isOwnProfile ? 'My Badge Case' : 'Badge Case'),
+        title: Text(isOwnProfile ? 'My Stamps' : 'Stamps'),
       ),
       body: GridView.builder(
         padding: const EdgeInsets.all(20),
@@ -497,6 +569,7 @@ class CreatorBadgeCaseScreen extends StatelessWidget {
             badge: e.badge,
             isDark: isDark,
             size: 80,
+            earnedAt: e.earnedAt.toLocal(),
             onTap: () => showCreatorBadgeDetail(context, e),
           );
         },

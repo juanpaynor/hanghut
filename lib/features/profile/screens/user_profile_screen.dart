@@ -33,6 +33,16 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 // Membership sections are commented out below (subscriptions not live yet).
 // import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 
+/// Render the old global gamification badges on the profile.
+///
+/// Off: client-side awarding for `badges`/`user_badges` has been silently
+/// denied since the RLS pass (both carry only a public SELECT policy), so the
+/// shelf shows a frozen snapshot — last award 2026-04-17. It also sat directly
+/// above the partner stamps, leaving the profile with two competing badge
+/// systems. The 56 earned rows are untouched; flip this back on once the
+/// server-side award engine lands (team_comms #236).
+const bool _kShowGlobalBadges = false;
+
 class UserProfileScreen extends StatefulWidget {
   final String userId;
   final bool isOwnProfile;
@@ -971,8 +981,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ).animate().fadeIn(duration: 500.ms, delay: 250.ms),
               ),
 
-            // Badges Showcase
-            if (_allBadges.isNotEmpty)
+            // Global gamification badges — HIDDEN, not deleted.
+            //
+            // Client-side awarding for these has been silently denied since the
+            // RLS pass (badges/user_badges carry only a public SELECT policy),
+            // so the shelf shows a frozen snapshot: last award 2026-04-17. It
+            // also sat directly above the partner stamps, giving the profile two
+            // competing badge systems.
+            //
+            // The 56 earned rows are untouched in the database — restore this
+            // block once the server-side award engine lands (team_comms #236).
+            if (_kShowGlobalBadges && _allBadges.isNotEmpty)
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),

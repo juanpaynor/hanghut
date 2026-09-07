@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -49,13 +50,15 @@ class PushNotificationService {
           sound: true,
         );
 
-        // 3. Get & Save Token (APNs-aware on iOS; see _fetchFcmToken)
-        final String? token = await _fetchFcmToken();
-
-        if (token != null) {
-          print('🔔 FCM Token: $token');
-          await _saveTokenToSupabase(token);
-        }
+        // 3. Get & Save Token — deliberately NOT awaited.
+        //
+        // On iOS _fetchFcmToken polls for the APNs token for up to 10s, and
+        // init() runs before runApp(), so awaiting it here stalls the first
+        // frame by that long whenever APNs is slow or never arrives — denied
+        // permission, no network, or a simulator whose APNs is broken. The
+        // token is not needed to render, and onTokenRefresh below still picks
+        // it up whenever it does land.
+        unawaited(_fetchAndSaveToken());
 
         // 4. Listen for Token Refresh
         _fcm.onTokenRefresh.listen(_saveTokenToSupabase);
@@ -391,6 +394,17 @@ class PushNotificationService {
       }
     } catch (e) {
       print('❌ FCM: Error saving token: $e');
+    }
+  }
+
+  /// Fetch the FCM token and persist it, off the startup path. Safe to leave
+  /// unawaited: nothing rendered depends on it, and failures are already
+  /// swallowed and logged by [_fetchFcmToken].
+  Future<void> _fetchAndSaveToken() async {
+    final token = await _fetchFcmToken();
+    if (token != null) {
+      print('🔔 FCM Token: $token');
+      await _saveTokenToSupabase(token);
     }
   }
 
