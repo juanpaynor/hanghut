@@ -7,18 +7,69 @@ class HostService {
   // ─── Partner / Host Status ───────────────────────────────────────────────
 
   /// Returns the current user's partner record, or null if not a host.
+  /// The partner this user acts for — as its OWNER, or as an active TEAM
+  /// MEMBER (team_comms #301).
+  ///
+  /// Team members were invisible to the whole app: this looked up
+  /// `partners.user_id` only, so someone granted `manager` opened HangHut and
+  /// saw no business at all. The database had allowed them the entire time —
+  /// `create_event`/`update_event`/`manage_tiers` are SECURITY DEFINER and gate
+  /// on `_assert_caller_partner`, which admits `role in ('owner','manager')`.
+  /// This lookup was the only thing standing in the way.
+  ///
+  /// Ownership wins when a user is both, so an owner's own business keeps
+  /// taking priority over one they merely help run.
+  ///
+  /// The returned map carries an extra `my_role` key — 'owner' or the team
+  /// role — because several parts of host mode must not be offered to a
+  /// non-owner. It is not a column; do not write it back.
   Future<Map<String, dynamic>?> getMyPartnerProfile() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return null;
 
-    final response = await _supabase
+    final owned = await _supabase
         .from('partners')
         .select()
         .eq('user_id', userId)
         .maybeSingle();
+    if (owned != null) {
+      return {...Map<String, dynamic>.from(owned), 'my_role': 'owner'};
+    }
 
-    return response;
+    // `is_active` is filtered here even though the server does not enforce it
+    // yet (#301 Q4): a deactivated member should not be handed host mode by us
+    // just because the policies would still let them through.
+    final membership = await _supabase
+        .from('partner_team_members')
+        .select('partner_id, role')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+    if (membership == null) return null;
+
+    final partner = await _supabase
+        .from('partners')
+        .select()
+        .eq('id', membership['partner_id'] as String)
+        .maybeSingle();
+    if (partner == null) return null;
+
+    return {
+      ...Map<String, dynamic>.from(partner),
+      'my_role': membership['role'] as String? ?? 'scanner',
+    };
   }
+
+  /// True when the signed-in user owns this partner outright.
+  ///
+  /// Gates the money: `bank_accounts` lets any owner|manager change the payout
+  /// destination, and the `payouts` INSERT policy admits ANY team role — a
+  /// scanner included — with no `is_active` check. Until that is tightened
+  /// server-side (raised in #299), the app does not put a payout button in
+  /// front of anyone but the owner.
+  static bool isOwner(Map<String, dynamic>? partner) =>
+      partner != null && partner['my_role'] == 'owner';
 
   /// Creates a new partner application (status = 'pending').
   Future<Map<String, dynamic>> applyAsHost({

@@ -3,6 +3,8 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 import 'package:bitemates/features/activity/services/chat_list_service.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Full-screen group chat. The chat is the primary experience; group details
 /// and activities live behind the ⓘ button (which opens [GroupDetailScreen]).
@@ -160,7 +162,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (widget.groupImageUrl != null && widget.groupImageUrl!.isNotEmpty) {
       return CircleAvatar(
         radius: 18,
-        backgroundImage: NetworkImage(widget.groupImageUrl!),
+        backgroundImage: CachedNetworkImageProvider(ImageUrl.avatar(widget.groupImageUrl!, 36)),
+        // Falls through to the plain circle rather than throwing when a group
+        // photo 404s.
+        onBackgroundImageError: (_, __) {},
       );
     }
     final cover = GroupCover.forGroup(category: null, seed: widget.groupId);

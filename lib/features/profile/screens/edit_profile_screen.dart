@@ -7,6 +7,8 @@ import 'package:bitemates/core/services/image_crop_service.dart';
 import 'package:bitemates/core/services/profile_service.dart';
 import 'package:country_picker/country_picker.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final Map<String, dynamic> userProfile;
@@ -413,7 +415,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   )
                                 : null,
                             image: DecorationImage(
-                              image: NetworkImage(photo['photo_url']),
+                              image: CachedNetworkImageProvider(ImageUrl.avatar(photo['photo_url'], 3)),
                               fit: BoxFit.cover,
                             ),
                           ),

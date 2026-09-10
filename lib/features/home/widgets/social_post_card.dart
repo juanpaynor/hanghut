@@ -20,6 +20,7 @@ import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 import 'package:bitemates/features/home/widgets/mention_text.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Ensures only one feed video plays at a time. Mobile GPUs expose very few
 /// hardware video decoders, so several simultaneously-playing feed videos cause
@@ -399,7 +400,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                           backgroundColor: Colors.grey[100],
                           backgroundImage:
                               avatarUrl != null && avatarUrl.isNotEmpty
-                              ? CachedNetworkImageProvider(avatarUrl)
+                              ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 40))
                               : null,
                           child: avatarUrl == null || avatarUrl.isEmpty
                               ? Text(
@@ -870,7 +871,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     onPageChanged: (i) => setState(() => _carouselIndex = i),
                     itemCount: images.length,
                     itemBuilder: (_, i) => CachedNetworkImage(
-                      imageUrl: images[i],
+                      imageUrl: ImageUrl.capped(images[i], 1200),
                       fit: BoxFit.cover,
                       memCacheWidth: 1200,
                       placeholder: (_, __) => imgPlaceholder(),
@@ -879,7 +880,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   )
                 else
                   CachedNetworkImage(
-                    imageUrl: images.first,
+                    imageUrl: ImageUrl.capped(images.first, 1200),
                     fit: BoxFit.cover,
                     memCacheWidth: 1200,
                     placeholder: (_, __) => imgPlaceholder(),
@@ -1016,7 +1017,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
               fit: StackFit.expand,
               children: [
                 CachedNetworkImage(
-                  imageUrl: cover,
+                  imageUrl: ImageUrl.capped(cover, 1200),
                   fit: BoxFit.cover,
                   // Cap decode size — a full-res poster decoded at native size is
                   // a common scroll-jank source in a phone-width card.
@@ -1211,7 +1212,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
               radius: 16,
               backgroundColor: Colors.white24,
               backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
-                  ? CachedNetworkImageProvider(avatarUrl)
+                  ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 32))
                   : null,
               child: avatarUrl == null || avatarUrl.isEmpty
                   ? Text(
@@ -1566,7 +1567,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
             children: [
               if (posterUrl != null && posterUrl.isNotEmpty)
                 CachedNetworkImage(
-                  imageUrl: posterUrl,
+                  imageUrl: ImageUrl.capped(posterUrl, 1290),
                   fit: BoxFit.cover,
                   placeholder: (context, url) =>
                       Container(color: Colors.grey[900]),
@@ -1619,7 +1620,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
           children: [
             if (posterUrl != null && posterUrl.isNotEmpty)
               CachedNetworkImage(
-                imageUrl: posterUrl,
+                imageUrl: ImageUrl.capped(posterUrl, 1290),
                 width: double.infinity,
                 fit: BoxFit.cover,
                 placeholder: (context, url) =>
@@ -1672,7 +1673,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
             AspectRatio(
               aspectRatio: 4 / 5,
               child: CachedNetworkImage(
-                imageUrl: imageUrls[0],
+                imageUrl: ImageUrl.capped(imageUrls[0], 1290),
                 width: double.infinity,
                 fit: BoxFit.cover,
                 placeholder: (context, url) => Container(
@@ -1728,7 +1729,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
               child: GestureDetector(
                 onTap: () => _openImageViewer(imageUrls, 0),
                 child: CachedNetworkImage(
-                  imageUrl: imageUrls[0],
+                  imageUrl: ImageUrl.capped(imageUrls[0], 1290),
                   height: double.infinity,
                   fit: BoxFit.cover,
                   placeholder: (context, url) => Container(
@@ -1743,7 +1744,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
               child: GestureDetector(
                 onTap: () => _openImageViewer(imageUrls, 1),
                 child: CachedNetworkImage(
-                  imageUrl: imageUrls[1],
+                  imageUrl: ImageUrl.capped(imageUrls[1], 1290),
                   height: double.infinity,
                   fit: BoxFit.cover,
                   placeholder: (context, url) => Container(
@@ -1769,7 +1770,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
               child: GestureDetector(
                 onTap: () => _openImageViewer(imageUrls, 0),
                 child: CachedNetworkImage(
-                  imageUrl: imageUrls[0],
+                  imageUrl: ImageUrl.capped(imageUrls[0], 1290),
                   height: 250,
                   fit: BoxFit.cover,
                 ),
@@ -1783,7 +1784,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     child: GestureDetector(
                       onTap: () => _openImageViewer(imageUrls, 1),
                       child: CachedNetworkImage(
-                        imageUrl: imageUrls[1],
+                        imageUrl: ImageUrl.capped(imageUrls[1], 1290),
                         width: double.infinity,
                         fit: BoxFit.cover,
                       ),
@@ -1794,7 +1795,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                     child: GestureDetector(
                       onTap: () => _openImageViewer(imageUrls, 2),
                       child: CachedNetworkImage(
-                        imageUrl: imageUrls[2],
+                        imageUrl: ImageUrl.capped(imageUrls[2], 1290),
                         width: double.infinity,
                         fit: BoxFit.cover,
                       ),
@@ -1820,7 +1821,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   child: GestureDetector(
                     onTap: () => _openImageViewer(imageUrls, 0),
                     child: CachedNetworkImage(
-                      imageUrl: imageUrls[0],
+                      imageUrl: ImageUrl.capped(imageUrls[0], 1290),
                       width: double.infinity,
                       fit: BoxFit.cover,
                     ),
@@ -1831,7 +1832,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   child: GestureDetector(
                     onTap: () => _openImageViewer(imageUrls, 2),
                     child: CachedNetworkImage(
-                      imageUrl: imageUrls[2],
+                      imageUrl: ImageUrl.capped(imageUrls[2], 1290),
                       width: double.infinity,
                       fit: BoxFit.cover,
                     ),
@@ -1848,7 +1849,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   child: GestureDetector(
                     onTap: () => _openImageViewer(imageUrls, 1),
                     child: CachedNetworkImage(
-                      imageUrl: imageUrls[1],
+                      imageUrl: ImageUrl.capped(imageUrls[1], 1290),
                       width: double.infinity,
                       fit: BoxFit.cover,
                     ),
@@ -1862,7 +1863,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                       fit: StackFit.expand,
                       children: [
                         CachedNetworkImage(
-                          imageUrl: imageUrls[3],
+                          imageUrl: ImageUrl.capped(imageUrls[3], 1290),
                           fit: BoxFit.cover,
                         ),
                         if (imageUrls.length > 4)

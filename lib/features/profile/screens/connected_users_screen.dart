@@ -5,6 +5,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ConnectedUsersScreen extends StatefulWidget {
   final String userId;
@@ -259,7 +260,7 @@ class _UserListTabState extends State<_UserListTab> {
           leading: CircleAvatar(
             backgroundColor: Colors.grey[200],
             backgroundImage: avatarUrl != null
-                ? CachedNetworkImageProvider(avatarUrl)
+                ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 40))
                 : null,
             child: avatarUrl == null
                 ? Text(

@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Instagram-style "who liked this" row: overlapping avatars + summary text.
 /// Works for both feed posts and stories (they share the `post_likes` table).
@@ -202,7 +203,7 @@ class _Avatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: (url != null && url!.isNotEmpty)
           ? CachedNetworkImage(
-              imageUrl: url!,
+              imageUrl: ImageUrl.avatar(url!, size),
               fit: BoxFit.cover,
               errorWidget: (_, __, ___) => _initialFallback(initial),
               placeholder: (_, __) => _initialFallback(initial),

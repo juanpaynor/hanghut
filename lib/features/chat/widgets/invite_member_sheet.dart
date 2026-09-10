@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Host-only sheet to search and invite users to a hangout.
 class InviteMemberSheet extends StatefulWidget {
@@ -284,7 +286,11 @@ class _InviteMemberSheetState extends State<InviteMemberSheet> {
                               : Colors.grey[100],
                           backgroundImage:
                               (photoUrl != null && photoUrl.isNotEmpty)
-                              ? NetworkImage(photoUrl)
+                              ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 44))
+                              : null,
+                          onBackgroundImageError:
+                              (photoUrl != null && photoUrl.isNotEmpty)
+                              ? (_, __) {}
                               : null,
                           child: (photoUrl == null || photoUrl.isEmpty)
                               ? Icon(

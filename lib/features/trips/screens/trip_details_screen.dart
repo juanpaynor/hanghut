@@ -6,6 +6,8 @@ import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/trips/screens/trip_matches_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 // Curated city→Unsplash photo IDs so images always load reliably
 const _cityImages = {
@@ -436,7 +438,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
                             CircleAvatar(
                               radius: 22,
                               backgroundImage: _getAvatarUrl() != null
-                                  ? NetworkImage(_getAvatarUrl()!)
+                                  ? CachedNetworkImageProvider(ImageUrl.avatar(_getAvatarUrl()!, 44))
                                   : null,
                               backgroundColor:
                                   theme.colorScheme.surfaceContainerHighest,
@@ -733,7 +735,7 @@ class _TripDetailsScreenState extends State<TripDetailsScreen> {
                                 CircleAvatar(
                                   radius: 30,
                                   backgroundImage: m['avatar_url'] != null
-                                      ? NetworkImage(m['avatar_url'])
+                                      ? CachedNetworkImageProvider(ImageUrl.avatar(m['avatar_url'], 60))
                                       : null,
                                   backgroundColor:
                                       theme.colorScheme.surfaceContainerHighest,

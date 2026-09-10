@@ -16,6 +16,7 @@ import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
 import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
 import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class HangoutFeedCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -252,7 +253,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                   child: CircleAvatar(
                     radius: 20,
                     backgroundImage: user?['avatar_url'] != null
-                        ? NetworkImage(user!['avatar_url']) as ImageProvider
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(user!['avatar_url'], 40)) as ImageProvider
                         : null,
                     child: user?['avatar_url'] == null
                         ? const Icon(Icons.person, size: 20)
@@ -472,7 +473,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                 children: [
                   // Full-width uncropped image
                   CachedNetworkImage(
-                    imageUrl: imageUrl,
+                    imageUrl: ImageUrl.capped(imageUrl, 1290),
                     width: double.infinity,
                     fit: BoxFit.fitWidth,
                     placeholder: (context, url) => Container(
@@ -604,7 +605,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                   child: Stack(
                     children: [
                       CachedNetworkImage(
-                        imageUrl: staticMapUrl,
+                        imageUrl: ImageUrl.capped(staticMapUrl, 1290),
                         width: double.infinity,
                         height: 220,
                         fit: BoxFit.cover,
@@ -1032,7 +1033,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
               fit: StackFit.expand,
               children: [
                 CachedNetworkImage(
-                  imageUrl: imageUrl,
+                  imageUrl: ImageUrl.capped(imageUrl, 1200),
                   fit: BoxFit.cover,
                   memCacheWidth: 1200,
                   placeholder: (_, __) => Container(color: Colors.grey[800]),
@@ -1197,7 +1198,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
               radius: 16,
               backgroundColor: Colors.white24,
               backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
-                  ? NetworkImage(avatarUrl)
+                  ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 32))
                   : null,
               child: avatarUrl == null || avatarUrl.isEmpty
                   ? const Icon(Icons.person, size: 16, color: Colors.white)

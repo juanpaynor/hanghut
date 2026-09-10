@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class MyMembershipsScreen extends StatefulWidget {
   const MyMembershipsScreen({super.key});
@@ -257,7 +258,7 @@ class _MembershipCard extends StatelessWidget {
                   clipBehavior: Clip.antiAlias,
                   child: photoUrl != null && photoUrl.isNotEmpty
                       ? CachedNetworkImage(
-                          imageUrl: photoUrl,
+                          imageUrl: ImageUrl.avatar(photoUrl, 48),
                           fit: BoxFit.cover,
                           errorWidget: (_, __, ___) => const Icon(
                             Icons.storefront_rounded,

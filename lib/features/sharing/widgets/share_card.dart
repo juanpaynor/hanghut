@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// One reusable presentation of a [SharePayload], used everywhere something is
 /// shared — a chat bubble, a link preview, a story sticker. Keeps every share
@@ -45,7 +46,7 @@ class ShareCard extends StatelessWidget {
                 AspectRatio(
                   aspectRatio: 16 / 9,
                   child: CachedNetworkImage(
-                    imageUrl: payload.imageUrl!,
+                    imageUrl: ImageUrl.capped(payload.imageUrl!, 1290),
                     fit: BoxFit.cover,
                     placeholder: (_, __) => Container(
                       color: primary.withValues(alpha: 0.08),

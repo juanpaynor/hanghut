@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
@@ -8,11 +9,23 @@ import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
+import 'package:bitemates/core/services/event_category_service.dart';
+import 'package:bitemates/features/gamification/widgets/partner_collection_shelf.dart';
+import 'package:bitemates/features/ticketing/services/partner_profile_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
-/// The organizer's brand/sell page. Powered by the single `get_storefront` RPC
-/// (team_comms #220): partner, follower/subscriber counts, upcoming events,
-/// experiences, and subscription tiers — one call. `profile_mode` ('person' |
-/// 'brand') drives presentation (brands get a cover banner).
+/// The organizer's page — what they programme, when the next one is, and what
+/// there is to collect.
+///
+/// Deliberately shaped unlike a person's profile. A profile leads with identity
+/// (who is this, do I know them); an organizer is judged on their programme, so
+/// this leads with the marquee and the dates and puts the follow decision after
+/// the evidence rather than before it.
+///
+/// Powered by the single `get_storefront` RPC (team_comms #220) for partner,
+/// counts, upcoming events, experiences and tiers, plus two client-side reads
+/// for the track record and the stamp set — both over tables that already carry
+/// a public SELECT policy, so neither needs a new endpoint.
 class PartnerStorefrontScreen extends StatefulWidget {
   final String partnerId;
 
@@ -30,8 +43,12 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
   List<Map<String, dynamic>> _experiences = [];
   List<Map<String, dynamic>> _tiers = [];
 
+  PartnerTrackRecord _record = PartnerTrackRecord.empty;
+  List<EventCategoryItem> _knownFor = const [];
+
   bool _isLoading = true;
   bool _notFound = false;
+  bool _showAllEvents = false;
   bool _isFollowing = false;
   bool _followBusy = false;
 
@@ -48,6 +65,46 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
     }
     await Future.wait([_loadStorefront(), _loadFollowState()]);
     if (mounted) setState(() => _isLoading = false);
+    // History comes after the fold, so it loads after the page is on screen
+    // rather than holding the first paint behind three more round trips.
+    await _loadTrackRecord();
+  }
+
+  /// Past events, hosting history, and the categories they actually programme.
+  /// How many listings show before "Show all". Enough to read as a programme
+  /// rather than a teaser, short enough that what follows stays reachable.
+  static const int _eventPreviewCount = 5;
+
+  int get _visibleEventCount =>
+      _showAllEvents ? _events.length : _events.length.clamp(0, _eventPreviewCount);
+
+  Future<void> _loadTrackRecord() async {
+    final record = await PartnerProfileService().loadTrackRecord(
+      widget.partnerId,
+      excludeIds: _events.map((e) => e.id).toSet(),
+    );
+    if (!mounted) return;
+
+    // "Known for" reads from everything they've run, upcoming and past, so a
+    // brand-new organizer still gets a label off their first listing.
+    final keys = PartnerProfileService.categoriesOf([
+      ..._events,
+      ...record.archive,
+    ]);
+    List<EventCategoryItem> knownFor = const [];
+    if (keys.isNotEmpty) {
+      final all = await EventCategoryService().getCategories();
+      knownFor = keys
+          .map((k) => all.where((c) => c.key == k).firstOrNull)
+          .whereType<EventCategoryItem>()
+          .toList();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _record = record;
+      _knownFor = knownFor;
+    });
   }
 
   Future<void> _loadStorefront() async {
@@ -203,12 +260,6 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
     }
   }
 
-  String _fmtCount(int n) {
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
-    return '$n';
-  }
-
   @override
   Widget build(BuildContext context) {
     final scaffoldBg = Theme.of(context).scaffoldBackgroundColor;
@@ -254,130 +305,84 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
     final followers = (_counts['followers'] as num?)?.toInt() ?? 0;
     final subscribers = (_counts['subscribers'] as num?)?.toInt() ?? 0;
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).primaryColor;
-    final showCover = isBrand && coverUrl != null && coverUrl.isNotEmpty;
 
     return Scaffold(
       backgroundColor: scaffoldBg,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: scaffoldBg,
-        surfaceTintColor: scaffoldBg,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
-          onPressed: () => Navigator.pop(context),
+        systemOverlayStyle: SystemUiOverlayStyle.light,
+        // The cover runs to the top of the screen, so the back button needs to
+        // carry its own contrast rather than borrow the bar's.
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                size: 17, color: Colors.white),
+            style: IconButton.styleFrom(
+              backgroundColor: const Color(0x59000000),
+              minimumSize: const Size(38, 38),
+            ),
+            onPressed: () => Navigator.pop(context),
+          ),
         ),
       ),
       body: CustomScrollView(
         slivers: [
-          // Brand cover banner
-          if (showCover)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: CachedNetworkImage(
-                    imageUrl: coverUrl,
-                    height: 150,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorWidget: (_, __, ___) => Container(
-                      height: 150,
-                      color: primary.withOpacity(0.08),
-                    ),
-                  ),
-                ),
-              ),
+          // Marquee — cover, logo and name as one masthead. The logo is a
+          // rounded square rather than a circle: circles read as faces, squares
+          // read as brands, and that one substitution is most of why this page
+          // stops looking like somebody's profile.
+          SliverToBoxAdapter(
+            child: _Marquee(
+              name: businessName,
+              logoUrl: photoUrl,
+              coverUrl: coverUrl,
+              verified: verified,
+              accent: primary,
+              isBrand: isBrand,
             ),
+          ),
 
-          // Header
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          primary.withOpacity(0.5),
-                          primary.withOpacity(0.15),
-                        ],
-                      ),
+                  // What they programme, read off their own listings rather
+                  // than a field they'd have to fill in — so it's true on day
+                  // one and stays true as they change what they do.
+                  if (_knownFor.isNotEmpty) ...[
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _knownFor
+                          .map((c) => _CategoryChip(category: c))
+                          .toList(),
                     ),
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: scaffoldBg,
-                      ),
-                      child: CircleAvatar(
-                        radius: 42,
-                        backgroundColor: primary.withOpacity(0.12),
-                        backgroundImage:
-                            photoUrl != null ? NetworkImage(photoUrl) : null,
-                        child: photoUrl == null
-                            ? Text(
-                                businessName.isNotEmpty
-                                    ? businessName[0].toUpperCase()
-                                    : '?',
-                                style: TextStyle(
-                                  fontSize: 34,
-                                  fontWeight: FontWeight.w800,
-                                  color: primary,
-                                ),
-                              )
-                            : null,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 14),
+                  ],
 
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          businessName,
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.5,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (verified) ...[
-                        const SizedBox(width: 6),
-                        const Icon(Icons.verified,
-                            size: 20, color: Colors.blue),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 10),
+                  if (description != null && description.isNotEmpty) ...[
+                    _ClampedText(text: description),
+                    const SizedBox(height: 14),
+                  ],
 
-                  // Follower / subscriber counts
-                  Row(
-                    children: [
-                      _CountStat(
-                          value: _fmtCount(followers), label: 'followers'),
-                      if (subsEnabled || subscribers > 0) ...[
-                        const SizedBox(width: 20),
-                        _CountStat(
-                            value: _fmtCount(subscribers),
-                            label: 'subscribers'),
-                      ],
-                    ],
+                  _TrackRecordStrip(
+                    pastEvents: _record.pastEvents,
+                    hostingSince: _record.hostingSince,
+                    goingToUpcoming:
+                        _events.fold<int>(0, (s, e) => s + e.ticketsSold),
+                    followers: followers,
+                    subscribers: subsEnabled ? subscribers : 0,
                   ),
-                  const SizedBox(height: 18),
+
+                  const SizedBox(height: 14),
 
                   Row(
                     children: [
@@ -389,25 +394,11 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
                     ],
                   ),
 
-                  if (description != null && description.isNotEmpty) ...[
-                    const SizedBox(height: 18),
-                    Text(
-                      description,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: isDark ? Colors.grey[300] : Colors.grey[700],
-                        height: 1.5,
-                      ),
-                    ),
-                  ],
-
                   if (socialLinks.isNotEmpty) ...[
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     _SocialLinksRow(socialLinks: socialLinks, noPadding: true),
                   ],
 
-                  const SizedBox(height: 20),
-                  Divider(height: 1, color: Colors.grey[200]),
                   const SizedBox(height: 18),
                 ],
               ),
@@ -426,19 +417,47 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
             const SliverToBoxAdapter(child: SizedBox(height: 8)),
           ],
 
-          // Upcoming events
+          // Upcoming events.
+          //
+          // Capped, because the spread is extreme: one organizer lists 53 and
+          // every other lists two or fewer. Rendering all of them buries
+          // everything below — the stamp shelf sat under 53 tiles and was
+          // effectively unreachable.
           _sectionHeaderSliver(
-              _events.isEmpty ? 'No upcoming events' : 'Upcoming Events',
+              _events.isEmpty ? 'No upcoming events' : 'Next up',
               count: _events.length),
-          if (_events.isNotEmpty)
+          if (_events.isNotEmpty) ...[
             SliverList(
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _StorefrontEventTile(event: _events[i]),
-                childCount: _events.length,
+                childCount: _visibleEventCount,
               ),
-            )
-          else
+            ),
+            if (_events.length > _eventPreviewCount)
+              SliverToBoxAdapter(
+                child: _ShowAllEventsButton(
+                  total: _events.length,
+                  expanded: _showAllEvents,
+                  onTap: () =>
+                      setState(() => _showAllEvents = !_showAllEvents),
+                ),
+              ),
+          ] else
             SliverToBoxAdapter(child: _buildEmptyEvents(context)),
+
+          // Stamps to collect — directly under the programme, above everything
+          // optional, so a long listing can never push it out of reach. Hides
+          // itself when the organizer has authored no badges, which today is
+          // all but one of them.
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: PartnerCollectionShelf(
+                partnerId: widget.partnerId,
+                partnerName: businessName,
+              ),
+            ),
+          ),
 
           // Experiences
           if (_experiences.isNotEmpty) ...[
@@ -450,6 +469,26 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
                   onTap: () => _openExperience(_experiences[i]),
                 ),
                 childCount: _experiences.length,
+              ),
+            ),
+          ],
+
+          // What they've already done. For most organizers this is the only
+          // evidence on the page that they're real, since "Next up" is often a
+          // single listing.
+          if (_record.archive.isNotEmpty) ...[
+            _sectionHeaderSliver('Previously', count: _record.pastEvents),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 168,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: _record.archive.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (_, i) =>
+                      _ArchiveTile(event: _record.archive[i]),
+                ),
               ),
             ),
           ],
@@ -568,30 +607,6 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
         shape: const StadiumBorder(),
         textStyle: labelStyle,
       ),
-    );
-  }
-}
-
-class _CountStat extends StatelessWidget {
-  final String value;
-  final String label;
-  const _CountStat({required this.value, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(value,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        const SizedBox(width: 5),
-        Text(label,
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[600])),
-      ],
     );
   }
 }
@@ -814,7 +829,7 @@ class _ExperienceTile extends StatelessWidget {
                     height: 76,
                     child: imageUrl != null && imageUrl.isNotEmpty
                         ? CachedNetworkImage(
-                            imageUrl: imageUrl,
+                            imageUrl: ImageUrl.capped(imageUrl, 1290),
                             fit: BoxFit.cover,
                             errorWidget: (_, __, ___) => _ph(primary),
                           )
@@ -935,7 +950,7 @@ class _StorefrontEventTile extends StatelessWidget {
                     height: 76,
                     child: event.coverImageUrl != null
                         ? CachedNetworkImage(
-                            imageUrl: event.coverImageUrl!,
+                            imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
                             fit: BoxFit.cover,
                             errorWidget: (_, __, ___) => _placeholder(primary),
                           )
@@ -1017,6 +1032,546 @@ class _StorefrontEventTile extends StatelessWidget {
     return Container(
       color: primary.withOpacity(0.10),
       child: Icon(Icons.event_rounded, color: primary),
+    );
+  }
+}
+
+/// The masthead: cover, logo, name.
+///
+/// A person's profile centres a circular avatar because the face is the point.
+/// Here the programme is the point, so the cover runs full-bleed and the logo
+/// sits in the corner of it as a rounded square — the shape language of a
+/// venue's signage rather than someone's headshot.
+class _Marquee extends StatelessWidget {
+  final String name;
+  final String? logoUrl;
+  final String? coverUrl;
+  final bool verified;
+  final Color accent;
+
+  /// `profile_mode`. The page is identical either way — only the mark changes
+  /// shape, because a solo organizer's mark is their face and a company's is a
+  /// logo, and the two want different frames.
+  final bool isBrand;
+
+  const _Marquee({
+    required this.name,
+    required this.logoUrl,
+    required this.coverUrl,
+    required this.verified,
+    required this.accent,
+    required this.isBrand,
+  });
+
+  /// Cover band, below the status bar. Short on purpose: this page exists to
+  /// show a programme, and every point spent up here is a point the dates
+  /// don't get.
+  static const double _band = 128;
+  static const double _logo = 64;
+  static const double _overlap = 30;
+
+  @override
+  Widget build(BuildContext context) {
+    final topInset = MediaQuery.of(context).padding.top;
+    final hasCover = coverUrl != null && coverUrl!.isNotEmpty;
+    final bandHeight = _band + topInset;
+
+    return SizedBox(
+      // Band, minus the part the logo hangs over, plus room for two lines of
+      // name beside it.
+      height: bandHeight + 60,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: bandHeight,
+            child: hasCover
+                ? CachedNetworkImage(
+                    imageUrl: ImageUrl.capped(coverUrl!, 1290),
+                    fit: BoxFit.cover,
+                    errorWidget: (_, __, ___) => _fallbackGround(),
+                    placeholder: (_, __) => _fallbackGround(),
+                  )
+                : _fallbackGround(),
+          ),
+
+          // Guarantees the status bar and back button read over any cover.
+          // Top-anchored and short, so it darkens the chrome strip without
+          // dimming the artwork — and nothing is set in it, so it can't repeat
+          // the collision the overlaid name caused.
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: topInset + 46,
+            child: const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0x66000000), Color(0x00000000)],
+                ),
+              ),
+            ),
+          ),
+
+          // A cover is artwork, and a lot of them are the organizer's own
+          // wordmark. Nothing is written on top of it — the earlier version
+          // laid the business name over the band and landed it straight on
+          // Hanghut's own logotype. The name lives on solid ground below,
+          // where it is also legible in either theme without a scrim.
+          Positioned(
+            left: 20,
+            top: bandHeight - _overlap,
+            child: _mark(context),
+          ),
+          Positioned(
+            left: 20 + _logo + 14,
+            right: 20,
+            top: bandHeight + 2,
+            bottom: 0,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        height: 1.15,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ),
+                  if (verified) ...[
+                    const SizedBox(width: 5),
+                    const Icon(Icons.verified, size: 17, color: Colors.blue),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fallbackGround() => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              accent.withValues(alpha: 0.55),
+              accent.withValues(alpha: 0.22),
+            ],
+          ),
+        ),
+      );
+
+  Widget _mark(BuildContext context) {
+    // A full circle for a person, a squircle for a brand.
+    final radius = BorderRadius.circular(isBrand ? 17 : _logo / 2);
+    final ground = Theme.of(context).scaffoldBackgroundColor;
+
+    return Container(
+      width: _logo,
+      height: _logo,
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        // Punched out of the page rather than outlined in white, so it reads
+        // the same on a dark background.
+        color: ground,
+        border: Border.all(color: ground, width: 3),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: radius.subtract(BorderRadius.circular(3)),
+        child: logoUrl != null && logoUrl!.isNotEmpty
+            ? CachedNetworkImage(
+                imageUrl: ImageUrl.capped(logoUrl!, 1290),
+                fit: BoxFit.cover,
+                errorWidget: (_, __, ___) => _monogram(),
+                placeholder: (_, __) => _monogram(),
+              )
+            : _monogram(),
+      ),
+    );
+  }
+
+  Widget _monogram() => ColoredBox(
+        color: accent.withValues(alpha: 0.16),
+        child: Center(
+          child: Text(
+            name.isNotEmpty ? name[0].toUpperCase() : '?',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: accent,
+            ),
+          ),
+        ),
+      );
+}
+
+/// Body copy that opens rather than filling the screen.
+///
+/// Organizer descriptions are free text and some run long — Hanghut Select's
+/// is four paragraphs, which pushed 53 upcoming events below the fold. Three
+/// lines is enough to know what the page is; the rest is one tap away.
+class _ClampedText extends StatefulWidget {
+  final String text;
+
+  const _ClampedText({required this.text});
+
+  /// Three lines is enough to know what the page is.
+  static const int _maxLines = 3;
+
+  @override
+  State<_ClampedText> createState() => _ClampedTextState();
+}
+
+class _ClampedTextState extends State<_ClampedText> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final style = TextStyle(
+      fontSize: 14,
+      color: isDark ? Colors.grey[300] : Colors.grey[700],
+      height: 1.45,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Measure before deciding: a short description gets no toggle at all.
+        final tp = TextPainter(
+          text: TextSpan(text: widget.text, style: style),
+          maxLines: _ClampedText._maxLines,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final overflows = tp.didExceedMaxLines;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.text,
+              style: style,
+              maxLines: _expanded ? null : _ClampedText._maxLines,
+              overflow: _expanded ? null : TextOverflow.ellipsis,
+            ),
+            if (overflows)
+              GestureDetector(
+                onTap: () => setState(() => _expanded = !_expanded),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 2),
+                  child: Text(
+                    _expanded ? 'Less' : 'More',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// One "known for" tag, from the server-driven category taxonomy.
+class _CategoryChip extends StatelessWidget {
+  final EventCategoryItem category;
+
+  const _CategoryChip({required this.category});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.07)
+            : Colors.grey.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        category.display,
+        style: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: isDark ? Colors.grey[300] : Colors.grey[800],
+        ),
+      ),
+    );
+  }
+}
+
+/// The evidence band: a few hard facts, or nothing at all.
+///
+/// Adaptive because the honest fact differs by organizer. One with a history
+/// leads with it; one whose only show is still ahead has no history to claim,
+/// so it leads with how many people are already going. An organizer with
+/// neither gets no strip rather than a row of zeroes.
+class _TrackRecordStrip extends StatelessWidget {
+  final int pastEvents;
+  final DateTime? hostingSince;
+  final int goingToUpcoming;
+  final int followers;
+  final int subscribers;
+
+  const _TrackRecordStrip({
+    required this.pastEvents,
+    required this.hostingSince,
+    required this.goingToUpcoming,
+    required this.followers,
+    required this.subscribers,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final facts = <({String value, String label})>[];
+
+    if (pastEvents > 0) {
+      facts.add((
+        value: '$pastEvents',
+        label: pastEvents == 1 ? 'event held' : 'events held',
+      ));
+    } else if (goingToUpcoming > 0) {
+      // No history yet — momentum is the truthful headline instead.
+      facts.add((value: _compact(goingToUpcoming), label: 'going'));
+    }
+
+    if (followers > 0) {
+      facts.add((
+        value: _compact(followers),
+        label: followers == 1 ? 'follower' : 'followers',
+      ));
+    }
+    if (subscribers > 0) {
+      facts.add((value: _compact(subscribers), label: 'subscribers'));
+    }
+    if (hostingSince != null && facts.length < 3) {
+      facts.add((
+        value: DateFormat('MMM yyyy').format(hostingSince!),
+        label: 'hosting since',
+      ));
+    }
+
+    if (facts.isEmpty) return const SizedBox.shrink();
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final divider = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.grey.withValues(alpha: 0.25);
+
+    final children = <Widget>[];
+    for (var i = 0; i < facts.length; i++) {
+      if (i > 0) {
+        children.add(Container(width: 1, height: 26, color: divider));
+      }
+      children.add(Expanded(child: _fact(context, facts[i])));
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: divider),
+          bottom: BorderSide(color: divider),
+        ),
+      ),
+      child: Row(children: children),
+    );
+  }
+
+  Widget _fact(BuildContext context, ({String value, String label}) f) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          f.value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.3,
+            // Digits line up across the columns rather than dancing.
+            fontFeatures: [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          f.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _compact(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
+    return '$n';
+  }
+}
+
+/// A past event — small, so a dozen of them read as a body of work rather than
+/// a dozen things to click.
+class _ArchiveTile extends StatelessWidget {
+  final Event event;
+
+  const _ArchiveTile({required this.event});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).primaryColor;
+
+    return SizedBox(
+      width: 132,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: SizedBox(
+              height: 100,
+              width: 132,
+              child: ColorFiltered(
+                // Held slightly back from the live listings above, so "Next up"
+                // stays the brighter thing on the page.
+                colorFilter: const ColorFilter.matrix(<double>[
+                  0.6, 0.3, 0.1, 0, 0,
+                  0.2, 0.7, 0.1, 0, 0,
+                  0.2, 0.3, 0.5, 0, 0,
+                  0, 0, 0, 1, 0,
+                ]),
+                child: event.coverImageUrl != null
+                    ? CachedNetworkImage(
+                        imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => Container(
+                          color: primary.withValues(alpha: 0.10),
+                        ),
+                      )
+                    : Container(
+                        color: primary.withValues(alpha: 0.10),
+                        child: Icon(Icons.event_rounded,
+                            color: primary.withValues(alpha: 0.6)),
+                      ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            event.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.25,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.grey[400] : Colors.grey[700],
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            DateFormat('MMM yyyy').format(event.startLocal),
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Opens the rest of a long programme in place.
+///
+/// In place rather than on a new screen: the events are already loaded, so a
+/// push would re-fetch what the page is holding, and it would take the reader
+/// away from the stamps and the history they came down here to find.
+class _ShowAllEventsButton extends StatelessWidget {
+  final int total;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  const _ShowAllEventsButton({
+    required this.total,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).primaryColor;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+      child: Material(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.05)
+            : primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 13),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  expanded ? 'Show fewer' : 'Show all $total events',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: primary,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 19,
+                  color: primary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

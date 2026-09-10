@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatInputBar extends StatefulWidget {
   final TextEditingController controller;
@@ -146,8 +147,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
                       radius: 16,
                       backgroundColor: Colors.grey[300],
                       backgroundImage: p['photoUrl'] != null
-                          ? NetworkImage(p['photoUrl'])
+                          ? CachedNetworkImageProvider(ImageUrl.avatar(p['photoUrl'], 32))
                           : null,
+                      onBackgroundImageError:
+                          p['photoUrl'] != null ? (_, __) {} : null,
                       child: p['photoUrl'] == null
                           ? Icon(
                               Icons.person,
@@ -233,7 +236,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(6),
                                 child: CachedNetworkImage(
-                                  imageUrl: url,
+                                  imageUrl: ImageUrl.avatar(url, 36),
                                   width: 36,
                                   height: 36,
                                   fit: BoxFit.cover,

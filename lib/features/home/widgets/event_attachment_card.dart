@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 // Placeholder for Event Details Logic - ideally this would navigate to a dedicated Event Details Screen
 // For now, we'll just show a dialog or navigate to a placeholder
@@ -66,7 +67,7 @@ class _EventAttachmentCardState extends State<EventAttachmentCard> {
                 GestureDetector(
                   onTap: widget.onImageTap,
                   child: CachedNetworkImage(
-                    imageUrl: imageUrl,
+                    imageUrl: ImageUrl.capped(imageUrl, 1290),
                     width: double.infinity,
                     fit: BoxFit.fitWidth,
                     placeholder: (context, url) => Container(

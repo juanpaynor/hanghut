@@ -14,6 +14,7 @@ import 'package:bitemates/features/experiences/widgets/experience_detail_modal.d
 import 'package:geolocator/geolocator.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class DiscoverTab extends StatefulWidget {
   final void Function(String tableId)? onHangoutTap;
@@ -1415,7 +1416,7 @@ class _ActivityTileState extends State<_ActivityTile> {
               // Background image
               if (imgUrl != null)
                 CachedNetworkImage(
-                  imageUrl: imgUrl,
+                  imageUrl: ImageUrl.capped(imgUrl, 1290),
                   fit: BoxFit.cover,
                   placeholder: (_, __) => Container(color: Colors.grey[300]),
                   errorWidget: (_, __, ___) => _buildFallback(),
@@ -1584,7 +1585,7 @@ class _EventRailCard extends StatelessWidget {
                     width: 168,
                     child: event.coverImageUrl != null
                         ? CachedNetworkImage(
-                            imageUrl: event.coverImageUrl!,
+                            imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
                             fit: BoxFit.cover,
                             placeholder: (_, __) =>
                                 Container(color: Colors.grey[300]),
@@ -1731,7 +1732,7 @@ class _FeaturedHero extends StatelessWidget {
               // Cover image
               event.coverImageUrl != null
                   ? CachedNetworkImage(
-                      imageUrl: event.coverImageUrl!,
+                      imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
                       fit: BoxFit.cover,
                       placeholder: (_, __) => Container(color: Colors.grey[400]),
                       errorWidget: (_, __, ___) =>

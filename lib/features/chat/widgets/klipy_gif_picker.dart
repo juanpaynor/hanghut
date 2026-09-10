@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// GIF picker backed by the KLIPY API (migrated from Tenor).
 /// Attribution per KLIPY guidelines: "Search KLIPY" placeholder (required) +
@@ -258,7 +259,7 @@ class _KlipyGifPickerState extends State<KlipyGifPicker> {
               color: Colors.grey[100],
               padding: isStickers ? const EdgeInsets.all(8) : EdgeInsets.zero,
               child: CachedNetworkImage(
-                imageUrl: previewUrl.isNotEmpty ? previewUrl : gifUrl,
+                imageUrl: ImageUrl.capped(previewUrl.isNotEmpty ? previewUrl : gifUrl, 1290),
                 fit: isStickers ? BoxFit.contain : BoxFit.cover,
                 placeholder: (context, url) => Container(
                   color: Colors.grey[200],

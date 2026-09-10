@@ -3,6 +3,7 @@ import 'package:bitemates/features/ticketing/models/ticket.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class TicketCard extends StatelessWidget {
   final Ticket ticket;
@@ -39,7 +40,7 @@ class TicketCard extends StatelessWidget {
                     aspectRatio: 16 / 9,
                     child: ticket.eventCoverImage != null
                         ? CachedNetworkImage(
-                            imageUrl: ticket.eventCoverImage!,
+                            imageUrl: ImageUrl.capped(ticket.eventCoverImage!, 1290),
                             fit: BoxFit.cover,
                             placeholder: (_, __) =>
                                 Container(color: Colors.grey[300]),

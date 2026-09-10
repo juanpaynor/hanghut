@@ -12,6 +12,8 @@ import 'package:bitemates/core/services/event_category_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Host-side create / edit flow for ticketed EVENTS. Writes through the shared
 /// web/app RPCs create_event / update_event / manage_tiers (team_comms thread
@@ -92,6 +94,14 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   bool _requireApproval = false;
   bool _hideVenueUntilRegistered = false;
 
+  // Externally ticketed events — sold somewhere else, we only list and link out.
+  // This is the most common kind of event on the platform (51 of the 52 live
+  // events with no ticket tiers are external), and the app could not author one
+  // at all until now (team_comms #302).
+  bool _isExternal = false;
+  final _externalUrlController = TextEditingController();
+  final _externalProviderController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -134,6 +144,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     _maxPerOrder = (e['max_tickets_per_purchase'] as num?)?.toInt() ?? 10;
     _requireApproval = e['require_approval'] == true;
     _hideVenueUntilRegistered = e['hide_venue_until_registered'] == true;
+    _isExternal = e['is_external'] == true;
+    _externalUrlController.text = (e['external_ticket_url'] ?? '').toString();
+    _externalProviderController.text =
+        (e['external_provider_name'] ?? '').toString();
 
     final tiers = e['ticket_tiers'];
     if (tiers is List && tiers.isNotEmpty) {
@@ -174,6 +188,8 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     _venueController.dispose();
     _addressController.dispose();
     _capacityController.dispose();
+    _externalUrlController.dispose();
+    _externalProviderController.dispose();
     for (final t in _tiers) {
       t.dispose();
     }
@@ -223,6 +239,21 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         }
         return null;
       case 3:
+        // External events sell nothing here: create_event forces capacity to
+        // 999999, forces general_admission, and skips the tier-sum check. Every
+        // rule below is about tickets we issue, so none of them apply.
+        if (_isExternal) {
+          final url = _externalUrlController.text.trim();
+          if (url.isEmpty) return 'Add the link where people buy tickets';
+          final uri = Uri.tryParse(url);
+          if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+            return 'That ticket link doesn\'t look like a valid URL';
+          }
+          if (uri.scheme != 'http' && uri.scheme != 'https') {
+            return 'The ticket link must start with http:// or https://';
+          }
+          return null;
+        }
         final capacity = int.tryParse(_capacityController.text.trim()) ?? 0;
         if (capacity <= 0) return 'Set a capacity greater than 0';
         for (final t in _activeTiers) {
@@ -344,6 +375,16 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         'max_tickets_per_purchase': _maxPerOrder,
         'require_approval': _requireApproval,
         'hide_venue_until_registered': _hideVenueUntilRegistered,
+        'is_external': _isExternal,
+        // Sent even when empty on an edit, so turning an event back to
+        // internally ticketed actually clears the old link rather than leaving
+        // a stale one behind.
+        'external_ticket_url':
+            _isExternal ? _externalUrlController.text.trim() : null,
+        'external_provider_name': _isExternal &&
+                _externalProviderController.text.trim().isNotEmpty
+            ? _externalProviderController.text.trim()
+            : null,
         // Omit sales_end when unset: create defaults it to start−1h; update
         // leaves the column unchanged (COALESCE) rather than nulling it.
         if (_salesEndDateTime != null)
@@ -358,7 +399,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         await _hostService.createEvent({
           'organizer_id': widget.partnerId,
           'status': publish ? 'published' : 'draft',
-          'tiers': tiersPayload,
+          // No tiers for an external event — nothing is sold here. Sending an
+          // empty list would make create_event mint a "General Admission" tier
+          // for the full (forced 999999) capacity.
+          if (!_isExternal) 'tiers': tiersPayload,
           ...details,
         });
       }
@@ -778,7 +822,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     final coverProvider = _coverFile != null
         ? FileImage(_coverFile!) as ImageProvider
         : (_coverUrl != null && _coverUrl!.isNotEmpty
-            ? NetworkImage(_coverUrl!)
+            ? CachedNetworkImageProvider(ImageUrl.capped(_coverUrl!, 1290))
             : null);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -865,7 +909,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
               }
               final isExisting = i < _galleryUrls.length;
               final provider = isExisting
-                  ? NetworkImage(_galleryUrls[i]) as ImageProvider
+                  ? CachedNetworkImageProvider(ImageUrl.capped(_galleryUrls[i], 640)) as ImageProvider
                   : FileImage(_galleryFiles[i - _galleryUrls.length]);
               return Stack(fit: StackFit.expand, children: [
                 ClipRRect(
@@ -1052,8 +1096,73 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         children: [
           _sectionTitle('Tickets'),
           const SizedBox(height: 8),
-          Text('General admission for now. Add tiers like Early Bird or VIP.',
-              style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600])),
+          Text(
+            _isExternal
+                ? 'Tickets are sold on another site. We list the event and send '
+                    'people there.'
+                : 'General admission for now. Add tiers like Early Bird or VIP.',
+            style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 20),
+
+          // Where tickets are sold. Leads the step because it decides whether
+          // any of the rest of it applies.
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: SwitchListTile(
+              value: _isExternal,
+              onChanged: (v) => setState(() => _isExternal = v),
+              title: Text(
+                'Tickets sold elsewhere',
+                style: GoogleFonts.inter(
+                    fontSize: 14.5, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                'Eventbrite, Ticketmaster, your own site — we link out instead '
+                'of selling.',
+                style:
+                    GoogleFonts.inter(fontSize: 12.5, color: Colors.grey[600]),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+
+          if (_isExternal) ...[
+            const SizedBox(height: 24),
+            _label('Ticket link'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _externalUrlController,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                hintText: 'https://...',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 20),
+            _label('Where (optional)'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _externalProviderController,
+              decoration: const InputDecoration(hintText: 'e.g. Eventbrite'),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Capacity and ticket types don't apply — the other site handles "
+              'those.',
+              style:
+                  GoogleFonts.inter(fontSize: 12.5, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 8),
+          ] else ...[
           const SizedBox(height: 24),
           _label('Total capacity'),
           const SizedBox(height: 8),
@@ -1180,6 +1289,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
               style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600]),
             ),
           ),
+          ],
         ],
       ),
     );
@@ -1331,6 +1441,19 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
               [_venueController.text.trim(), _addressController.text.trim()]
                   .where((s) => s.isNotEmpty)
                   .join(' · ')),
+          // An external event has no capacity or tiers of ours to review — what
+          // matters is that the link is right, because it is the only thing
+          // standing between a listing and a sale.
+          if (_isExternal) ...[
+            _reviewRow('Tickets', 'Sold elsewhere'),
+            _reviewRow(
+                'Link',
+                _externalUrlController.text.trim().isEmpty
+                    ? '—'
+                    : _externalUrlController.text.trim()),
+            if (_externalProviderController.text.trim().isNotEmpty)
+              _reviewRow('Provider', _externalProviderController.text.trim()),
+          ] else ...[
           _reviewRow('Capacity', capacity == 0 ? '—' : '$capacity'),
           const SizedBox(height: 16),
           _label('Ticket types'),
@@ -1348,6 +1471,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
                   ],
                 ),
               )),
+          ],
         ],
       ),
     );

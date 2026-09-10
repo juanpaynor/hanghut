@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/report_service.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:bitemates/core/utils/image_url.dart';
 
 class BlockedUsersScreen extends StatefulWidget {
   const BlockedUsersScreen({super.key});
@@ -189,7 +190,7 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
                         ? Colors.grey[700]
                         : Colors.grey[200],
                     backgroundImage: avatarUrl != null
-                        ? CachedNetworkImageProvider(avatarUrl)
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 44))
                         : null,
                     child: avatarUrl == null
                         ? Icon(Icons.person, color: Colors.grey[400], size: 24)

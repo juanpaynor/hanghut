@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:bitemates/features/gamification/models/creator_badge.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_criteria.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_style.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Logical size of the share image. 9:16 so it drops straight into an Instagram
 /// or Facebook story without letterboxing; captured at 3x for a 1080x1920 PNG.
@@ -371,7 +372,7 @@ class StampShareCard extends StatelessWidget {
         child: ClipOval(
           child: badge.hasArt
               ? CachedNetworkImage(
-                  imageUrl: badge.artUrl!,
+                  imageUrl: ImageUrl.avatar(badge.artUrl!, size),
                   fit: BoxFit.cover,
                   placeholder: (_, __) => _inked(tierColor),
                   errorWidget: (_, __, ___) => _inked(tierColor),

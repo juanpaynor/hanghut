@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class HangoutCard extends StatelessWidget {
   final Map<String, dynamic> table;
@@ -64,7 +65,7 @@ class HangoutCard extends StatelessWidget {
             // 1. Background Image
             Positioned.fill(
               child: CachedNetworkImage(
-                imageUrl: bgImage,
+                imageUrl: ImageUrl.capped(bgImage, 1290),
                 fit: BoxFit.cover,
                 placeholder: (context, url) =>
                     Container(color: Colors.grey[200]),

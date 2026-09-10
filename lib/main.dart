@@ -28,6 +28,7 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/app_location_service.dart';
 import 'package:bitemates/core/services/deep_link_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:bitemates/core/config/sentry_config.dart';
 
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
 // @pragma('vm:entry-point')
@@ -63,6 +64,14 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 Future<void> main() async {
+  // Sentry wraps the whole of startup, not just runApp, so a failure in
+  // Supabase or Firebase init — which happens before the first frame, where
+  // nobody would otherwise see it — is reported too. No DSN configured means
+  // this just calls _startApp() directly.
+  await initSentryAndRun(_startApp);
+}
+
+Future<void> _startApp() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Ensure the app renders behind system bars and accounts for their insets.

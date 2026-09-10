@@ -6,6 +6,7 @@ import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/deep_link_service.dart';
 import 'package:bitemates/core/services/admin_popup_service.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class AdminPopupModal extends StatelessWidget {
   final Map<String, dynamic> popupData;
@@ -291,7 +292,7 @@ class _PopupHeaderImageState extends State<_PopupHeaderImage> {
   @override
   void initState() {
     super.initState();
-    _provider = CachedNetworkImageProvider(widget.imageUrl);
+    _provider = CachedNetworkImageProvider(ImageUrl.capped(widget.imageUrl, 1290));
     _stream = _provider.resolve(const ImageConfiguration());
     _listener = ImageStreamListener(
       (info, _) {

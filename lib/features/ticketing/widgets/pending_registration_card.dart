@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/features/ticketing/models/event_registration.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class PendingRegistrationCard extends StatelessWidget {
   final EventRegistration registration;
@@ -40,7 +41,7 @@ class PendingRegistrationCard extends StatelessWidget {
                   aspectRatio: 16 / 9,
                   child: r.eventCoverImage != null
                       ? CachedNetworkImage(
-                          imageUrl: r.eventCoverImage!,
+                          imageUrl: ImageUrl.capped(r.eventCoverImage!, 1290),
                           fit: BoxFit.cover,
                           placeholder: (_, __) => Container(color: Colors.grey[300]),
                           errorWidget: (_, __, ___) => Container(

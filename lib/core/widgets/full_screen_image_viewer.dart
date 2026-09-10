@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class FullScreenImageViewer extends StatefulWidget {
   final String imageUrl;
@@ -71,7 +72,7 @@ class _FullScreenImageViewerState extends State<FullScreenImageViewer> {
                     ? widget.heroTag!
                     : images[index],
                 child: CachedNetworkImage(
-                  imageUrl: images[index],
+                  imageUrl: ImageUrl.capped(images[index], 1600),
                   fit: BoxFit.contain,
                   placeholder: (context, url) => const Center(
                     child: CircularProgressIndicator(color: Colors.white),

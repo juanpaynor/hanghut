@@ -372,6 +372,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
             CreateHangoutFlow(
+              source: source,
               currentLat: position?.latitude,
               currentLng: position?.longitude,
               onTableCreated: () {

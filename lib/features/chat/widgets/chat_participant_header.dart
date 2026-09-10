@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatParticipantHeader extends StatelessWidget {
   final List<Map<String, dynamic>> participants;
@@ -153,7 +154,7 @@ class ChatParticipantHeader extends StatelessWidget {
           radius: 16,
           backgroundColor: isDark ? Colors.grey[700] : Colors.grey[200],
           backgroundImage: participant['photoUrl'] != null
-              ? CachedNetworkImageProvider(participant['photoUrl'])
+              ? CachedNetworkImageProvider(ImageUrl.avatar(participant['photoUrl'], 32))
               : null,
           child: participant['photoUrl'] == null
               ? Text(

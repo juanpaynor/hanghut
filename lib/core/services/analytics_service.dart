@@ -44,10 +44,28 @@ class AnalyticsService {
     await _analytics.logJoinGroup(groupId: tableId);
   }
 
-  Future<void> logCreateTable(String tableId) async {
+  /// Hangout creation COMPLETED. [source] mirrors the value passed to
+  /// [logHangoutCreateStart] so start/finish can be paired per entry point.
+  Future<void> logCreateTable(String tableId, {String source = 'unknown'}) async {
     await _analytics.logEvent(
       name: 'create_table',
-      parameters: {'table_id': tableId},
+      parameters: {'table_id': tableId, 'source': source},
+    );
+  }
+
+  /// Hangout creation ABANDONED — the flow closed without a table.
+  ///
+  /// [step]/[stepName] are where they stopped, which is the difference between
+  /// "the form is too long" and "they bounced off the first question". Without
+  /// this, a low completion rate says only that something is wrong.
+  Future<void> logHangoutCreateAbandon({
+    required String source,
+    required int step,
+    required String stepName,
+  }) async {
+    await _analytics.logEvent(
+      name: 'hangout_create_abandon',
+      parameters: {'source': source, 'step': step, 'step_name': stepName},
     );
   }
 

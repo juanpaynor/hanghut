@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'create_hangout_flow.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Step 3: Capacity, visibility, approval, invite by handle, advanced filters.
 class StepWhoInvited extends StatefulWidget {
@@ -299,7 +301,7 @@ class _StepWhoInvitedState extends State<StepWhoInvited> {
                       leading: CircleAvatar(
                         radius: 16,
                         backgroundImage: avatarUrl != null
-                            ? NetworkImage(avatarUrl)
+                            ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 32))
                             : null,
                         child: avatarUrl == null
                             ? Text(
@@ -354,7 +356,7 @@ class _StepWhoInvitedState extends State<StepWhoInvited> {
                     avatar: CircleAvatar(
                       radius: 12,
                       backgroundImage: user['avatar_url'] != null
-                          ? NetworkImage(user['avatar_url'])
+                          ? CachedNetworkImageProvider(ImageUrl.avatar(user['avatar_url'], 24))
                           : null,
                       child: user['avatar_url'] == null
                           ? Text(

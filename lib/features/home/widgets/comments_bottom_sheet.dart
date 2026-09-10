@@ -11,6 +11,7 @@ import 'package:bitemates/features/home/widgets/mention_overlay.dart';
 import 'package:bitemates/features/home/widgets/mention_text.dart';
 import 'package:bitemates/features/chat/widgets/klipy_gif_picker.dart';
 import 'package:bitemates/core/widgets/full_screen_image_viewer.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class CommentsBottomSheet extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -653,7 +654,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 radius: isReply ? 14 : 18,
                 backgroundColor: Colors.grey[300],
                 backgroundImage: userAvatar != null
-                    ? NetworkImage(userAvatar)
+                    ? CachedNetworkImageProvider(ImageUrl.avatar(userAvatar, 36))
                     : null,
                 child: userAvatar == null
                     ? Text(
@@ -724,7 +725,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(12),
                               child: CachedNetworkImage(
-                                imageUrl: comment['image_url'],
+                                imageUrl: ImageUrl.capped(comment['image_url'], 1290),
                                 maxHeightDiskCache: 400,
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => Container(
@@ -1146,7 +1147,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                 radius: 16,
                 backgroundColor: isDark ? Colors.grey[700] : Colors.grey[300],
                 backgroundImage: avatarUrl != null
-                    ? NetworkImage(avatarUrl)
+                    ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 32))
                     : null,
                 child: avatarUrl == null
                     ? Icon(

@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Formats a date as "MMM d", appending the year only when it isn't the
 /// current year — otherwise a far-future/past date (e.g. next year) is
@@ -501,7 +502,7 @@ class _PersonTile extends StatelessWidget {
                 radius: 26,
                 backgroundColor: isDark ? Colors.grey[800] : Colors.grey[100],
                 backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty)
-                    ? CachedNetworkImageProvider(avatarUrl)
+                    ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 52))
                     : null,
                 child: (avatarUrl == null || avatarUrl.isEmpty)
                     ? Icon(
@@ -626,7 +627,7 @@ class _HangoutCard extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           if (imageUrl != null && imageUrl.isNotEmpty)
-            CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover)
+            CachedNetworkImage(imageUrl: ImageUrl.capped(imageUrl, 1290), fit: BoxFit.cover)
           else
             Container(
               decoration: BoxDecoration(
@@ -833,7 +834,7 @@ class _HangoutRow extends StatelessWidget {
               width: 82,
               height: 82,
               child: (imageUrl != null && imageUrl.isNotEmpty)
-                  ? CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover)
+                  ? CachedNetworkImage(imageUrl: ImageUrl.capped(imageUrl, 246), fit: BoxFit.cover)
                   : Container(
                       color: isDark
                           ? AppTheme.primaryColor.withOpacity(0.15)

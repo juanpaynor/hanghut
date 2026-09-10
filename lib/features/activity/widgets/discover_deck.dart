@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Swipe deck that headlines the Discover screen.
 ///
@@ -226,7 +227,7 @@ class _DiscoverDeckState extends State<DiscoverDeck> {
         children: [
           e.coverImageUrl != null
               ? CachedNetworkImage(
-                  imageUrl: e.coverImageUrl!,
+                  imageUrl: ImageUrl.capped(e.coverImageUrl!, 900),
                   fit: BoxFit.cover,
                   memCacheWidth: 900,
                   placeholder: (_, __) => Container(color: Colors.grey[400]),

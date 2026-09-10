@@ -14,6 +14,9 @@ import 'package:bitemates/features/groups/screens/group_chat_screen.dart';
 import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
 import 'package:bitemates/features/run_clubs/screens/club_routes_screen.dart';
 import 'package:bitemates/features/run_clubs/screens/club_runs_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Minimal group detail: cover → meta → tabs (Chat | Members | About)
 class GroupDetailScreen extends StatefulWidget {
@@ -1042,10 +1045,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   void _openCreateActivityModal() {
     HapticFeedback.mediumImpact();
+    AnalyticsService().logHangoutCreateStart('group_detail');
     Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
             CreateHangoutFlow(
+              source: 'group_detail',
               groupId: widget.groupId,
               groupName: _group?['name'] ?? 'Group',
               onTableCreated: () {
@@ -1230,8 +1235,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                             ? Colors.grey[800]
                             : Colors.grey[200],
                         backgroundImage: avatarUrl != null
-                            ? NetworkImage(avatarUrl)
+                            ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 36))
                             : null,
+                        onBackgroundImageError:
+                            avatarUrl != null ? (_, __) {} : null,
                         child: avatarUrl == null
                             ? Text(
                                 displayName.isNotEmpty
@@ -1415,8 +1422,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             radius: 20,
             backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
             backgroundImage: primaryPhoto != null
-                ? NetworkImage(primaryPhoto)
+                ? CachedNetworkImageProvider(ImageUrl.avatar(primaryPhoto, 40))
                 : null,
+            onBackgroundImageError:
+                primaryPhoto != null ? (_, __) {} : null,
             child: primaryPhoto == null
                 ? Text(
                     displayName[0].toUpperCase(),

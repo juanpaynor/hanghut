@@ -7,6 +7,7 @@ import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/liquid_morph_route.dart';
 import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// A unified bottom sheet that shows all overlapping items at a map location.
 /// Handles events, tables, and stories in a single picker.
@@ -417,9 +418,8 @@ class MapClusterSheet extends StatelessWidget {
                     : table['host_photo_url'] != null
                     ? CircleAvatar(
                         radius: 20,
-                        backgroundImage: CachedNetworkImageProvider(
-                          table['host_photo_url'],
-                        ),
+                        backgroundImage: CachedNetworkImageProvider(ImageUrl.avatar(
+                          table['host_photo_url'], 40),),
                       )
                     : const Icon(
                         Icons.restaurant_menu,
@@ -570,7 +570,7 @@ class MapClusterSheet extends StatelessWidget {
                         bottomLeft: Radius.circular(16),
                       ),
                       child: CachedNetworkImage(
-                        imageUrl: thumbnail,
+                        imageUrl: ImageUrl.avatar(thumbnail, 72),
                         fit: BoxFit.cover,
                         height: 88,
                         width: 72,

@@ -32,6 +32,8 @@ import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/chat/widgets/verification_sheet.dart';
 import 'package:bitemates/core/services/connectivity_service.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatScreen extends StatefulWidget {
   final String tableId;
@@ -100,16 +102,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _hasMoreMessages = true;
   bool _isLoadingMore = false;
 
-  // Typing indicators
-  bool _otherUserTyping = false;
+  // Typing indicators.
+  //
+  // Keyed by user id, not a single flag: a group has N people in it, and one
+  // bool meant whoever last emitted presence spoke for everyone — two people
+  // typing showed one indicator, and one person leaving marked the whole room
+  // away. Ids rather than names, resolved at render time, because presence can
+  // arrive before the participant list finishes loading.
+  final Set<String> _typingUserIds = {};
   Timer? _typingTimer;
   bool _isTyping = false;
   ably.RealtimeChannel? _ablyChannel;
 
-  // Presence: online / last-seen (DM)
-  bool _otherUserOnline = false;
+  // Presence: who is currently in the channel (never includes self).
+  final Set<String> _onlineUserIds = {};
   DateTime? _otherUserLastActive;
   Timer? _presenceHeartbeat;
+
+  /// Anyone else present. In a DM that is the other person, which is all the
+  /// header's "Active now" ever meant.
+  bool get _otherUserOnline => _onlineUserIds.isNotEmpty;
 
   // Search
   bool _isSearching = false;
@@ -425,7 +437,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   radius: 28,
                   backgroundColor: isDark ? Colors.grey[800] : Colors.grey[100],
                   backgroundImage: (photoUrl != null && photoUrl.isNotEmpty)
-                      ? NetworkImage(photoUrl)
+                      ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 56))
+                      : null,
+                  onBackgroundImageError:
+                      (photoUrl != null && photoUrl.isNotEmpty)
+                      ? (_, __) {}
                       : null,
                   child: (photoUrl == null || photoUrl.isEmpty)
                       ? Icon(
@@ -1541,18 +1557,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // Subscribe to presence for typing + online status
     if (_ablyChannel != null) {
       _ablyChannel!.presence.subscribe().listen((message) {
-        if (message.clientId != _currentUserId && mounted) {
-          final data = message.data;
-          final isTyping = data is Map && data['typing'] == true;
-          final isLeave =
-              message.action == ably.PresenceAction.leave ||
-              message.action == ably.PresenceAction.absent;
-          setState(() {
-            _otherUserTyping = isTyping && !isLeave;
-            _otherUserOnline = !isLeave;
-            if (isLeave) _otherUserLastActive = DateTime.now();
-          });
-        }
+        final clientId = message.clientId;
+        if (clientId == null || clientId == _currentUserId || !mounted) return;
+
+        final data = message.data;
+        final isTyping = data is Map && data['typing'] == true;
+        final isLeave =
+            message.action == ably.PresenceAction.leave ||
+            message.action == ably.PresenceAction.absent;
+
+        setState(() {
+          if (isLeave) {
+            // Only this member left. Everyone else stays exactly as they were.
+            _onlineUserIds.remove(clientId);
+            _typingUserIds.remove(clientId);
+            _otherUserLastActive = DateTime.now();
+          } else {
+            _onlineUserIds.add(clientId);
+            if (isTyping) {
+              _typingUserIds.add(clientId);
+            } else {
+              _typingUserIds.remove(clientId);
+            }
+          }
+        });
       });
       _initPresence();
     }
@@ -2409,6 +2437,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Broadcasts a typing transition — start, or stop once the field empties.
+  ///
+  /// Transitions only, never a repeat while typing continues. Anything on the
+  /// receiving side that expires a typing entry on a timer would therefore
+  /// wrongly clear someone still mid-sentence; clearing is driven by the
+  /// matching `false` event or by presence leave.
   void _sendTypingStatus(bool isTyping) async {
     try {
       if (_ablyChannel == null) return;
@@ -2420,12 +2454,31 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  String _getOtherUserName() {
-    final other = _participants.firstWhere(
-      (p) => p['userId'] != _currentUserId,
-      orElse: () => {'name': 'Someone'},
+  /// Display name for a specific participant, or 'Someone' when the list
+  /// hasn't caught up with a presence event yet.
+  String _nameForUser(String userId) {
+    final p = _participants.firstWhere(
+      (p) => p['userId'] == userId,
+      orElse: () => <String, dynamic>{},
     );
-    return other['name'] ?? 'Someone';
+    final name = p['name'] as String?;
+    return (name == null || name.isEmpty) ? 'Someone' : name;
+  }
+
+  /// "Alice is typing…", "Alice and Bob are typing…", "Alice, Bob and 2 others
+  /// are typing…".
+  ///
+  /// Replaces a lookup that returned the first participant who wasn't you —
+  /// correct in a DM, and in a group it named the same person every time no
+  /// matter who was actually typing.
+  String _typingLabel() {
+    final names = _typingUserIds.map(_nameForUser).toList();
+    if (names.isEmpty) return '';
+    if (names.length == 1) return '${names[0]} is typing...';
+    if (names.length == 2) return '${names[0]} and ${names[1]} are typing...';
+    final others = names.length - 2;
+    return '${names[0]}, ${names[1]} and $others '
+        '${others == 1 ? 'other' : 'others'} are typing...';
   }
 
   String? _getOtherUserId() {
@@ -2449,10 +2502,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final members = await _ablyChannel?.presence.get();
       if (members != null && mounted) {
-        final online = members.any(
-          (m) => m.clientId != null && m.clientId != _currentUserId,
-        );
-        setState(() => _otherUserOnline = online);
+        setState(() {
+          _onlineUserIds
+            ..clear()
+            ..addAll(
+              members
+                  .map((m) => m.clientId)
+                  .whereType<String>()
+                  .where((id) => id != _currentUserId),
+            );
+        });
       }
     } catch (_) {}
 
@@ -3355,21 +3414,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
 
       // Typing Indicator
-      if (_otherUserTyping)
+      if (_typingUserIds.isNotEmpty)
         Padding(
           padding: const EdgeInsets.only(left: 16, bottom: 8),
           child: Row(
             children: [
               _buildTypingIndicator(),
               const SizedBox(width: 8),
-              Text(
-                '${_getOtherUserName()} is typing...',
-                style: TextStyle(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.grey[400]
-                      : Colors.grey[600],
-                  fontSize: 12,
-                  fontStyle: FontStyle.italic,
+              Expanded(
+                child: Text(
+                  _typingLabel(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.grey[400]
+                        : Colors.grey[600],
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
             ],

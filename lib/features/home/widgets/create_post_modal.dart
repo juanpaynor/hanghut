@@ -12,6 +12,8 @@ import 'package:video_player/video_player.dart';
 
 import 'dart:async';
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class CreatePostModal extends StatefulWidget {
   const CreatePostModal({super.key});
@@ -764,7 +766,7 @@ class _CreatePostModalState extends State<CreatePostModal> {
         CircleAvatar(
           radius: 18,
           backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
-          backgroundImage: hasAvatar ? NetworkImage(_authorAvatar!) : null,
+          backgroundImage: hasAvatar ? CachedNetworkImageProvider(ImageUrl.avatar(_authorAvatar!, 36)) : null,
           child: hasAvatar
               ? null
               : Text(

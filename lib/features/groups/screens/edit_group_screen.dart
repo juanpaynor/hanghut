@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:bitemates/core/services/group_service.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Edit an existing group — same fields as create, pre-populated.
 class EditGroupScreen extends StatefulWidget {
@@ -232,8 +234,10 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
                         )
                       : _existingCoverUrl != null
                           ? DecorationImage(
-                              image: NetworkImage(_existingCoverUrl!),
+                              image: CachedNetworkImageProvider(ImageUrl.capped(
+                                _existingCoverUrl!, 1290),),
                               fit: BoxFit.cover,
+                              onError: (_, __) {},
                             )
                           : null,
                 ),
@@ -316,8 +320,10 @@ class _EditGroupScreenState extends State<EditGroupScreen> {
                                 )
                               : _existingIconUrl != null
                                   ? DecorationImage(
-                                      image: NetworkImage(_existingIconUrl!),
+                                      image: CachedNetworkImageProvider(ImageUrl.capped(
+                                        _existingIconUrl!, 1290),),
                                       fit: BoxFit.cover,
+                                      onError: (_, __) {},
                                     )
                                   : null,
                         ),

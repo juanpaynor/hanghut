@@ -5,6 +5,7 @@ import 'package:bitemates/core/services/event_analytics_service.dart';
 import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
 import 'package:bitemates/features/sharing/services/share_sender.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Phase 1 share-to-chat with multi-select: pick one or more recent chats and
 /// send an entity into all of them at once. Sending is headless (via
@@ -266,7 +267,7 @@ class _ShareToChatSheetState extends State<ShareToChatSheet> {
             radius: 22,
             backgroundColor: accent.withOpacity(0.15),
             backgroundImage: (imageUrl != null && imageUrl.isNotEmpty)
-                ? CachedNetworkImageProvider(imageUrl)
+                ? CachedNetworkImageProvider(ImageUrl.avatar(imageUrl, 44))
                 : null,
             child: (imageUrl == null || imageUrl.isEmpty)
                 ? Icon(Icons.person, color: accent)

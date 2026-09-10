@@ -13,6 +13,7 @@ import 'package:bitemates/features/home/widgets/like_facepile.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/camera/widgets/story_viewers_sheet.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class LocationStoryViewerScreen extends StatefulWidget {
   final Map<String, dynamic> initialStory;
@@ -451,7 +452,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
 
     if (imageUrl != null && mounted) {
       // Warm Flutter's image cache using the same provider as CachedNetworkImage
-      precacheImage(CachedNetworkImageProvider(imageUrl), context);
+      precacheImage(CachedNetworkImageProvider(ImageUrl.capped(imageUrl, 1290)), context);
     } else if (videoUrl != null) {
       // Pre-initialize the video controller in the background
       _prefetchedVideoUrl = videoUrl;
@@ -947,7 +948,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
           // Still zoomed — stay paused so user can pan freely
         },
         child: CachedNetworkImage(
-          imageUrl: imageUrl,
+          imageUrl: ImageUrl.capped(imageUrl, 1290),
           fit: BoxFit.contain,
           width: double.infinity,
           height: double.infinity,
@@ -1036,7 +1037,7 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
                 child: CircleAvatar(
                   radius: 18,
                   backgroundImage: author['avatar_url'] != null
-                      ? NetworkImage(author['avatar_url'])
+                      ? CachedNetworkImageProvider(ImageUrl.avatar(author['avatar_url'], 36))
                       : null,
                   backgroundColor: Colors.indigo,
                   child: author['avatar_url'] == null

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ProfileParallaxHeader extends StatelessWidget {
   final String? imageUrl;
@@ -76,7 +77,7 @@ class ProfileParallaxHeader extends StatelessWidget {
             // 1. Hero Image
             if (imageUrl != null && imageUrl!.isNotEmpty)
               CachedNetworkImage(
-                imageUrl: imageUrl!,
+                imageUrl: ImageUrl.capped(imageUrl!, 1290),
                 fit: BoxFit.cover,
                 placeholder: (context, url) => Container(
                   color: isDark ? Colors.grey[900] : Colors.grey[200],

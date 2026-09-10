@@ -5,6 +5,7 @@ import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
 import 'package:intl/intl.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Full-screen Discover page — Experiences + Events with tall image cards
 class DiscoverListScreen extends StatelessWidget {
@@ -237,7 +238,7 @@ class _EventCard extends StatelessWidget {
             // Background image
             if (event.coverImageUrl != null)
               CachedNetworkImage(
-                imageUrl: event.coverImageUrl!,
+                imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
                 fit: BoxFit.cover,
                 placeholder: (_, __) => Container(color: Colors.grey[300]),
                 errorWidget: (_, __, ___) => Container(
@@ -480,7 +481,7 @@ class _ExperienceCard extends StatelessWidget {
               height: 110,
               child: _imageUrl != null
                   ? CachedNetworkImage(
-                      imageUrl: _imageUrl!,
+                      imageUrl: ImageUrl.capped(_imageUrl!, 1290),
                       fit: BoxFit.cover,
                       placeholder: (_, __) =>
                           Container(color: Colors.grey[200]),

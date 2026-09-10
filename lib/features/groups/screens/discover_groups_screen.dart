@@ -4,6 +4,8 @@ import 'package:bitemates/core/services/group_service.dart';
 import 'package:bitemates/core/services/group_member_service.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 import 'package:bitemates/features/groups/utils/group_cover_theme.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Browse & search public and private groups to join.
 class DiscoverGroupsScreen extends StatefulWidget {
@@ -253,8 +255,11 @@ class _DiscoverGroupsScreenState extends State<DiscoverGroupsScreen> {
                     : null,
                 image: coverUrl != null
                     ? DecorationImage(
-                        image: NetworkImage(coverUrl),
+                        image: CachedNetworkImageProvider(ImageUrl.capped(coverUrl, 1290)),
                         fit: BoxFit.cover,
+                        // A dead cover falls back to the generated gradient
+                        // underneath instead of throwing.
+                        onError: (_, __) {},
                       )
                     : null,
               ),

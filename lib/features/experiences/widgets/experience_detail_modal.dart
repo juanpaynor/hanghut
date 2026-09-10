@@ -14,6 +14,8 @@ import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/experiences/widgets/write_review_sheet.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
 import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ExperienceDetailModal extends StatefulWidget {
   final Map<String, dynamic> experience;
@@ -543,7 +545,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                                 CircleAvatar(
                                   radius: 28,
                                   backgroundImage: hostAvatar != null
-                                      ? NetworkImage(hostAvatar)
+                                      ? CachedNetworkImageProvider(ImageUrl.avatar(hostAvatar, 56))
                                       : null,
                                   backgroundColor: Colors.indigo[100],
                                   child: hostAvatar == null
@@ -913,7 +915,7 @@ class _ExperienceDetailModalState extends State<ExperienceDetailModal> {
                                     CircleAvatar(
                                       radius: 18,
                                       backgroundImage: photoUrl != null
-                                          ? NetworkImage(photoUrl)
+                                          ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 36))
                                           : null,
                                       backgroundColor: Colors.grey[200],
                                       child: photoUrl == null

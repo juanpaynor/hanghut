@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// A rich hangout card for the Open Hangouts carousel.
 /// Shows avatar stack, capacity badge, location/time, category pills,
@@ -117,7 +118,7 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
               Positioned.fill(
                 child: _imageUrl != null
                     ? CachedNetworkImage(
-                        imageUrl: _imageUrl!,
+                        imageUrl: ImageUrl.capped(_imageUrl!, 1290),
                         fit: BoxFit.cover,
                         placeholder: (_, __) =>
                             Container(color: Colors.grey[800]),
@@ -411,7 +412,7 @@ class _MiniAvatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: url != null && url!.isNotEmpty
           ? CachedNetworkImage(
-              imageUrl: url!,
+              imageUrl: ImageUrl.avatar(url!, size),
               fit: BoxFit.cover,
               placeholder: (_, __) =>
                   Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),

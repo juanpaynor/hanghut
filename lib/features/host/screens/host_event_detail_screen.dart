@@ -6,6 +6,8 @@ import 'package:bitemates/core/services/host_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/host/screens/create_event_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Per-event management hub for hosts (team_comms #210 IA):
 /// Overview (stats) → Tickets (tiers) → Guests (approvals inbox) + Edit.
@@ -229,7 +231,14 @@ class _HostEventDetailScreenState extends State<HostEventDetailScreen> {
                 ],
               ),
             ),
-            // Segmented control
+            // Segmented control.
+            //
+            // Both states are set explicitly rather than left to the Material 3
+            // defaults: the unselected foreground resolved to a tone so pale
+            // that "Tickets" and "Attendees" were effectively invisible on
+            // white — the two tabs a host most needs to find on this screen.
+            // The strip also took its background from a hardcoded Colors.white,
+            // which put a white bar under white-ish text in dark mode.
             Container(
               color: Colors.white,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -242,6 +251,21 @@ class _HostEventDetailScreenState extends State<HostEventDetailScreen> {
                 selected: {_section},
                 showSelectedIcon: false,
                 onSelectionChanged: (s) => setState(() => _section = s.first),
+                style: SegmentedButton.styleFrom(
+                  backgroundColor: Colors.grey.shade100,
+                  // Fixed light values, matching the rest of this screen —
+                  // which paints Colors.white / grey[50] / black87 throughout
+                  // and does not follow the theme. Reading the theme here alone
+                  // would turn one strip dark inside an otherwise white page.
+                  foregroundColor: Colors.grey.shade900,
+                  selectedBackgroundColor: Theme.of(context).primaryColor,
+                  selectedForegroundColor: Colors.white,
+                  side: BorderSide(color: Colors.grey.shade300),
+                  textStyle: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
             const Divider(height: 1),
@@ -727,7 +751,7 @@ class _GuestsSectionState extends State<_GuestsSection> {
               radius: 18,
               backgroundColor: AppTheme.primaryColor.withOpacity(0.1),
               backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty)
-                  ? NetworkImage(avatarUrl)
+                  ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 36))
                   : null,
               child: (avatarUrl == null || avatarUrl.isEmpty)
                   ? Text(
@@ -1003,7 +1027,7 @@ class _AttendeeDetailSheet extends StatelessWidget {
                   radius: 26,
                   backgroundColor: AppTheme.primaryColor.withOpacity(0.1),
                   backgroundImage: avatarUrl != null
-                      ? NetworkImage(avatarUrl)
+                      ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 52))
                       : null,
                   child: avatarUrl == null
                       ? Text(display.characters.first.toUpperCase(),

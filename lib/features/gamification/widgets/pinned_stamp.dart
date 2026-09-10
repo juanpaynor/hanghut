@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/gamification/models/creator_badge.dart';
 import 'package:bitemates/features/gamification/services/creator_badge_cache.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_case.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// One pinned stamp, sized to sit beside a name in a feed row, comment, chat
 /// line or attendee list.
@@ -90,7 +91,7 @@ class _StampMark extends StatelessWidget {
         child: ClipOval(
           child: badge.hasArt
               ? CachedNetworkImage(
-                  imageUrl: badge.artUrl!,
+                  imageUrl: ImageUrl.avatar(badge.artUrl!, size),
                   fit: BoxFit.cover,
                   // Suppressed or unloadable art still shows an inked disc —
                   // never a broken image, never an empty gap where a badge was.

@@ -8,6 +8,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Secret used to sign QR payloads — should match across all clients.
 /// Using a constant here since this is client-side validation only;
@@ -510,7 +511,7 @@ class _VerificationSheetState extends State<VerificationSheet>
                             ? Colors.grey[700]
                             : Colors.grey[200],
                         backgroundImage: p['photoUrl'] != null
-                            ? CachedNetworkImageProvider(p['photoUrl'])
+                            ? CachedNetworkImageProvider(ImageUrl.avatar(p['photoUrl'], 40))
                             : null,
                         child: p['photoUrl'] == null
                             ? Text(

@@ -303,6 +303,7 @@ class _HangoutsTabState extends State<HangoutsTab> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CreateHangoutFlow(
+          source: 'empty_state_discover',
           onTableCreated: () {
             if (mounted) _loadFirst();
           },

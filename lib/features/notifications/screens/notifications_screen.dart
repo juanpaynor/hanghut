@@ -14,6 +14,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/core/services/event_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -204,7 +205,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         ? Colors.grey[800]
                         : Colors.grey[200],
                     backgroundImage: (photoUrl != null)
-                        ? CachedNetworkImageProvider(photoUrl)
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 44))
                         : null,
                     child: (photoUrl == null)
                         ? Icon(
@@ -427,7 +428,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 borderRadius: BorderRadius.circular(6),
                 color: isDark ? Colors.grey[850] : Colors.grey[200],
                 image: DecorationImage(
-                  image: CachedNetworkImageProvider(preview),
+                  image: CachedNetworkImageProvider(ImageUrl.avatar(preview, 46)),
                   fit: BoxFit.cover,
                 ),
               ),

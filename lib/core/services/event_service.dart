@@ -26,6 +26,11 @@ class EventService {
           .map((e) => Event.fromJson(e as Map<String, dynamic>))
           .toList();
 
+      // Same enrichment as every other fetch path: the map feeds the discover
+      // list, which renders availability badges, and an un-enriched Event
+      // reports its stock as unknown.
+      await _enrichWithPriceRanges(events);
+
       print('📅 Fetched ${events.length} events in viewport');
       return events;
     } catch (e) {
@@ -50,26 +55,72 @@ class EventService {
   /// other queries (e.g. the storefront's get_storefront RPC) can enrich too.
   Future<void> enrichPriceRanges(List<Event> events) => _enrichWithPriceRanges(events);
 
+  /// Fills in tier price range AND real availability for a page of events.
+  ///
+  /// Reads `ticket_tiers` directly rather than calling `get_events_price_ranges`:
+  /// the RPC returns only prices, and availability has to come from the same
+  /// rows to be consistent with them. `ticket_tiers` carries a public SELECT
+  /// policy, so this needs no new endpoint — and it stays one round trip, since
+  /// the RPC was one too.
+  ///
+  /// An event with no tiers is left untouched: `tierAvailable` stays null and
+  /// the UI says nothing about stock, which is the honest answer for the 225
+  /// externally-ticketed events we don't sell.
   Future<void> _enrichWithPriceRanges(List<Event> events) async {
     if (events.isEmpty) return;
     try {
       final ids = events.map((e) => e.id).toList();
       final rows = await SupabaseConfig.client
-          .rpc('get_events_price_ranges', params: {'p_event_ids': ids});
-      if (rows is! List) return;
-      final byId = {for (final r in rows) r['event_id'].toString(): r};
+          .from('ticket_tiers')
+          .select(
+            'event_id, price, quantity_total, quantity_sold, '
+            'is_active, sales_start, sales_end',
+          )
+          .inFilter('event_id', ids);
+
+      final byEvent = <String, List<Map<String, dynamic>>>{};
+      for (final r in (rows as List)) {
+        final row = Map<String, dynamic>.from(r as Map);
+        (byEvent[row['event_id'].toString()] ??= []).add(row);
+      }
+
+      final now = DateTime.now();
       for (final e in events) {
-        final r = byId[e.id];
-        if (r != null) {
-          e.applyPriceRange(
-            min: (r['min_price'] as num?)?.toDouble() ?? 0,
-            max: (r['max_price'] as num?)?.toDouble() ?? 0,
-            count: (r['tier_count'] as num?)?.toInt() ?? 0,
-          );
+        final tiers = byEvent[e.id];
+        if (tiers == null || tiers.isEmpty) continue;
+
+        // Prices: active tiers only, matching what get_events_price_ranges did.
+        final prices = tiers
+            .where((t) => t['is_active'] != false)
+            .map((t) => (t['price'] as num?)?.toDouble() ?? 0)
+            .toList()
+          ..sort();
+
+        // Availability: only tiers a buyer could actually complete a purchase
+        // on right now — active, and inside their sales window. A tier whose
+        // sales have closed still holds stock, but none of it is for sale.
+        var available = 0;
+        for (final t in tiers) {
+          if (t['is_active'] == false) continue;
+          final start = DateTime.tryParse(t['sales_start'] as String? ?? '');
+          final end = DateTime.tryParse(t['sales_end'] as String? ?? '');
+          if (start != null && start.isAfter(now)) continue;
+          if (end != null && end.isBefore(now)) continue;
+          final total = (t['quantity_total'] as num?)?.toInt() ?? 0;
+          final sold = (t['quantity_sold'] as num?)?.toInt() ?? 0;
+          final left = total - sold;
+          if (left > 0) available += left;
         }
+
+        e.applyPriceRange(
+          min: prices.isEmpty ? 0 : prices.first,
+          max: prices.isEmpty ? 0 : prices.last,
+          count: prices.length,
+          available: available,
+        );
       }
     } catch (e) {
-      print('⚠️ Could not enrich event price ranges: $e');
+      print('⚠️ Could not enrich event tiers: $e');
     }
   }
 

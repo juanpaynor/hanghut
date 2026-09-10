@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class AvatarStack extends StatelessWidget {
   final List<String?> avatarUrls;
@@ -64,7 +65,7 @@ class AvatarStack extends StatelessWidget {
       child: ClipOval(
         child: url != null
             ? CachedNetworkImage(
-                imageUrl: url,
+                imageUrl: ImageUrl.avatar(url, size),
                 fit: BoxFit.cover,
                 placeholder: (context, url) => Center(
                   child: Icon(

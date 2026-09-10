@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class PendingRequestsSheet extends StatefulWidget {
   final String tableId;
@@ -220,7 +222,7 @@ class _PendingRequestsSheetState extends State<PendingRequestsSheet> {
               radius: 24,
               backgroundColor: Colors.grey[300],
               backgroundImage:
-                  photoUrl != null ? NetworkImage(photoUrl) : null,
+                  photoUrl != null ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 48)) : null,
               child: photoUrl == null
                   ? Text(
                       name.isNotEmpty ? name[0].toUpperCase() : '?',

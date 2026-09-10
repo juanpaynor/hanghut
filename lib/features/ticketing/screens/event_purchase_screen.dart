@@ -17,6 +17,7 @@ import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/seat_map_service.dart';
 import 'package:bitemates/features/ticketing/screens/seat_map_picker_screen.dart';
 import 'package:bitemates/features/ticketing/models/seat_map.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 // GEOFENCING DISABLED for Android review — uncomment to re-enable
 // import 'package:workmanager/workmanager.dart';
 
@@ -2256,7 +2257,7 @@ class _EventImageGalleryState extends State<_EventImageGallery> {
                 child: Container(
                   color: Colors.white,
                   child: CachedNetworkImage(
-                    imageUrl: _allImages[i],
+                    imageUrl: ImageUrl.capped(_allImages[i], 1290),
                     fit: BoxFit.cover,
                     placeholder: (_, __) => Container(color: Colors.grey[300]),
                     errorWidget: (_, __, ___) => Container(
@@ -2383,7 +2384,7 @@ class _FullscreenGalleryState extends State<_FullscreenGallery> {
           maxScale: 4.0,
           child: Center(
             child: CachedNetworkImage(
-              imageUrl: widget.images[i],
+              imageUrl: ImageUrl.capped(widget.images[i], 1290),
               fit: BoxFit.contain,
               placeholder: (_, __) =>
                   const CircularProgressIndicator(color: Colors.white),

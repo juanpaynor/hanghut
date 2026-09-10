@@ -7,6 +7,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class MyTripsScreen extends StatefulWidget {
   const MyTripsScreen({super.key});
@@ -256,9 +258,8 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
                           color: Colors.grey[200],
                           image: experience['cover_image_url'] != null
                               ? DecorationImage(
-                                  image: NetworkImage(
-                                    experience['cover_image_url'],
-                                  ),
+                                  image: CachedNetworkImageProvider(ImageUrl.capped(
+                                    experience['cover_image_url'], 1290),),
                                   fit: BoxFit.cover,
                                 )
                               : null,

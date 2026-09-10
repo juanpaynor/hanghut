@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Host-only sheet for managing hangout participants.
 /// Tap any member row to see actions: View Profile, Mute, Kick.
@@ -537,7 +539,7 @@ class _AvatarWidget extends StatelessWidget {
       radius: radius,
       backgroundColor: isDark ? Colors.grey[800] : Colors.grey[100],
       backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty)
-          ? NetworkImage(avatarUrl)
+          ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, radius * 2))
           : null,
       child: (avatarUrl == null || avatarUrl.isEmpty)
           ? Icon(

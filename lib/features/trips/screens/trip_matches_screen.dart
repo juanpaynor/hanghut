@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/services/trip_service.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class TripMatchesScreen extends StatefulWidget {
   final Map<String, dynamic> trip;
@@ -127,7 +129,7 @@ class _TripMatchesScreenState extends State<TripMatchesScreen> {
               CircleAvatar(
                 radius: 30,
                 backgroundImage: match['avatar_url'] != null
-                    ? NetworkImage(match['avatar_url'])
+                    ? CachedNetworkImageProvider(ImageUrl.avatar(match['avatar_url'], 60))
                     : null,
                 backgroundColor: Colors.grey[200],
                 child: match['avatar_url'] == null

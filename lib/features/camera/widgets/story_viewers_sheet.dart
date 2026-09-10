@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Bottom sheet that displays who has viewed a story.
 /// Only shown to the story author.
@@ -250,7 +251,7 @@ class _StoryViewersSheetState extends State<StoryViewersSheet> {
                       radius: 20,
                       backgroundColor: Colors.grey[800],
                       backgroundImage: avatarUrl != null
-                          ? CachedNetworkImageProvider(avatarUrl)
+                          ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 40))
                           : null,
                       child: avatarUrl == null
                           ? Text(

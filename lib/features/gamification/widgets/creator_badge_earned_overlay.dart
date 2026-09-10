@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/features/gamification/models/creator_badge.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_case.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Full-screen celebration when a user earns a partner badge — pulsing tier
 /// glow around the partner's art (default frame if none), plus confetti.
@@ -212,7 +213,7 @@ class _CreatorBadgeEarnedOverlayState extends State<CreatorBadgeEarnedOverlay>
   Widget _art(Color tierColor) {
     if (widget.badge.hasArt) {
       return CachedNetworkImage(
-        imageUrl: widget.badge.artUrl!,
+        imageUrl: ImageUrl.capped(widget.badge.artUrl!, 1290),
         fit: BoxFit.cover,
         placeholder: (_, __) => _fallback(tierColor),
         errorWidget: (_, __, ___) => _fallback(tierColor),

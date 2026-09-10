@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:bitemates/core/services/experience_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class MyExperiencesList extends StatefulWidget {
   const MyExperiencesList({super.key});
@@ -178,7 +179,7 @@ class _MyExperiencesListState extends State<MyExperiencesList> {
                         top: Radius.circular(20),
                       ),
                       child: CachedNetworkImage(
-                        imageUrl: coverUrl,
+                        imageUrl: ImageUrl.capped(coverUrl, 1290),
                         height: 160,
                         width: double.infinity,
                         fit: BoxFit.cover,
@@ -342,7 +343,7 @@ class _MyExperiencesListState extends State<MyExperiencesList> {
                           radius: 14,
                           backgroundColor: Colors.green.withValues(alpha: 0.1),
                           backgroundImage: hostAvatar != null
-                              ? NetworkImage(hostAvatar)
+                              ? CachedNetworkImageProvider(ImageUrl.avatar(hostAvatar, 28))
                               : null,
                           child: hostAvatar == null
                               ? const Icon(
@@ -505,7 +506,7 @@ class _MyExperiencesListState extends State<MyExperiencesList> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: CachedNetworkImage(
-                      imageUrl: coverUrl,
+                      imageUrl: ImageUrl.capped(coverUrl, 1290),
                       height: 180,
                       width: double.infinity,
                       fit: BoxFit.cover,

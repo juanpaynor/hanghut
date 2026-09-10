@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatInfoScreen extends StatefulWidget {
   final String title;
@@ -166,7 +167,7 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
                     radius: 24,
                     backgroundColor: Colors.grey[200],
                     backgroundImage: photoUrl != null
-                        ? CachedNetworkImageProvider(photoUrl)
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 48))
                         : null,
                     child: photoUrl == null
                         ? const Icon(Icons.person, color: Colors.grey)

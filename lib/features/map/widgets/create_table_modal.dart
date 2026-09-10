@@ -14,6 +14,8 @@ import 'dart:io';
 import 'package:intl/intl.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/foundation.dart' as foundation;
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class CreateTableModal extends StatefulWidget {
   final double? currentLat;
@@ -1771,7 +1773,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                               leading: CircleAvatar(
                                 radius: 18,
                                 backgroundImage: avatarUrl != null
-                                    ? NetworkImage(avatarUrl)
+                                    ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 36))
                                     : null,
                                 child: avatarUrl == null
                                     ? Text(
@@ -1823,7 +1825,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                             avatar: CircleAvatar(
                               radius: 12,
                               backgroundImage: user['avatar_url'] != null
-                                  ? NetworkImage(user['avatar_url'])
+                                  ? CachedNetworkImageProvider(ImageUrl.avatar(user['avatar_url'], 24))
                                   : null,
                               child: user['avatar_url'] == null
                                   ? Text(

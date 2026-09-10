@@ -3,6 +3,8 @@ import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ActiveChatsList extends StatefulWidget {
   const ActiveChatsList({super.key});
@@ -329,7 +331,7 @@ class _ActiveChatsListState extends State<ActiveChatsList> {
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.grey[200]!),
                     image: DecorationImage(
-                      image: NetworkImage(chat['image_url']),
+                      image: CachedNetworkImageProvider(ImageUrl.avatar(chat['image_url'], 48)),
                       fit: BoxFit.cover,
                     ),
                   ),

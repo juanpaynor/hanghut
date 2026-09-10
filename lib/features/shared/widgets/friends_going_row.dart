@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Reusable widget that shows which friends have joined an entity.
 ///
@@ -224,7 +225,7 @@ class _FriendAvatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: avatarUrl != null && avatarUrl!.isNotEmpty
           ? CachedNetworkImage(
-              imageUrl: avatarUrl!,
+              imageUrl: ImageUrl.avatar(avatarUrl!, size),
               fit: BoxFit.cover,
               placeholder: (_, __) =>
                   Icon(Icons.person, size: size * 0.5, color: Colors.grey[400]),

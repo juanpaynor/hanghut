@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class EventSalesScreen extends StatefulWidget {
   final String eventId;
@@ -266,7 +268,7 @@ class _EventSalesScreenState extends State<EventSalesScreen> {
                   onTap: () => _showSaleDetails(sale),
                   leading: CircleAvatar(
                     backgroundImage: user?['avatar_url'] != null
-                        ? NetworkImage(user['avatar_url'])
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(user['avatar_url'], 40))
                         : null,
                     child: user?['avatar_url'] == null
                         ? Text((user?['full_name'] ?? 'G')[0].toUpperCase())

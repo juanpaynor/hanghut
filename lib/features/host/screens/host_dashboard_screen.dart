@@ -14,6 +14,8 @@ import 'package:bitemates/features/host/screens/bank_accounts_screen.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class HostDashboardScreen extends StatefulWidget {
   final Map<String, dynamic> partner;
@@ -111,11 +113,26 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
             partnerId: _partnerId,
             hostService: _hostService,
           ),
-          _EarningsTab(
-            partnerId: _partnerId,
-            partner: widget.partner,
-            hostService: _hostService,
-          ),
+          // Earnings is OWNER ONLY.
+          //
+          // Not a tab removal: the destinations and the IndexedStack are index
+          // aligned and one handler keys off `i == 3`, so dropping a tab would
+          // silently shift the others. Swapping the content keeps every index
+          // where it was.
+          //
+          // The reason it is gated at all: `bank_accounts` lets any
+          // owner|manager change where money is sent, and the `payouts` INSERT
+          // policy admits ANY team role — scanner included — with no is_active
+          // check. Until that is tightened server-side (#299), a non-owner is
+          // not handed a payout button by us.
+          if (HostService.isOwner(widget.partner))
+            _EarningsTab(
+              partnerId: _partnerId,
+              partner: widget.partner,
+              hostService: _hostService,
+            )
+          else
+            const _OwnerOnlyNotice(),
         ],
       ),
       floatingActionButton: _selectedTab == 0
@@ -191,6 +208,46 @@ class _HostDashboardScreenState extends State<HostDashboardScreen> {
             label: 'Earnings',
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shown in place of Earnings for team members who do not own the partner.
+class _OwnerOnlyNotice extends StatelessWidget {
+  const _OwnerOnlyNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline_rounded, size: 44, color: Colors.grey[400]),
+            const SizedBox(height: 14),
+            Text(
+              'Earnings are owner-only',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Payouts and bank details stay with the account owner. '
+              'Everything else on this dashboard is yours to use.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                height: 1.4,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1727,7 +1784,7 @@ class _ScheduleCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
                 image: coverImage != null
                     ? DecorationImage(
-                        image: NetworkImage(coverImage),
+                        image: CachedNetworkImageProvider(ImageUrl.avatar(coverImage, 60)),
                         fit: BoxFit.cover,
                       )
                     : null,

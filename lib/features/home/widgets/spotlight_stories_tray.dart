@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// A saturation ColorFilter matrix. s=1 is full colour, s=0 is greyscale.
 /// Used to mute already-seen story covers so unseen ones pop.
@@ -323,7 +324,7 @@ class _SpotlightTile extends StatelessWidget {
     final image = Transform.scale(
       scale: _coverOverscan,
       child: CachedNetworkImage(
-        imageUrl: url,
+        imageUrl: ImageUrl.capped(url, 1290),
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
@@ -472,7 +473,7 @@ class _SpotlightTile extends StatelessWidget {
             clipBehavior: Clip.antiAlias,
             child: (avatarUrl != null && avatarUrl.isNotEmpty)
                 ? CachedNetworkImage(
-                    imageUrl: avatarUrl,
+                    imageUrl: ImageUrl.avatar(avatarUrl, 32),
                     fit: BoxFit.cover,
                     placeholder: (_, __) => _avatarInitial(),
                     errorWidget: (_, __, ___) => _avatarInitial(),
@@ -541,7 +542,7 @@ class _SpotlightTile extends StatelessWidget {
                 BlendMode.darken,
               ),
               child: CachedNetworkImage(
-                imageUrl: avatarUrl,
+                imageUrl: ImageUrl.capped(avatarUrl, 1290),
                 fit: BoxFit.cover,
                 errorWidget: (_, __, ___) => _addStoryGradient(),
               ),

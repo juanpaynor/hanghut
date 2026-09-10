@@ -13,6 +13,8 @@ import 'dart:convert';
 import 'package:bitemates/core/services/places_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/home/widgets/location_picker_modal.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class CreateExperienceScreen extends StatefulWidget {
   final String partnerId;
@@ -529,7 +531,7 @@ class _CreateExperienceScreenState extends State<CreateExperienceScreen> {
               }
               final isExisting = i < _existingImageUrls.length;
               final imageProvider = isExisting
-                  ? NetworkImage(_existingImageUrls[i])
+                  ? CachedNetworkImageProvider(ImageUrl.capped(_existingImageUrls[i], 640))
                   : FileImage(_images[i - _existingImageUrls.length]);
               return Stack(
                 fit: StackFit.expand,

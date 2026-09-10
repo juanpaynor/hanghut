@@ -15,6 +15,7 @@ import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
 import 'package:bitemates/features/map/widgets/manage_members_sheet.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class TableCompactModal extends StatefulWidget {
   final Map<String, dynamic> table;
@@ -409,7 +410,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
                           ),
                           child: heroImageUrl != null
                               ? CachedNetworkImage(
-                                  imageUrl: heroImageUrl,
+                                  imageUrl: ImageUrl.capped(heroImageUrl, 1290),
                                   fit: heroIsGif
                                       ? BoxFit.contain
                                       : BoxFit.cover,
@@ -673,11 +674,10 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                                     widget
                                                         .table['host_photo_url']) !=
                                                 null
-                                            ? NetworkImage(
+                                            ? CachedNetworkImageProvider(ImageUrl.avatar(
                                                 _hostPhotoUrl ??
                                                     widget
-                                                        .table['host_photo_url'],
-                                              )
+                                                        .table['host_photo_url'], 56),)
                                             : null,
                                         backgroundColor: isDark
                                             ? Colors.grey[800]

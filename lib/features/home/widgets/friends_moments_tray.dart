@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 // Indigo brand ramp (matches the app's story ring / primary).
 const Color _indigo400 = Color(0xFF818CF8);
@@ -287,7 +288,7 @@ class _StoryTileState extends State<_StoryTile> {
     final url = _coverUrl;
     if (url != null) {
       return CachedNetworkImage(
-        imageUrl: url,
+        imageUrl: ImageUrl.capped(url, 1290),
         fit: BoxFit.cover,
         placeholder: (_, __) => _gradientFallback(),
         errorWidget: (_, __, ___) => _gradientFallback(),
@@ -417,7 +418,7 @@ class _StoryTileState extends State<_StoryTile> {
             clipBehavior: Clip.antiAlias,
             child: (avatarUrl != null && avatarUrl.isNotEmpty)
                 ? CachedNetworkImage(
-                    imageUrl: avatarUrl,
+                    imageUrl: ImageUrl.avatar(avatarUrl, 28),
                     fit: BoxFit.cover,
                     placeholder: (_, __) => _avatarInitial(),
                     errorWidget: (_, __, ___) => _avatarInitial(),
@@ -485,7 +486,7 @@ class _StoryTileState extends State<_StoryTile> {
                   BlendMode.darken,
                 ),
                 child: CachedNetworkImage(
-                  imageUrl: avatarUrl,
+                  imageUrl: ImageUrl.capped(avatarUrl, 1290),
                   fit: BoxFit.cover,
                   errorWidget: (_, __, ___) => _addStoryGradient(),
                 ),

@@ -20,6 +20,7 @@ import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/liquid_morph_route.dart';
 import 'package:bitemates/core/services/experience_service.dart';
 import 'package:bitemates/features/experiences/widgets/experience_detail_modal.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatMessageBubble extends StatelessWidget {
   final Map<String, dynamic> msg;
@@ -101,9 +102,15 @@ class ChatMessageBubble extends StatelessWidget {
                 child: CircleAvatar(
                   radius: 16,
                   backgroundColor: Colors.grey[300],
+                  // Cached: this is the single most-rendered image in the
+                  // app — one per message block, re-fetched on every scroll
+                  // recycle without it. onBackgroundImageError keeps a dead
+                  // URL from throwing; the grey ground shows instead.
                   backgroundImage: msg['senderPhotoUrl'] != null
-                      ? NetworkImage(msg['senderPhotoUrl'])
+                      ? CachedNetworkImageProvider(ImageUrl.avatar(msg['senderPhotoUrl'], 32))
                       : null,
+                  onBackgroundImageError:
+                      msg['senderPhotoUrl'] != null ? (_, __) {} : null,
                   child: msg['senderPhotoUrl'] == null
                       ? Icon(Icons.person, size: 16, color: Colors.grey[600])
                       : null,
@@ -313,7 +320,7 @@ class ChatMessageBubble extends StatelessWidget {
                                                     borderRadius:
                                                         BorderRadius.circular(4),
                                                     child: CachedNetworkImage(
-                                                      imageUrl: replyImageUrl!,
+                                                      imageUrl: ImageUrl.avatar(replyImageUrl!, 32),
                                                       width: 32,
                                                       height: 32,
                                                       fit: BoxFit.cover,
@@ -417,7 +424,7 @@ class ChatMessageBubble extends StatelessWidget {
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                               child: CachedNetworkImage(
-                                                imageUrl: msg['content'],
+                                                imageUrl: ImageUrl.capped(msg['content'], 1290),
                                                 width: 220,
                                                 fit: BoxFit.cover,
                                                 placeholder: (context, url) =>
@@ -444,7 +451,7 @@ class ChatMessageBubble extends StatelessWidget {
                                               16,
                                             ),
                                             child: CachedNetworkImage(
-                                              imageUrl: msg['content'],
+                                              imageUrl: ImageUrl.capped(msg['content'], 1290),
                                               width: 200,
                                               fit: BoxFit.cover,
                                               placeholder: (context, url) =>
@@ -541,7 +548,7 @@ class ChatMessageBubble extends StatelessWidget {
                                                               12,
                                                             ),
                                                         child: CachedNetworkImage(
-                                                          imageUrl: url,
+                                                          imageUrl: ImageUrl.capped(url, 1290),
                                                           width: 220,
                                                           fit: BoxFit.cover,
                                                           placeholder:
@@ -1278,7 +1285,7 @@ class _FullScreenImagePageState extends State<_FullScreenImagePage> {
       body: Center(
         child: InteractiveViewer(
           child: CachedNetworkImage(
-            imageUrl: widget.imageUrl,
+            imageUrl: ImageUrl.capped(widget.imageUrl, 1290),
             fit: BoxFit.contain,
             placeholder: (context, url) =>
                 const CircularProgressIndicator(color: Colors.white),

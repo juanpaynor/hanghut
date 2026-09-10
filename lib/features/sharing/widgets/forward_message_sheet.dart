@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/activity/services/chat_list_service.dart';
 import 'package:bitemates/features/sharing/services/share_sender.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Forward an existing chat message into one or more other chats. Multi-select,
 /// headless send via [ShareSender.forward] (the message is not opened). Mirrors
@@ -231,7 +232,7 @@ class _ForwardMessageSheetState extends State<ForwardMessageSheet> {
             radius: 22,
             backgroundColor: accent.withOpacity(0.15),
             backgroundImage: (imageUrl != null && imageUrl.isNotEmpty)
-                ? CachedNetworkImageProvider(imageUrl)
+                ? CachedNetworkImageProvider(ImageUrl.avatar(imageUrl, 44))
                 : null,
             child: (imageUrl == null || imageUrl.isEmpty)
                 ? Icon(Icons.person, color: accent)

@@ -56,6 +56,14 @@ class Event {
   double? maxTierPrice;
   int tierCount = 0;
 
+  /// Tickets actually purchasable right now, summed over sellable tiers.
+  ///
+  /// Null means "not known" — the event's tiers haven't been read yet, or it
+  /// has none (every externally-ticketed event). Null is a real third state,
+  /// not a zero: 225 events in the database have no tiers, and treating those
+  /// as sold out would be as wrong as the fabricated counts this replaces.
+  int? tierAvailable;
+
   bool get hasTierPricing => tierCount > 0 && minTierPrice != null;
 
   /// Cheapest price to advertise. Prefers the lowest active tier (always
@@ -89,10 +97,12 @@ class Event {
     required double min,
     required double max,
     required int count,
+    int? available,
   }) {
     minTierPrice = min;
     maxTierPrice = max;
     tierCount = count;
+    tierAvailable = available;
   }
 
   Event({
@@ -158,9 +168,25 @@ class Event {
   String get dateRangeWithTimeLabel =>
       formatDateRangeWithTime(startDatetime, endDatetime!);
 
-  int get ticketsAvailable => capacity - ticketsSold;
-  bool get isSoldOut => ticketsAvailable <= 0;
-  bool get isLowAvailability => ticketsAvailable > 0 && ticketsAvailable < 10;
+  /// Whether we can honestly say anything about availability.
+  ///
+  /// `events.capacity` is a hand-entered number that never had to agree with
+  /// the tiers that actually gate a sale — "RED FLAG NIGHT" carried capacity 20
+  /// against 15 tier seats, all sold, and so advertised "5 left" on a sold-out
+  /// show. Only the tiers know, so only the tiers are allowed to answer.
+  bool get availabilityKnown => tierAvailable != null;
+
+  /// Tickets left. Falls back to the capacity arithmetic only when tiers are
+  /// unknown — callers should check [availabilityKnown] before showing it.
+  int get ticketsAvailable => tierAvailable ?? (capacity - ticketsSold);
+
+  /// Sold out, and we know it. Unknown availability is never sold out: refusing
+  /// a sale we can't disprove is worse than letting the detail screen — which
+  /// reads the tiers itself — make the call.
+  bool get isSoldOut => availabilityKnown && tierAvailable! <= 0;
+
+  bool get isLowAvailability =>
+      availabilityKnown && tierAvailable! > 0 && tierAvailable! < 10;
   bool get isHidden => status == 'hidden';
 
   factory Event.fromJson(Map<String, dynamic> json) {

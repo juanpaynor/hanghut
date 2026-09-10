@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// A floating overlay that appears when the user types `@` in a text field.
 /// Shows search results and inserts the selected username back into the text.
@@ -112,7 +113,7 @@ class _MentionOverlayState extends State<MentionOverlay> {
                     backgroundColor: Colors.grey[200],
                     backgroundImage: avatarUrl != null &&
                             avatarUrl.toString().isNotEmpty
-                        ? CachedNetworkImageProvider(avatarUrl)
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 32))
                         : null,
                     child: avatarUrl == null || avatarUrl.toString().isEmpty
                         ? const Icon(Icons.person, size: 16, color: Colors.grey)

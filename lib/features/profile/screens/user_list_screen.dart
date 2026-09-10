@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/core/widgets/skeleton_loader.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class UserListScreen extends StatefulWidget {
   final String title;
@@ -102,7 +104,7 @@ class _UserListScreenState extends State<UserListScreen> {
                 return ListTile(
                   leading: CircleAvatar(
                     backgroundImage: user['avatar_url'] != null
-                        ? NetworkImage(user['avatar_url'])
+                        ? CachedNetworkImageProvider(ImageUrl.avatar(user['avatar_url'], 40))
                         : null,
                     child: user['avatar_url'] == null
                         ? Text((user['display_name'] ?? 'U')[0].toUpperCase())

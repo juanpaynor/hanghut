@@ -8,6 +8,8 @@ import 'package:bitemates/features/groups/screens/discover_groups_screen.dart';
 import 'package:bitemates/features/search/screens/user_search_screen.dart';
 import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Unified inbox: DMs, groups, hangouts and trips in ONE recency-sorted list,
 /// with filter chips (All / Unread / Groups / DMs) and a floating +New action.
@@ -804,7 +806,7 @@ class _TabbedInboxState extends State<TabbedInbox> {
           borderRadius: type == 'dm' ? null : BorderRadius.circular(radius),
           border: Border.all(color: Colors.grey[200]!),
           image: DecorationImage(
-            image: NetworkImage(imageUrl),
+            image: CachedNetworkImageProvider(ImageUrl.avatar(imageUrl, 48)),
             fit: BoxFit.cover,
           ),
         ),
@@ -871,7 +873,7 @@ class _TabbedInboxState extends State<TabbedInbox> {
                           shape: BoxShape.circle,
                           border: Border.all(color: cardColor, width: 1.5),
                           image: DecorationImage(
-                            image: NetworkImage(avatars[i]),
+                            image: CachedNetworkImageProvider(ImageUrl.avatar(avatars[i], 20)),
                             fit: BoxFit.cover,
                           ),
                         ),

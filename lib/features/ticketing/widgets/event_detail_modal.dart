@@ -18,6 +18,8 @@ import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
+import 'package:bitemates/core/utils/html_sanitizer.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class EventDetailModal extends StatefulWidget {
   final Event event;
@@ -432,7 +434,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
             // The cover photo, cropped to fill the immersive panel.
             if (widget.event.coverImageUrl != null)
               CachedNetworkImage(
-                imageUrl: widget.event.coverImageUrl!,
+                imageUrl: ImageUrl.capped(widget.event.coverImageUrl!, 1290),
                 fit: BoxFit.cover,
                 placeholder: (_, __) => _buildFallbackGradient(categoryConfig),
                 errorWidget: (_, __, ___) =>
@@ -623,7 +625,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: CachedNetworkImage(
-                    imageUrl: imgUrl,
+                    imageUrl: ImageUrl.capped(imgUrl, 1290),
                     fit: BoxFit.cover,
                     placeholder: (_, __) => Container(color: Colors.grey[200]),
                     errorWidget: (_, __, ___) =>
@@ -926,7 +928,11 @@ class _EventDetailModalState extends State<EventDetailModal> {
   /// About section: a header + the (expandable) description. Hidden entirely
   /// when the event has no description.
   Widget _buildAboutSection() {
-    final hasHtml = widget.event.descriptionHtml?.trim().isNotEmpty ?? false;
+    // Measured AFTER sanitising: markup that is entirely disallowed reduces to
+    // nothing, and the section must then fall back to the plain description
+    // rather than render an empty "About".
+    final hasHtml =
+        HtmlSanitizer.sanitize(widget.event.descriptionHtml).isNotEmpty;
     if (widget.event.description.isEmpty && !hasHtml) {
       return const SizedBox.shrink();
     }
@@ -975,7 +981,7 @@ class _EventDetailModalState extends State<EventDetailModal> {
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+            backgroundImage: photoUrl != null ? CachedNetworkImageProvider(ImageUrl.avatar(photoUrl, 32)) : null,
             backgroundColor: Colors.grey[300],
             child: photoUrl == null
                 ? const Icon(Icons.business, color: Colors.white, size: 16)
@@ -1010,7 +1016,10 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   Widget _buildDescription() {
-    final html = widget.event.descriptionHtml?.trim() ?? '';
+    // Sanitised, not raw: the server stores description_html exactly as the
+    // organizer typed it and cleans it only in the web renderer (#302), so the
+    // column is untrusted input by the time it reaches us.
+    final html = HtmlSanitizer.sanitize(widget.event.descriptionHtml);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.grey[400]! : Colors.grey[700]!;
 
@@ -1307,7 +1316,7 @@ class _OrganizerEventCard extends StatelessWidget {
               width: double.infinity,
               child: event.coverImageUrl != null
                   ? CachedNetworkImage(
-                      imageUrl: event.coverImageUrl!,
+                      imageUrl: ImageUrl.capped(event.coverImageUrl!, 1290),
                       fit: BoxFit.cover,
                       errorWidget: (_, __, ___) => Container(
                         color: Colors.deepPurple[50],
@@ -1398,7 +1407,7 @@ class _ImageViewerDialogState extends State<_ImageViewerDialog> {
                 maxScale: 4.0,
                 child: Center(
                   child: CachedNetworkImage(
-                    imageUrl: widget.images[i],
+                    imageUrl: ImageUrl.capped(widget.images[i], 1290),
                     fit: BoxFit.contain,
                     placeholder: (_, __) => const Center(
                       child: CircularProgressIndicator(color: Colors.white54),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class TrendingCarousel extends StatelessWidget {
   final List<dynamic>
@@ -131,7 +132,7 @@ class _CarouselCardState extends State<_CarouselCard> {
               // Image
               Positioned.fill(
                 child: CachedNetworkImage(
-                  imageUrl: widget.bgImage ?? '',
+                  imageUrl: ImageUrl.capped(widget.bgImage ?? '', 1290),
                   fit: BoxFit.cover,
                   placeholder: (context, url) =>
                       Container(color: Colors.grey[200]),

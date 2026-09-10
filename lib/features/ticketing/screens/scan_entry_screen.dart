@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/scanner_service.dart';
 import 'package:bitemates/features/ticketing/screens/ticket_scanner_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Lets scan-eligible organizers/staff pick which of their events to scan
 /// tickets for, then opens the camera scanner for that event.
@@ -193,7 +194,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
                 borderRadius: BorderRadius.circular(10),
                 child: cover != null
                     ? CachedNetworkImage(
-                        imageUrl: cover,
+                        imageUrl: ImageUrl.avatar(cover, 56),
                         width: 56,
                         height: 56,
                         fit: BoxFit.cover,

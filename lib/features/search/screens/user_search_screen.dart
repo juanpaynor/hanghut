@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/social_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 class UserSearchScreen extends StatefulWidget {
   /// If true, returns the selected user instead of navigating to profile.
@@ -209,7 +210,7 @@ class _UserSearchTile extends StatelessWidget {
         radius: 24,
         backgroundColor: isDark ? Colors.grey[800] : Colors.grey[200],
         backgroundImage: avatarUrl != null && avatarUrl.toString().isNotEmpty
-            ? CachedNetworkImageProvider(avatarUrl)
+            ? CachedNetworkImageProvider(ImageUrl.avatar(avatarUrl, 48))
             : null,
         child: avatarUrl == null || avatarUrl.toString().isEmpty
             ? Icon(

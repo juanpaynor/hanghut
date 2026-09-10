@@ -20,6 +20,7 @@ import 'step_what_where.dart';
 import 'step_when_vibes.dart';
 import 'step_who_invited.dart';
 import 'step_review.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
 
 /// Full-screen multi-step wizard for creating a hangout.
 class CreateHangoutFlow extends StatefulWidget {
@@ -29,6 +30,10 @@ class CreateHangoutFlow extends StatefulWidget {
   final String? groupId;
   final String? groupName;
 
+  /// Where the flow was launched from, carried through so the completion and
+  /// abandon events can be paired with `hangout_create_start` per entry point.
+  final String source;
+
   const CreateHangoutFlow({
     super.key,
     this.currentLat,
@@ -36,6 +41,7 @@ class CreateHangoutFlow extends StatefulWidget {
     required this.onTableCreated,
     this.groupId,
     this.groupName,
+    this.source = 'unknown',
   });
 
   @override
@@ -47,6 +53,12 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
   final _pageController = PageController();
   int _currentStep = 0;
   static const _totalSteps = 4;
+
+  static const _stepNames = ['what_where', 'when_vibes', 'who_invited', 'review'];
+
+  /// Set once a table actually exists, so dispose can tell a finished flow from
+  /// an abandoned one.
+  bool _completed = false;
 
   // ─── Shared form state ───────────────────────────────
   final activityController = TextEditingController();
@@ -137,6 +149,13 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
 
   @override
   void dispose() {
+    if (!_completed) {
+      AnalyticsService().logHangoutCreateAbandon(
+        source: widget.source,
+        step: _currentStep,
+        stepName: _stepNames[_currentStep.clamp(0, _stepNames.length - 1)],
+      );
+    }
     _pageController.dispose();
     activityController.dispose();
     venueController.dispose();
@@ -519,7 +538,7 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
       final title = '$hostLabel wants to $activity';
       final description = descriptionController.text.trim();
 
-      await _tableService.createTable(
+      final tableId = await _tableService.createTable(
         latitude: venueLat ?? widget.currentLat ?? 0,
         longitude: venueLng ?? widget.currentLng ?? 0,
         scheduledTime: selectedDateTime,
@@ -545,6 +564,11 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
             : null,
         groupId: widget.groupId,
       );
+
+      // Logged before the pop: dispose reads _completed to decide whether the
+      // flow was abandoned, and popping tears this State down.
+      _completed = true;
+      AnalyticsService().logCreateTable(tableId, source: widget.source);
 
       if (mounted) {
         Navigator.of(context).pop();

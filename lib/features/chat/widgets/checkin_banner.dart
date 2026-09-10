@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 /// Inline banner in chat showing real-time check-in status.
 /// Shows "📍 3/5 checked in" with avatar dots of checked-in members.
@@ -142,9 +143,8 @@ class _CheckinBannerState extends State<CheckinBanner> {
                             backgroundColor: Colors.grey[300],
                             backgroundImage:
                                 checkedInParticipants[i]['photoUrl'] != null
-                                    ? CachedNetworkImageProvider(
-                                        checkedInParticipants[i]['photoUrl'],
-                                      )
+                                    ? CachedNetworkImageProvider(ImageUrl.avatar(
+                                        checkedInParticipants[i]['photoUrl'], 20),)
                                     : null,
                             child:
                                 checkedInParticipants[i]['photoUrl'] == null
@@ -242,7 +242,7 @@ class _CheckinBannerState extends State<CheckinBanner> {
                       radius: 18,
                       backgroundColor: Colors.grey[200],
                       backgroundImage: p['photoUrl'] != null
-                          ? CachedNetworkImageProvider(p['photoUrl'])
+                          ? CachedNetworkImageProvider(ImageUrl.avatar(p['photoUrl'], 36))
                           : null,
                       child: p['photoUrl'] == null
                           ? Text(

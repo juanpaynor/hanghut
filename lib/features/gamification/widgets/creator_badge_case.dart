@@ -5,6 +5,7 @@ import 'package:bitemates/features/gamification/services/creator_badge_service.d
 import 'package:bitemates/features/gamification/widgets/creator_badge_criteria.dart';
 import 'package:bitemates/features/gamification/widgets/creator_badge_style.dart';
 import 'package:bitemates/features/gamification/widgets/stamp_share_card.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 
 // Re-exported so the existing surfaces that reach CreatorBadgeStyle through this
 // file keep working after the extraction.
@@ -195,6 +196,11 @@ class CreatorBadgeTile extends StatelessWidget {
   final DateTime? earnedAt;
   final VoidCallback? onTap;
 
+  /// Render as not-yet-collected: the frame and silhouette stay, the art
+  /// drains. Partner art is part of the reward, so an unearned stamp shows its
+  /// shape without spending the picture.
+  final bool locked;
+
   /// Draw the name (and date) beneath the stamp.
   ///
   /// Off where the surrounding surface already names the badge — the detail
@@ -210,6 +216,7 @@ class CreatorBadgeTile extends StatelessWidget {
     this.earnedAt,
     this.onTap,
     this.showLabel = true,
+    this.locked = false,
   });
 
   static const _months = [
@@ -251,7 +258,9 @@ class CreatorBadgeTile extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: tierColor.withValues(alpha: 0.85),
+                    color: locked
+                        ? Colors.grey.withValues(alpha: 0.45)
+                        : tierColor.withValues(alpha: 0.85),
                     width: 1.6,
                   ),
                 ),
@@ -260,14 +269,32 @@ class CreatorBadgeTile extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: tierColor.withValues(alpha: 0.40),
+                      color: locked
+                          ? Colors.grey.withValues(alpha: 0.28)
+                          : tierColor.withValues(alpha: 0.40),
                       width: 1,
                     ),
                   ),
                   // Art renders faithfully inside the frame — partners paid for
                   // that design, so the stamp treatment lives in the rings, not
-                  // in a filter over their work.
-                  child: ClipOval(child: _art(tierColor)),
+                  // in a filter over their work. The one exception is a stamp
+                  // you haven't collected.
+                  child: ClipOval(
+                    child: locked
+                        ? Opacity(
+                            opacity: 0.5,
+                            child: ColorFiltered(
+                              colorFilter: const ColorFilter.matrix(<double>[
+                                0.2126, 0.7152, 0.0722, 0, 0,
+                                0.2126, 0.7152, 0.0722, 0, 0,
+                                0.2126, 0.7152, 0.0722, 0, 0,
+                                0, 0, 0, 1, 0,
+                              ]),
+                              child: _art(tierColor),
+                            ),
+                          )
+                        : _art(tierColor),
+                  ),
                 ),
               ),
             ),
@@ -304,7 +331,7 @@ class CreatorBadgeTile extends StatelessWidget {
   Widget _art(Color tierColor) {
     if (badge.hasArt) {
       return CachedNetworkImage(
-        imageUrl: badge.artUrl!,
+        imageUrl: ImageUrl.capped(badge.artUrl!, 1290),
         fit: BoxFit.cover,
         placeholder: (_, __) => _defaultFrame(tierColor),
         // Degrade to the default frame on any load failure — never a broken
@@ -336,15 +363,31 @@ class CreatorBadgeTile extends StatelessWidget {
 
 /// Bottom-sheet detail for a single earned badge — big art, tier, rarity,
 /// granting partner, and earned date.
-void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
-  final badge = earned.badge;
+void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) =>
+    showCreatorBadgeSheet(context, earned.badge, earned: earned);
+
+/// The stamp sheet, for a badge you hold or one you don't.
+///
+/// One sheet for both states on purpose: a stamp you haven't collected is the
+/// same object seen from the other side, and the question it has to answer —
+/// what do I do to get this — is the same question, in a different tense.
+/// Pass [earned] when the viewer holds it; leave it null and the sheet becomes
+/// a set of instructions.
+void showCreatorBadgeSheet(
+  BuildContext context,
+  CreatorBadge badge, {
+  EarnedCreatorBadge? earned,
+}) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final tierColor = CreatorBadgeStyle.tierColor(badge.tier);
   final rarity = CreatorBadgeStyle.rarity(badge.holderCount);
-  final earnedReason = CreatorBadgeCriteria.earnedSummary(
-    badge.criteria,
-    grantType: earned.grantType,
-  );
+  final held = earned != null;
+  final reason = held
+      ? CreatorBadgeCriteria.earnedSummary(
+          badge.criteria,
+          grantType: earned.grantType,
+        )
+      : CreatorBadgeCriteria.requirementSummary(badge.criteria);
 
   showModalBottomSheet(
     context: context,
@@ -374,6 +417,7 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
             // The sheet titles the badge in 22pt directly below; the tile's own
             // label would repeat it and overflow the box.
             showLabel: false,
+            locked: !held,
           ),
           const SizedBox(height: 18),
           Text(
@@ -406,9 +450,9 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
               ),
             ),
           ],
-          // How it was earned — the point of a stamp is what you did to get it,
-          // and without this the sheet only ever says what you have.
-          if (earnedReason.isNotEmpty) ...[
+          // What it takes. The point of a stamp is what you did to get it, and
+          // for one you don't hold that same sentence is the instructions.
+          if (reason.isNotEmpty) ...[
             const SizedBox(height: 20),
             Container(
               width: double.infinity,
@@ -423,7 +467,7 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'HOW YOU EARNED IT',
+                    held ? 'HOW YOU EARNED IT' : 'HOW TO COLLECT IT',
                     style: TextStyle(
                       fontSize: 9.5,
                       fontWeight: FontWeight.w800,
@@ -433,7 +477,7 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    earnedReason,
+                    reason,
                     style: TextStyle(
                       fontSize: 14.5,
                       height: 1.35,
@@ -464,43 +508,49 @@ void showCreatorBadgeDetail(BuildContext context, EarnedCreatorBadge earned) {
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Earned ${_formatDate(earned.earnedAt.toLocal())}',
-            style: TextStyle(
-              fontSize: 12,
-              color: isDark ? Colors.white38 : Colors.black38,
+          if (held) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Earned ${_formatDate(earned.earnedAt.toLocal())}',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
             ),
-          ),
-          const SizedBox(height: 22),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () {
-                // Close the detail first: the share card is itself a sheet, and
-                // stacking two leaves the user two Backs from where they were.
-                Navigator.of(context).pop();
-                showStampShareCard(
-                  context,
-                  badge,
-                  earnedAt: earned.earnedAt.toLocal(),
-                  grantType: earned.grantType,
-                );
-              },
-              icon: const Icon(Icons.ios_share_rounded, size: 17),
-              label: const Text('Share this stamp'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                foregroundColor: isDark ? Colors.white : Colors.black87,
-                side: BorderSide(
-                  color: isDark ? Colors.white24 : Colors.black12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+            const SizedBox(height: 22),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  // Close the detail first: the share card is itself a sheet,
+                  // and stacking two leaves the user two Backs from where they
+                  // were.
+                  Navigator.of(context).pop();
+                  showStampShareCard(
+                    context,
+                    badge,
+                    earnedAt: earned.earnedAt.toLocal(),
+                    grantType: earned.grantType,
+                  );
+                },
+                icon: const Icon(Icons.ios_share_rounded, size: 17),
+                label: const Text('Share this stamp'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  foregroundColor: isDark ? Colors.white : Colors.black87,
+                  side: BorderSide(
+                    color: isDark ? Colors.white24 : Colors.black12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),
-          ),
+          ] else
+            // Nothing to share and nothing to tap: the sheet has already said
+            // what to do, and the doing happens at one of their events.
+            const SizedBox(height: 10),
         ],
       ),
     ),

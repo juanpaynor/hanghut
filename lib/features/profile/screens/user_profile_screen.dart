@@ -30,6 +30,7 @@ import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
 import 'package:bitemates/features/home/screens/post_detail_screen.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
+import 'package:bitemates/core/utils/image_url.dart';
 // Membership sections are commented out below (subscriptions not live yet).
 // import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 
@@ -83,6 +84,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   late final bool _isOwnProfile;
   Map<String, dynamic>? _organizerProfile; // null = not an organizer
   Map<String, dynamic>? _storefront; // get_storefront data (brand header)
+  String? _partnerId; // set when the viewed user owns a partner
+  bool _organizerCheckDone = false; // gates the person/partner fork in build()
   Map<String, dynamic>? _viewerSubscription; // viewer's active sub for this organizer
   List<Map<String, dynamic>> _myMemberships = []; // own profile: all active subs
   final ScrollController _profileScrollController = ScrollController();
@@ -188,24 +191,32 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       );
       if (result != null && mounted) {
         final org = Map<String, dynamic>.from(result as Map);
-        setState(() => _organizerProfile = org);
         final partnerId = org['partner_id'] as String?;
+        setState(() {
+          _organizerProfile = org;
+          _partnerId = partnerId;
+        });
         if (partnerId != null) {
-          // Storefront powers the brand header (profile_mode, cover, counts).
+          // The storefront is the only source of `profile_mode`, and that field
+          // decides whether this account is a brand page or a person — so it is
+          // fetched for every viewer, not just the owner.
           try {
             final sf = await SupabaseConfig.client.rpc(
               'get_storefront',
               params: {'p_slug': null, 'p_partner_id': partnerId},
             );
             if (sf != null && mounted) {
-              setState(() => _storefront = Map<String, dynamic>.from(sf as Map));
+              setState(
+                  () => _storefront = Map<String, dynamic>.from(sf as Map));
             }
-          } catch (_) {/* storefront optional; header just won't show */}
+          } catch (_) {/* storefront optional; falls back to the person page */}
           if (!_isOwnProfile) _loadViewerSubscription(partnerId);
         }
       }
     } catch (e) {
       // Not an organizer or RPC failed — silently ignore
+    } finally {
+      if (mounted) setState(() => _organizerCheckDone = true);
     }
   }
 
@@ -831,8 +842,35 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 0. Organizer fork.
+    //
+    // Every surface in the app — feed cards, comments, chat bubbles, search,
+    // notifications, map sheets — pushes UserProfileScreen with a user id, so
+    // organizers were landing on a person's profile no matter how they were
+    // reached. Forking here rather than at ~25 call sites means none of them
+    // needs to know, or needs a partner lookup before it can navigate.
+    //
+    // Gated on `profile_mode` — the field means exactly this, and ignoring it
+    // was wrong. Plenty of partner accounts ARE the business (THE KOOLPALS is
+    // owned by "KOOLPALS STUDIOS, INC"), but some are a real person who happens
+    // to run something: Gel Patino owns "Upper Room Worship", and taking over
+    // their personal profile with a ministry page erased a person. A partner
+    // who wants the brand page sets profile_mode; nobody gets it by default.
+    //
+    // Own profile is the exception either way — a partner viewing themselves
+    // still needs edit, settings and their own timeline, and reaches their
+    // public page through the organizer card further down.
+    if (!_isOwnProfile &&
+        _organizerCheckDone &&
+        _partnerId != null &&
+        _isBrandOrganizer) {
+      return PartnerStorefrontScreen(partnerId: _partnerId!);
+    }
+
     // 1. Loading State (Premium Shimmer)
-    if (_isLoading) {
+    // Held until the organizer check lands too, so a partner never flashes a
+    // half-built person profile before being replaced.
+    if (_isLoading || (!_isOwnProfile && !_organizerCheckDone)) {
       return Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0),
@@ -1284,10 +1322,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
             ),
 
-            // 5. Organizer card — compact link to the storefront, for
-            // PERSON-mode organizers only. Brand-mode organizers get the full
-            // brand header up top instead (team_comms #220).
-            if (_organizerProfile != null && !_isBrandOrganizer)
+            // 5. Organizer card — the person's own link to their storefront.
+            //
+            // OWN PROFILE ONLY. `partners.user_id` is a standing claim of
+            // ownership with nothing to expire it: Gel Patino left Upper Room
+            // Worship and her row still points at it, so every visitor to her
+            // profile was told she runs a ministry she has no part in. There is
+            // no team/left-on date to check against, so the card cannot be
+            // shown truthfully to a stranger. On your own profile it is just a
+            // shortcut to a page you can see is yours.
+            if (_isOwnProfile && _organizerProfile != null && !_isBrandOrganizer)
               SliverToBoxAdapter(
                 child: _OrganizerSection(
                   profile: _organizerProfile!,
@@ -1366,7 +1410,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           child: Hero(
                             tag: 'featured_$url',
                             child: CachedNetworkImage(
-                              imageUrl: url,
+                              imageUrl: ImageUrl.avatar(url, 120),
                               height: 160,
                               width: 120,
                               fit: BoxFit.cover,
@@ -2006,7 +2050,7 @@ class _MyMembershipsCompact extends StatelessWidget {
                       clipBehavior: Clip.antiAlias,
                       child: photoUrl != null && photoUrl.isNotEmpty
                           ? CachedNetworkImage(
-                              imageUrl: photoUrl,
+                              imageUrl: ImageUrl.avatar(photoUrl, 40),
                               fit: BoxFit.cover,
                               errorWidget: (_, __, ___) => const Icon(
                                 Icons.storefront_rounded,
@@ -2152,7 +2196,7 @@ class _OrganizerSection extends StatelessWidget {
                     clipBehavior: Clip.antiAlias,
                     child: photoUrl != null && photoUrl.isNotEmpty
                         ? CachedNetworkImage(
-                            imageUrl: photoUrl,
+                            imageUrl: ImageUrl.avatar(photoUrl, 52),
                             fit: BoxFit.cover,
                             errorWidget: (_, __, ___) => const Icon(
                               Icons.storefront_rounded,
@@ -2356,7 +2400,7 @@ class _BrandHeaderState extends State<_BrandHeader> {
           children: [
             if (hasCover)
               CachedNetworkImage(
-                imageUrl: cover,
+                imageUrl: ImageUrl.capped(cover, 1290),
                 height: 116,
                 width: double.infinity,
                 fit: BoxFit.cover,
@@ -2386,7 +2430,7 @@ class _BrandHeaderState extends State<_BrandHeader> {
                         clipBehavior: Clip.antiAlias,
                         child: logo != null && logo.isNotEmpty
                             ? CachedNetworkImage(
-                                imageUrl: logo,
+                                imageUrl: ImageUrl.avatar(logo, 48),
                                 fit: BoxFit.cover,
                                 errorWidget: (_, __, ___) => Icon(
                                   Icons.storefront_rounded,
