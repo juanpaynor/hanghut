@@ -174,7 +174,17 @@ class _HostEventDetailScreenState extends State<HostEventDetailScreen> {
                     child: AspectRatio(
                       aspectRatio: 16 / 9,
                       child: (cover != null && cover.isNotEmpty)
-                          ? Image.network(cover, fit: BoxFit.cover)
+                          // Partner-hosted covers (#324) can fail; same
+                          // placeholder as "no cover", never a blank.
+                          ? Image.network(
+                              cover,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: Colors.grey[200],
+                                child: const Icon(Icons.image_outlined,
+                                    size: 40, color: Colors.grey),
+                              ),
+                            )
                           : Container(
                               color: Colors.grey[200],
                               child: const Icon(Icons.image_outlined,

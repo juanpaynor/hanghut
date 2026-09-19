@@ -1,8 +1,10 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
@@ -294,6 +296,10 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
     final businessName = p['business_name'] as String? ?? 'Organizer';
     final photoUrl = p['profile_photo_url'] as String?;
     final coverUrl = p['cover_image_url'] as String?;
+    // Web's storefront plays branding.video_url as the hero in place of the
+    // cover ("Replaces cover image with a video"). Same field, same intent.
+    final videoUrl =
+        ((p['branding'] as Map?)?['video_url'] as String?)?.trim();
     final description = p['description'] as String?;
     final verified = p['verified'] as bool? ?? false;
     final slug = p['slug'] as String?;
@@ -342,6 +348,7 @@ class _PartnerStorefrontScreenState extends State<PartnerStorefrontScreen> {
               name: businessName,
               logoUrl: photoUrl,
               coverUrl: coverUrl,
+              videoUrl: (videoUrl == null || videoUrl.isEmpty) ? null : videoUrl,
               verified: verified,
               accent: primary,
               isBrand: isBrand,
@@ -1046,6 +1053,12 @@ class _Marquee extends StatelessWidget {
   final String name;
   final String? logoUrl;
   final String? coverUrl;
+
+  /// `partners.branding.video_url`. A direct file plays through video_player;
+  /// a YouTube link plays through the IFrame API in an InAppWebView (already
+  /// in the binary via flutter_story_presenter). Both muted, both looping,
+  /// both with the cover as the poster until the first frame.
+  final String? videoUrl;
   final bool verified;
   final Color accent;
 
@@ -1058,6 +1071,7 @@ class _Marquee extends StatelessWidget {
     required this.name,
     required this.logoUrl,
     required this.coverUrl,
+    this.videoUrl,
     required this.verified,
     required this.accent,
     required this.isBrand,
@@ -1067,6 +1081,10 @@ class _Marquee extends StatelessWidget {
   /// show a programme, and every point spent up here is a point the dates
   /// don't get.
   static const double _band = 128;
+
+  /// A video needs more than a strip to read as a video; still well short of
+  /// a full hero, so the programme stays the point.
+  static const double _videoBand = 196;
   static const double _logo = 64;
   static const double _overlap = 30;
 
@@ -1074,7 +1092,8 @@ class _Marquee extends StatelessWidget {
   Widget build(BuildContext context) {
     final topInset = MediaQuery.of(context).padding.top;
     final hasCover = coverUrl != null && coverUrl!.isNotEmpty;
-    final bandHeight = _band + topInset;
+    final hasVideo = videoUrl != null;
+    final bandHeight = (hasVideo ? _videoBand : _band) + topInset;
 
     return SizedBox(
       // Band, minus the part the logo hangs over, plus room for two lines of
@@ -1088,14 +1107,20 @@ class _Marquee extends StatelessWidget {
             right: 0,
             top: 0,
             height: bandHeight,
-            child: hasCover
-                ? CachedNetworkImage(
-                    imageUrl: ImageUrl.capped(coverUrl!, 1290),
-                    fit: BoxFit.cover,
-                    errorWidget: (_, __, ___) => _fallbackGround(),
-                    placeholder: (_, __) => _fallbackGround(),
+            child: hasVideo
+                ? _CoverVideo(
+                    url: videoUrl!,
+                    posterUrl: hasCover ? coverUrl : null,
+                    fallback: _fallbackGround(),
                   )
-                : _fallbackGround(),
+                : hasCover
+                    ? CachedNetworkImage(
+                        imageUrl: ImageUrl.capped(coverUrl!, 1290),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => _fallbackGround(),
+                        placeholder: (_, __) => _fallbackGround(),
+                      )
+                    : _fallbackGround(),
           ),
 
           // Guarantees the status bar and back button read over any cover.
@@ -1572,6 +1597,178 @@ class _ShowAllEventsButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The storefront's video cover.
+///
+/// Autoplays muted and loops, the way a venue's screen does — sound on a page
+/// you opened to read a programme is hostile. Direct files (mp4/mov in our
+/// storage) go through video_player; YouTube links go through the YouTube
+/// IFrame API inside an InAppWebView, which is the only way a YouTube video
+/// autoplays on mobile at all (muted + playsinline are what YouTube's policy
+/// requires, and url_launcher can do neither). The webview ignores touches:
+/// this is a marquee, not a player.
+class _CoverVideo extends StatefulWidget {
+  final String url;
+  final String? posterUrl;
+  final Widget fallback;
+
+  const _CoverVideo({
+    required this.url,
+    required this.posterUrl,
+    required this.fallback,
+  });
+
+  /// Video id from any of the YouTube URL shapes organizers paste:
+  /// watch?v=, youtu.be/, shorts/, embed/. Null for anything else.
+  static String? youtubeId(String url) {
+    final u = Uri.tryParse(url);
+    if (u == null) return null;
+    final host = u.host.toLowerCase();
+    if (host.endsWith('youtu.be')) {
+      return u.pathSegments.isEmpty ? null : u.pathSegments.first;
+    }
+    if (!host.contains('youtube.')) return null;
+    final v = u.queryParameters['v'];
+    if (v != null && v.isNotEmpty) return v;
+    final segs = u.pathSegments;
+    for (var i = 0; i + 1 < segs.length; i++) {
+      if (segs[i] == 'shorts' || segs[i] == 'embed' || segs[i] == 'v') {
+        return segs[i + 1];
+      }
+    }
+    return null;
+  }
+
+  /// IFrame API embed sized to the band, cover-fit by oversizing the iframe
+  /// and centring it (an iframe cannot object-fit, so the wrapper does it).
+  /// loop=1 only works with playlist=<same id>; that is YouTube's rule.
+  static String _youtubeEmbedHtml(String id) => '''
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  .wrap{position:absolute;inset:0;overflow:hidden}
+  iframe{position:absolute;top:50%;left:50%;width:300%;height:300%;
+         transform:translate(-50%,-50%);border:0;pointer-events:none}
+</style></head><body><div class="wrap">
+<iframe src="https://www.youtube.com/embed/$id?autoplay=1&mute=1&loop=1&playlist=$id&controls=0&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1"
+  allow="autoplay; encrypted-media" allowfullscreen="false"></iframe>
+</div></body></html>''';
+
+  @override
+  State<_CoverVideo> createState() => _CoverVideoState();
+}
+
+class _CoverVideoState extends State<_CoverVideo> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  bool _failed = false;
+
+  String? get _ytId => _CoverVideo.youtubeId(widget.url);
+
+  @override
+  void initState() {
+    super.initState();
+    if (_ytId == null) _initFile();
+  }
+
+  Future<void> _initFile() async {
+    final uri = Uri.tryParse(widget.url);
+    if (uri == null) {
+      setState(() => _failed = true);
+      return;
+    }
+    final c = VideoPlayerController.networkUrl(uri);
+    _controller = c;
+    try {
+      await c.initialize();
+      await c.setLooping(true);
+      await c.setVolume(0);
+      if (!mounted) return;
+      setState(() => _ready = true);
+      await c.play();
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Widget _poster() {
+    final p = widget.posterUrl;
+    if (p == null || p.isEmpty) return widget.fallback;
+    return CachedNetworkImage(
+      imageUrl: ImageUrl.capped(p, 1290),
+      fit: BoxFit.cover,
+      errorWidget: (_, __, ___) => widget.fallback,
+      placeholder: (_, __) => widget.fallback,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final yt = _ytId;
+    if (yt != null) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          // Thumbnail underneath so the band is never blank while the player
+          // boots (hqdefault always exists; maxresdefault 404s on old uploads).
+          CachedNetworkImage(
+            imageUrl: 'https://img.youtube.com/vi/$yt/hqdefault.jpg',
+            fit: BoxFit.cover,
+            errorWidget: (_, __, ___) => _poster(),
+            placeholder: (_, __) => _poster(),
+          ),
+          IgnorePointer(
+            child: InAppWebView(
+              initialData: InAppWebViewInitialData(
+                data: _CoverVideo._youtubeEmbedHtml(yt),
+                baseUrl: WebUri('https://www.youtube.com'),
+              ),
+              initialSettings: InAppWebViewSettings(
+                transparentBackground: true,
+                // Both required for autoplay on iOS: inline (not fullscreen)
+                // and no user-gesture gate on media.
+                allowsInlineMediaPlayback: true,
+                mediaPlaybackRequiresUserGesture: false,
+                disableVerticalScroll: true,
+                disableHorizontalScroll: true,
+                supportZoom: false,
+                javaScriptEnabled: true,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (_failed) return _poster();
+
+    final c = _controller;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _poster(),
+        if (_ready && c != null)
+          // Cover-fit: scale the video to fill the band and crop the excess,
+          // the same way the image cover behaves.
+          FittedBox(
+            fit: BoxFit.cover,
+            clipBehavior: Clip.hardEdge,
+            child: SizedBox(
+              width: c.value.size.width,
+              height: c.value.size.height,
+              child: VideoPlayer(c),
+            ),
+          ),
+      ],
     );
   }
 }

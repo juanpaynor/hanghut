@@ -29,6 +29,17 @@ class _SeatsUnavailableException implements Exception {
   String toString() => message;
 }
 
+/// Thrown when the server refuses the tier at pay time — locked, not yet on
+/// sale, or sales closed (team_comms #320). The client predicate hides these
+/// before the buyer gets here; this covers a screen left open across the
+/// boundary and device clocks that drift. Nothing was written server-side.
+class _TierUnavailableException implements Exception {
+  final String message;
+  _TierUnavailableException(this.message);
+  @override
+  String toString() => message;
+}
+
 class EventPurchaseScreen extends StatefulWidget {
   final Event event;
 
@@ -367,11 +378,14 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
   Future<void> _fetchTicketTiers() async {
     try {
+      // No is_active filter here any more: visibility is a function of NOW
+      // (sales windows, #320), so it is decided at render time from the full
+      // row set rather than baked in at fetch. Locked tiers with
+      // show_when_locked need to arrive too, so the buyer sees the reason.
       final response = await SupabaseConfig.client
           .from('ticket_tiers')
           .select()
           .eq('event_id', widget.event.id)
-          .eq('is_active', true)
           .order('price', ascending: true); // Cheapest first
 
       final tiers = (response as List)
@@ -381,13 +395,11 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       if (mounted) {
         setState(() {
           _tiers = tiers;
-          // Auto-select first available tier if exists
-          if (_tiers.isNotEmpty) {
-            _selectedTier = _tiers.firstWhere(
-              (t) => !t.isSoldOut,
-              orElse: () => _tiers.first,
-            );
-          }
+          // Auto-select the first tier that can actually be bought. Nothing
+          // is preselected when none can — a greyed "Opens Friday" tier must
+          // never be the one the pay button acts on.
+          final buyable = _tiers.where((t) => t.isOnSale() && !t.isSoldOut);
+          _selectedTier = buyable.isEmpty ? null : buyable.first;
           _isLoadingTiers = false;
         });
       }
@@ -699,9 +711,21 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                       'Some seats are no longer available.'),
             );
           }
+          // Tier refused before any write (#320). The server's message is
+          // already worded per state, so it is shown as-is.
+          if (code == 'TIER_LOCKED' ||
+              code == 'TIER_NOT_YET_ON_SALE' ||
+              code == 'TIER_SALES_CLOSED') {
+            throw _TierUnavailableException(
+              err['error']['message']?.toString() ??
+                  'This ticket type is no longer available.',
+            );
+          }
           throw Exception(err['error']['message']);
         }
       } on _SeatsUnavailableException {
+        rethrow;
+      } on _TierUnavailableException {
         rethrow;
       } catch (_) {}
       throw Exception('Failed to create purchase intent: ${response.status}');
@@ -732,6 +756,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     // Validate Tier
     if (_tiers.isNotEmpty && _selectedTier == null) {
       _showErrorDialog('Select Ticket', 'Please select a ticket type.');
+      return;
+    }
+
+    // Re-evaluated at tap time, not at render: the buyer may have sat on this
+    // screen across the window boundary. Saves a round trip the server would
+    // refuse anyway, and puts them back on the picker with the reason.
+    if (_selectedTier != null && !_selectedTier!.isOnSale()) {
+      final label = _selectedTier!.saleLabel(formatOpens: _formatOpens) ??
+          'This ticket type is not on sale right now.';
+      _onTierUnavailable(label);
       return;
     }
 
@@ -809,6 +843,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       if (mounted) {
         _startPaymentPolling();
       }
+    } on _TierUnavailableException catch (e) {
+      if (mounted) _onTierUnavailable(e.message);
     } on _SeatsUnavailableException catch (e) {
       // Seat race — reservation already rolled back server-side. Clear the
       // stale selection, bounce the user to the Ticket step to re-pick.
@@ -873,6 +909,25 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     // Start the polling timer (shared logic with resume)
     _restartPolling();
   }
+
+  /// The tier can no longer be bought. Say so with the server's (or the
+  /// predicate's) wording, drop the selection, refetch so the list reflects
+  /// what is actually on sale, and return to the picker (#320).
+  void _onTierUnavailable(String message) {
+    setState(() {
+      _selectedTier = null;
+      _currentStep = 0;
+    });
+    _fetchTicketTiers();
+    _showErrorDialog(
+      'Ticket Type Unavailable',
+      '$message\n\nPlease choose another ticket type.',
+    );
+  }
+
+  /// Device-local, matching the "Public sale opens" banner on this screen.
+  static String _formatOpens(DateTime opens) =>
+      DateFormat('MMM d, h:mm a').format(opens.toLocal());
 
   void _showErrorDialog(String title, String message) {
     showDialog(
@@ -1258,12 +1313,15 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         else if (!_hasSeatMap && _tiers.isNotEmpty) ...[
           _sectionTitle('Select Ticket Type'),
           const SizedBox(height: 14),
-          ..._tiers.map(
+          // Visibility and buyability are decided HERE, per build, because
+          // both are functions of the current instant (#320).
+          ..._tiers.where((t) => t.isVisible()).map(
             (tier) => _TierOption(
               tier: tier,
               isSelected: _selectedTier?.id == tier.id,
+              saleLabel: tier.saleLabel(formatOpens: _formatOpens),
               onTap: () {
-                if (!tier.isSoldOut) {
+                if (!tier.isSoldOut && tier.isOnSale()) {
                   setState(() {
                     _selectedTier = tier;
                     _recalculatePromo();
@@ -1624,23 +1682,33 @@ class _TierOption extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
 
+  /// Non-null when the tier is visible but not buyable: the organizer's
+  /// lock_note, "Opens …", "Sales closed" or "Not on sale". Renders the row
+  /// greyed with this single label and no selection affordance.
+  final String? saleLabel;
+
   const _TierOption({
     required this.tier,
     required this.isSelected,
     required this.onTap,
+    this.saleLabel,
   });
 
   @override
   Widget build(BuildContext context) {
     final primary = AppTheme.primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final unavailable = saleLabel != null;
     // Base ticket price only — the booking fee is shown once in the summary.
     final price = tier.price;
     final baseColor =
         isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white;
     final borderColor =
         isDark ? Colors.white.withValues(alpha: 0.12) : Colors.grey.shade300;
-    return AnimatedContainer(
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      opacity: unavailable ? 0.55 : 1,
+      child: AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -1663,7 +1731,7 @@ class _TierOption extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: onTap,
+          onTap: unavailable ? null : onTap,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1721,6 +1789,27 @@ class _TierOption extends StatelessWidget {
                           ),
                         ),
                       ],
+                      if (unavailable) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            saleLabel!,
+                            style: TextStyle(
+                              color: isDark
+                                  ? Colors.grey.shade300
+                                  : Colors.grey.shade800,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1739,6 +1828,7 @@ class _TierOption extends StatelessWidget {
             ),
           ),
         ),
+      ),
       ),
     );
   }

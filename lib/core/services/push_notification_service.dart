@@ -14,6 +14,7 @@ import 'package:bitemates/features/ticketing/screens/my_tickets_screen.dart';
 import 'package:bitemates/features/profile/screens/my_memberships_screen.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/support/screens/support_thread_screen.dart';
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -327,6 +328,26 @@ class PushNotificationService {
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (_) => const MainNavigationScreen(initialIndex: 3),
+        ),
+        (route) => false,
+      );
+    } else if (data['type'] == 'support_reply') {
+      // Web emits entity_id = the support ticket id (team_comms #312). Do NOT
+      // route this through the 'chat' branch above: that one looks a chat up by
+      // chat_type + entity_id and would fail on a ticket uuid.
+      final ticketId = data['entity_id']?.toString() ??
+          data['support_ticket_id']?.toString();
+      if (ticketId != null && ticketId.isNotEmpty) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (_) => SupportThreadScreen(ticketId: ticketId),
+          ),
+        );
+        return;
+      }
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(initialIndex: 1),
         ),
         (route) => false,
       );

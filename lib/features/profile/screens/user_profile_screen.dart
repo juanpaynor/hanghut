@@ -358,6 +358,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       } catch (e) {
         // Fallback or empty
       }
+      // Same chain as the feed RPC. Organizer accounts have no user_photos
+      // and no users.avatar_url — their only photo is the partner's brand
+      // photo — so every partner profile opened with a blank avatar.
+      if (avatarUrl.isEmpty) {
+        avatarUrl = (userResponse['avatar_url'] as String?) ?? '';
+      }
+      if (avatarUrl.isEmpty) {
+        try {
+          final partner = await supabase
+              .from('partners')
+              .select('profile_photo_url')
+              .eq('user_id', widget.userId)
+              .not('profile_photo_url', 'is', null)
+              .limit(1)
+              .maybeSingle();
+          avatarUrl = (partner?['profile_photo_url'] as String?) ?? '';
+        } catch (_) {}
+      }
 
       if (mounted) {
         setState(() {
@@ -834,11 +852,52 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
-  /// True when the viewed profile belongs to a brand-mode organizer and we have
-  /// its storefront loaded — drives the brand header (team_comms #220).
-  bool get _isBrandOrganizer =>
-      _storefront != null &&
-      (_storefront!['partner'] as Map?)?['profile_mode'] == 'brand';
+  /// True when the viewed profile should render as a brand page — drives both
+  /// the storefront fork in build() and the own-profile brand header.
+  ///
+  /// Two ways to qualify:
+  ///   1. `partners.profile_mode == 'brand'` — the explicit flag (#220). It is
+  ///      the column default's victim though: 'person' unless someone flips
+  ///      it, and on 2026-09-19 that was 26 of 30 partners, Comedy Manila and
+  ///      Mimic Manila included. Rich: "comedy manila is a partner account but
+  ///      they are still shown like a regular user."
+  ///   2. The ACCOUNT IS NAMED AFTER THE BUSINESS. "Comedy Manila" owning
+  ///      "Comedy Manila", "KOOLPALS STUDIOS, INC" owning "THE KOOLPALS". A
+  ///      person who happens to run something — Joanna Villena / ceramikabyjo,
+  ///      Jaz Zy / Manila Social Club — does not match, and keeps their
+  ///      personal profile, which is the case the flag was protecting.
+  bool get _isBrandOrganizer {
+    final partner = (_storefront?['partner'] as Map?)?.cast<String, dynamic>();
+    if (partner == null) return false;
+    if (partner['profile_mode'] == 'brand') return true;
+    return _accountIsTheBusiness(
+      accountName: _userData?['display_name']?.toString(),
+      businessName: partner['business_name']?.toString(),
+    );
+  }
+
+  /// Token overlap: any distinctive word (4+ chars, not a generic like
+  /// "events" or "manila") of one name appearing in the other. Survives legal
+  /// suffixes and articles — "KOOLPALS STUDIOS, INC" vs "THE KOOLPALS" matches
+  /// on "koolpals" — while "Kim S" / "Kim of Tara Craft" and "Jaz Zy" /
+  /// "Manila Social Club" share nothing distinctive and stay personal.
+  static bool _accountIsTheBusiness({String? accountName, String? businessName}) {
+    const generic = {
+      'events', 'event', 'manila', 'studio', 'studios', 'group', 'official',
+      'entertainment', 'productions', 'company', 'club', 'philippines',
+    };
+    String squash(String v) => v.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    Set<String> tokens(String? v) => (v ?? '')
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((t) => t.length >= 4 && !generic.contains(t))
+        .toSet();
+    final a = squash(accountName ?? '');
+    final b = squash(businessName ?? '');
+    if (a.length < 4 || b.length < 4) return false;
+    if (a == b) return true;
+    return tokens(accountName).any(b.contains) || tokens(businessName).any(a.contains);
+  }
 
   @override
   Widget build(BuildContext context) {

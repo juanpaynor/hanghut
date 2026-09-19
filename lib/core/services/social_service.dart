@@ -120,7 +120,12 @@ class SocialService {
       if (responseList.length > limit) {
         hasMore = true;
         final lastItem = mappedPosts[limit - 1];
-        nextCursor = lastItem['created_at'];
+        // The For You feed is RANKED (spread + author cap + User DNA taste),
+        // so its sort key is `feed_cursor`, not created_at. Paging on
+        // created_at against a ranked order skips and repeats posts across the
+        // page boundary. created_at is the fallback for RPCs that do not rank
+        // (get_following_feed is still chronological).
+        nextCursor = (lastItem['feed_cursor'] ?? lastItem['created_at']) as String?;
         nextCursorId = lastItem['id'];
 
         // Remove the extra item fetched for pagination check
@@ -191,7 +196,8 @@ class SocialService {
       if (mappedPosts.length > limit) {
         hasMore = true;
         final lastItem = mappedPosts[limit - 1];
-        nextCursor = lastItem['created_at'] as String?;
+        // See above: ranked feeds page on feed_cursor, chronological on created_at.
+        nextCursor = (lastItem['feed_cursor'] ?? lastItem['created_at']) as String?;
         nextCursorId = lastItem['id'] as String?;
         mappedPosts.removeLast();
       }

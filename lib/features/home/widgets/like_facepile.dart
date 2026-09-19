@@ -62,7 +62,11 @@ class _LikeFacepileState extends State<LikeFacepile> {
   /// Assigns fields directly — a build always follows initState/didUpdateWidget;
   /// _load() manages its own setState for the async result.
   void _initOrLoad() {
-    if (widget.initialLikers != null) {
+    // An EMPTY list counts as "not supplied": a feed payload that carries
+    // top_likers but leaves it empty for a post that does have likes would
+    // otherwise mark itself loaded and never fall back to the fetch, showing
+    // "Liked by N people" with no faces forever.
+    if (widget.initialLikers != null && widget.initialLikers!.isNotEmpty) {
       _likers = widget.initialLikers!;
       _loaded = true;
     } else if (widget.likeCount > 0) {
@@ -127,7 +131,16 @@ class _LikeFacepileState extends State<LikeFacepile> {
               child: RichText(
                 overflow: TextOverflow.ellipsis,
                 text: TextSpan(
-                  style: TextStyle(fontSize: 13, color: subtleColor),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: subtleColor,
+                    // Over media the row sits on whatever the photo happens to
+                    // be, so white-on-white is a real outcome. Same shadow the
+                    // immersive caption and rail icons use.
+                    shadows: widget.onDark
+                        ? const [Shadow(color: Color(0x99000000), blurRadius: 8)]
+                        : null,
+                  ),
                   children: _summarySpans(textColor, subtleColor),
                 ),
               ),

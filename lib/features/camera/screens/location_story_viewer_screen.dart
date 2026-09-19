@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 import 'package:bitemates/core/services/social_service.dart';
+import 'package:bitemates/features/home/screens/main_navigation_screen.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/features/settings/widgets/report_modal.dart';
 import 'package:bitemates/features/home/widgets/comments_bottom_sheet.dart';
@@ -1118,14 +1119,41 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
     );
   }
 
+  /// Stops playback and flies the map to the story's location — the way a
+  /// location pill on a story is expected to behave. This was the original
+  /// behaviour; it was dropped in 59266ad (2026-08-24) and the pill relabelled
+  /// "purely informational". Restored 2026-09-19 (Rich).
+  void _flyToStoryLocation(Map<String, dynamic> story) {
+    final lat = story['latitude'];
+    final lng = story['longitude'];
+    if (lat is! num || lng is! num) return;
+
+    _progressController.removeStatusListener(_onProgressComplete);
+    _progressController.stop();
+    _videoController?.pause();
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => MainNavigationScreen(
+          initialIndex: 0,
+          flyToLat: lat.toDouble(),
+          flyToLng: lng.toDouble(),
+        ),
+      ),
+      (route) => false,
+    );
+  }
+
   /// Dark frosted "capture-screen style" location pill + optional vibe tag,
-  /// grouped directly under the header. Purely informational.
+  /// grouped directly under the header. The pill flies to the map when the
+  /// story carries coordinates.
   Widget _buildLocationTag(Map<String, dynamic> story) {
     final place = story['external_place_name']?.toString();
     final vibe = story['vibe_tag']?.toString();
     final hasPlace = place != null && place.isNotEmpty;
     final hasVibe = vibe != null && vibe.isNotEmpty;
     if (!hasPlace && !hasVibe) return const SizedBox.shrink();
+    final hasCoords = story['latitude'] is num && story['longitude'] is num;
 
     return Padding(
       padding: const EdgeInsets.only(top: 12),
@@ -1134,7 +1162,10 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           if (hasPlace)
-            Container(
+            GestureDetector(
+              onTap: hasCoords ? () => _flyToStoryLocation(story) : null,
+              behavior: HitTestBehavior.opaque,
+              child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
                 color: Colors.black.withOpacity(0.45),
@@ -1165,7 +1196,13 @@ class _LocationStoryViewerScreenState extends State<LocationStoryViewerScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (hasCoords) ...[
+                    const SizedBox(width: 5),
+                    const Icon(Icons.chevron_right_rounded,
+                        color: Colors.white70, size: 15),
+                  ],
                 ],
+              ),
               ),
             ),
           if (hasVibe)

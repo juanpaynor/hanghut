@@ -211,7 +211,14 @@ class _HostScheduleManifestScreenState
           fit: StackFit.expand,
           children: [
             if (imageUrl != null)
-              Image.network(imageUrl, fit: BoxFit.cover)
+              // Partner-hosted covers (#324) can fail; fall back to the same
+              // brand block the no-image case uses, under the same gradient.
+              Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    Container(color: AppTheme.primaryColor),
+              )
             else
               Container(color: AppTheme.primaryColor),
             // Gradient overlay for text readability

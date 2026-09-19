@@ -45,6 +45,16 @@ enum ImageFit { cover, contain }
 class ImageUrl {
   ImageUrl._();
 
+  /// KILL SWITCH — OFF as of 2026-09-15 (Rich's decision).
+  ///
+  /// The render endpoint is a METERED Supabase feature: Pro includes 100
+  /// origin images per billing cycle, then bills per 1,000. This class hit
+  /// 204/100 four days after the 09-11 release and tripped the spend cap.
+  /// With this false, every method returns the plain `/object/public/` URL
+  /// and the 73 call sites need no change. Do NOT flip this back on without
+  /// Rich signing off on the billing line it creates.
+  static const bool transformsEnabled = false;
+
   static const _objectMarker = '/storage/v1/object/public/';
   static const _renderMarker = '/storage/v1/render/image/public/';
 
@@ -151,6 +161,8 @@ class ImageUrl {
     final raw = url.trim();
     if (raw.isEmpty) return url;
 
+    if (!transformsEnabled) return _untransformed(raw);
+
     // Already rendered: leave it alone rather than stacking a second set of
     // params on the first, where the earlier (larger) width could win
     // depending on how the origin resolves duplicate keys.
@@ -178,6 +190,29 @@ class ImageUrl {
     ];
 
     return '$rendered?${params.join('&')}';
+  }
+
+  /// The plain object URL. A URL that is already a render URL (one that got
+  /// persisted somewhere while transforms were on) is mapped back to the
+  /// object path with the transform params dropped, so nothing keeps hitting
+  /// the metered endpoint through the back door. Any other query — the
+  /// `?t=<millis>` cache-buster — is preserved.
+  static String _untransformed(String raw) {
+    if (!raw.contains(_renderMarker)) return raw;
+    final split = raw.indexOf('?');
+    final path = split == -1 ? raw : raw.substring(0, split);
+    final query = split == -1 ? '' : raw.substring(split + 1);
+    final kept = query
+        .split('&')
+        .where((kv) =>
+            kv.isNotEmpty &&
+            !kv.startsWith('width=') &&
+            !kv.startsWith('height=') &&
+            !kv.startsWith('resize=') &&
+            !kv.startsWith('quality='))
+        .join('&');
+    final objectPath = path.replaceFirst(_renderMarker, _objectMarker);
+    return kept.isEmpty ? objectPath : '$objectPath?$kept';
   }
 
   static int _toDevicePx(double logical, BuildContext? context) {

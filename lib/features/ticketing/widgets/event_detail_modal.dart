@@ -152,22 +152,27 @@ class _EventDetailModalState extends State<EventDetailModal> {
       final int capacity = widget.event.capacity;
       final bool eventSoldOut = actualSold >= capacity;
 
-      // Also check ticket tiers
+      // Also check ticket tiers. Fetched unfiltered and evaluated here with
+      // the same predicate the purchase screen uses (#320): a tier inside a
+      // sales window that has closed still holds stock, but none of it is
+      // for sale, and it must not keep this event looking buyable.
       final tierResponse = await SupabaseConfig.client
           .from('ticket_tiers')
           .select()
-          .eq('event_id', widget.event.id)
-          .eq('is_active', true);
+          .eq('event_id', widget.event.id);
 
       final tiers = (tierResponse as List)
           .map((json) => TicketTier.fromJson(json))
+          .where((t) => t.isActive)
           .toList();
 
+      final onSale = tiers.where((t) => t.isOnSale()).toList();
       final bool allTiersSoldOut =
-          tiers.isNotEmpty && tiers.every((t) => t.isSoldOut);
+          onSale.isNotEmpty && onSale.every((t) => t.isSoldOut);
 
       // Freshly-fetched tier prices are the source of truth for the price
       // display (events.ticket_price is NOT kept in sync with tier edits).
+      // Active tiers, matching event_service's list-level range.
       if (tiers.isNotEmpty) {
         final prices = tiers.map((t) => t.price).toList()..sort();
         _minTierPrice = prices.first;

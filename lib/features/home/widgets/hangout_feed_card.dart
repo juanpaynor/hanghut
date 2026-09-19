@@ -199,10 +199,18 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         final lng = widget.post['longitude'];
         final mapboxToken = dotenv.env['MAPBOX_PUBLIC_TOKEN'];
         if (lat != null && lng != null && mapboxToken != null) {
-          // 3:4 crop to match the immersive frame (600x800@2x).
+          // 3:4 crop to match the immersive frame.
+          //
+          // NOT 600x800@2x: that renders 1200x1600 and the Static Images API
+          // caps a rendered image at 1280x1280, so the tall crop was the one
+          // size on this card that could come back as an error instead of a
+          // map — which the old grey-box errorWidget then showed as a blank
+          // card. 900x1200 with no @2x is inside the cap whether the limit is
+          // read against the requested dimensions or the rendered output, and
+          // at ~2.5x for a phone-width card it is still sharp.
           coverUrl =
               'https://api.mapbox.com/styles/v1/mapbox/light-v11/static/'
-              'pin-l+3F51B5($lng,$lat)/$lng,$lat,15,0/600x800@2x'
+              'pin-l+3F51B5($lng,$lat)/$lng,$lat,15,0/900x1200'
               '?access_token=$mapboxToken';
           coverIsMap = true;
         }
@@ -992,6 +1000,61 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
   // Immersive (media-forward) hangout card
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Cover for a hangout whose photo is absent and whose map tile did not
+  /// arrive. The immersive card is a full-bleed 3:4 frame, so the previous
+  /// `Container(color: Colors.grey[800])` for both placeholder and error read as
+  /// a deliberately blank card once the scrim gradient landed on top of it — the
+  /// activity title and venue floated over an empty grey field.
+  ///
+  /// A hangout always carries an activity emoji and a venue, so there is enough
+  /// to draw something intentional. The palette is picked deterministically from
+  /// the hangout's own id, so a given activity always looks the same and a feed
+  /// of photo-less hangouts doesn't read as one repeated tile.
+  ///
+  /// Emoji render from the system font, not the icon font, so this is safe in a
+  /// Shorebird patch — no tree-shaking involved.
+  Widget _immHangoutFallbackCover(
+    Map<String, dynamic> metadata, {
+    bool withEmoji = true,
+  }) {
+    const palettes = <List<Color>>[
+      [Color(0xFF2B3A8F), Color(0xFF141834)],
+      [Color(0xFF1F5F5B), Color(0xFF0D2220)],
+      [Color(0xFF6A2E6E), Color(0xFF221026)],
+      [Color(0xFF8A4B1F), Color(0xFF281308)],
+    ];
+    final key =
+        (metadata['table_id'] ?? metadata['activity_type'] ?? '').toString();
+    final palette = palettes[key.hashCode.abs() % palettes.length];
+    // marker_emoji is optional and frequently null. _getEmojiForActivity was
+    // already in the file (unreferenced) and derives one from the activity,
+    // falling back to 👋 — so the cover is never emoji-less.
+    var emoji = (metadata['marker_emoji'] as String?)?.trim();
+    if (emoji == null || emoji.isEmpty) {
+      emoji = _getEmojiForActivity(
+        (metadata['activity_type'] ?? metadata['title'] ?? '').toString(),
+      );
+    }
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: palette,
+        ),
+      ),
+      // Sits high in the frame: the bottom third is occupied by the title,
+      // venue and time, and the scrim is heaviest there.
+      child: withEmoji
+          ? Align(
+              alignment: const Alignment(0, -0.35),
+              child: Text(emoji, style: const TextStyle(fontSize: 60)),
+            )
+          : null,
+    );
+  }
+
   Widget _buildImmersiveHangout({
     required Map<String, dynamic> metadata,
     required dynamic user,
@@ -1036,8 +1099,14 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
                   imageUrl: ImageUrl.capped(imageUrl, 1200),
                   fit: BoxFit.cover,
                   memCacheWidth: 1200,
-                  placeholder: (_, __) => Container(color: Colors.grey[800]),
-                  errorWidget: (_, __, ___) => Container(color: Colors.grey[800]),
+                  // Gradient while loading (no emoji, so a map that does arrive
+                  // doesn't flash an emoji first); gradient + emoji on failure,
+                  // which is the state a photo-less hangout lands in when the
+                  // static map request doesn't come back.
+                  placeholder: (_, __) =>
+                      _immHangoutFallbackCover(metadata, withEmoji: false),
+                  errorWidget: (_, __, ___) =>
+                      _immHangoutFallbackCover(metadata),
                 ),
                 const IgnorePointer(
                   child: DecoratedBox(

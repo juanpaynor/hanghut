@@ -420,7 +420,18 @@ class _ExperienceCardState extends State<_ExperienceCard> {
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
                   child: images.isNotEmpty
-                      ? Image.network(images.first, fit: BoxFit.cover)
+                      // Partner-hosted covers (#324) can fail for reasons
+                      // outside our control; degrade to the same placeholder
+                      // as "no cover" instead of a blank tile.
+                      ? Image.network(
+                          images.first,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: Colors.grey[200],
+                            child: const Icon(Icons.image_outlined,
+                                size: 40, color: Colors.grey),
+                          ),
+                        )
                       : Container(
                           color: Colors.grey[200],
                           child: const Icon(
@@ -847,7 +858,15 @@ class _EventCardState extends State<_EventCard> {
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
                   child: (cover != null && cover.isNotEmpty)
-                      ? Image.network(cover, fit: BoxFit.cover)
+                      ? Image.network(
+                          cover,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: Colors.grey[200],
+                            child: const Icon(Icons.image_outlined,
+                                size: 40, color: Colors.grey),
+                          ),
+                        )
                       : Container(
                           color: Colors.grey[200],
                           child: const Icon(Icons.image_outlined,

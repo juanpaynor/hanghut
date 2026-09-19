@@ -17,6 +17,12 @@ class AblyService {
         options: ably.ClientOptions(
           key: AblyConfig.apiKey,
           autoConnect: true,
+          // Ably's defaults are tuned for servers: after a drop it waits 15s
+          // before trying again, and 30s once suspended. On a phone that is
+          // the difference between a blip nobody notices and a "Reconnecting"
+          // banner. Retry in 3s, and every 10s while suspended.
+          disconnectedRetryTimeout: 3000,
+          suspendedRetryTimeout: 10000,
           // Optional: Add clientId for presence features
           // clientId: user.id,
         ),

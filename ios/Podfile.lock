@@ -263,8 +263,6 @@ PODS:
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - permission_handler_apple (9.4.8):
-    - Flutter
   - pro_video_editor (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -332,7 +330,6 @@ DEPENDENCIES:
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
-  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
   - pro_video_editor (from `.symlinks/plugins/pro_video_editor/darwin`)
   - sensors_plus (from `.symlinks/plugins/sensors_plus/ios`)
   - sentry_flutter (from `.symlinks/plugins/sentry_flutter/ios`)
@@ -432,8 +429,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/package_info_plus/ios"
   path_provider_foundation:
     :path: ".symlinks/plugins/path_provider_foundation/darwin"
-  permission_handler_apple:
-    :path: ".symlinks/plugins/permission_handler_apple/ios"
   pro_video_editor:
     :path: ".symlinks/plugins/pro_video_editor/darwin"
   sensors_plus:
@@ -507,7 +502,6 @@ SPEC CHECKSUMS:
   OrderedSet: e539b66b644ff081c73a262d24ad552a69be3a94
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   path_provider_foundation: bb55f6dbba17d0dccd6737fe6f7f34fbd0376880
-  permission_handler_apple: 92d754bbaa7361d436db2d6c3c1c2a0fdcec462e
   pro_video_editor: 71c273c0a82a72996526e2bfc5c2fbd2bb35aaaa
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   PromisesSwift: 217dea0fd5d2ad65222a109c48698add13cc1c5b

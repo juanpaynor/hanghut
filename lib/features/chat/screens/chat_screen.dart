@@ -82,9 +82,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _ablyConnected = false; // Track Ably connection state
   bool _showConnectionBanner = false; // Show disconnected banner
   Timer? _reconnectTimer; // Automatic reconnection timer
+  // Delays the "Reconnecting" banner so a routine 1-3s blip never shows it.
+  Timer? _bannerDelay;
+  StreamSubscription<ably.ConnectionStateChange>? _connectionSub;
   bool _isOffline = false;
   StreamSubscription<bool>? _connectivitySub;
   bool _wasDisconnected = false; // Track a drop so we can resync on reconnect
+  /// How long a drop must persist before the user is told about it.
+  static const _bannerAfter = Duration(seconds: 5);
   bool _isResyncing = false; // Guard against overlapping reconnect resyncs
 
   // Scroll-to-bottom pill
@@ -233,6 +238,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _scrollController.dispose();
     _searchController.dispose();
     _reconnectTimer?.cancel();
+    _bannerDelay?.cancel();
+    _connectionSub?.cancel();
     _typingTimer?.cancel();
     _presenceHeartbeat?.cancel();
     _updateOwnLastActive(); // stamp a fresh last-seen on the way out
@@ -1529,28 +1536,48 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final stream = _ablyService.getChannelStream(widget.channelId);
     _ablyChannel = _ablyService.getChannel(widget.channelId);
 
-    // Monitor connection state
-    _ablyService.getConnectionStateStream()?.listen((stateChange) {
-      if (mounted) {
-        final isConnected =
-            stateChange.current == ably.ConnectionState.connected;
-        setState(() {
-          _ablyConnected = isConnected;
-          _showConnectionBanner = !isConnected;
-        });
+    // Monitor connection state.
+    //
+    // Held as a subscription and cancelled in dispose: this used to be a bare
+    // listen() registered on every chat open and never released, so listeners
+    // stacked up across the session.
+    //
+    // The banner is DEBOUNCED. A phone's websocket drops and reconnects
+    // routinely — Wi-Fi/cellular handoff, the OS pausing sockets on app
+    // switch, one weak-signal second — and Ably rides through those in 1-3s
+    // on its own. Flipping the banner on every non-connected state showed
+    // "Reconnecting to chat…" for each of them, including the `connecting`
+    // state on the way back UP, which read as a chat that could not hold a
+    // connection. Now it shows only if we are still not connected after
+    // _bannerAfter, which is a real outage, not a blip. Nothing about
+    // delivery changes: the resync-on-reconnect below still runs for every
+    // drop, banner or no banner.
+    _connectionSub?.cancel();
+    _connectionSub = _ablyService.getConnectionStateStream()?.listen((stateChange) {
+      if (!mounted) return;
+      final isConnected =
+          stateChange.current == ably.ConnectionState.connected;
+      _ablyConnected = isConnected;
 
+      if (isConnected) {
+        _bannerDelay?.cancel();
+        if (_showConnectionBanner) setState(() => _showConnectionBanner = false);
+        _reconnectTimer?.cancel();
         // Auto-connect is handled by the Ably SDK. On a drop→reconnect, Ably
         // only resumes LIVE events — messages sent while we were offline are
         // missed — so refetch the latest page to fill the gap.
-        if (!isConnected) {
-          _wasDisconnected = true;
-        } else {
-          _reconnectTimer?.cancel();
-          if (_wasDisconnected) {
-            _wasDisconnected = false;
-            _resyncOnReconnect();
-          }
+        if (_wasDisconnected) {
+          _wasDisconnected = false;
+          _resyncOnReconnect();
         }
+      } else {
+        _wasDisconnected = true;
+        _bannerDelay ??= Timer(_bannerAfter, () {
+          _bannerDelay = null;
+          if (mounted && !_ablyConnected) {
+            setState(() => _showConnectionBanner = true);
+          }
+        });
       }
     });
 

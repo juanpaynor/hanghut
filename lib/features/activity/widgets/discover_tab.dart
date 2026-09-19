@@ -947,10 +947,12 @@ class _DiscoverTabState extends State<DiscoverTab>
             event: featured,
             onTap: () => EventDetailModal.show(context, featured),
           ),
-        _buildEventRail('Trending', notInDeck(_trendingEvents),
-            subtitle: 'Selling fast right now'),
+        // Weekend first: it is the time-sensitive rail, and below Trending it
+        // sat ~700px down — reachable only by scrolling (Rich, 2026-09-19).
         _buildEventRail('This weekend', notInDeck(_thisWeekendEvents),
             subtitle: 'The next few days'),
+        _buildEventRail('Trending', notInDeck(_trendingEvents),
+            subtitle: 'Selling fast right now'),
         _buildEventRail('Free', notInDeck(_freeEvents),
             subtitle: 'No ticket needed'),
         _buildSectionHeader('All events'),

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:shimmer/shimmer.dart';
 
+import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/features/home/widgets/create_post_modal.dart';
 import 'package:bitemates/features/home/widgets/social_post_card.dart';
 import 'package:bitemates/features/home/widgets/spotlight_stories_tray.dart';
 import 'package:bitemates/features/home/widgets/zoom_from_rect_route.dart';
@@ -121,6 +123,7 @@ class FeedScreenState extends State<FeedScreen>
     _tabController.addListener(_onTabChanged);
     _scrollController.addListener(_onScroll);
     _getUserLocation();
+    _loadOwnAvatar();
 
     // Start listening for notifications (Realtime Red Dot)
     NotificationService().subscribeToNotifications();
@@ -386,7 +389,13 @@ class FeedScreenState extends State<FeedScreen>
         final newPosts = result['posts'] as List<Map<String, dynamic>>;
         if (newPosts.isNotEmpty) {
           setState(() {
-            _socialPosts.addAll(newPosts);
+            // Dedupe on append. A ranked feed's sort key can shift between
+            // page fetches (a new post by an author moves their older posts
+            // a step back), so a post can legitimately straddle a page
+            // boundary. Showing it twice is the wrong answer to that.
+            final seen = _socialPosts.map((p) => p['id']).toSet();
+            _socialPosts.addAll(
+                newPosts.where((p) => !seen.contains(p['id'])));
             _hasMore = result['hasMore'] as bool? ?? false;
             _nextCursor = result['nextCursor'] as String?;
             _nextCursorId = result['nextCursorId'] as String?;
@@ -1141,6 +1150,12 @@ class FeedScreenState extends State<FeedScreen>
                       ),
                     ),
 
+                  // 5. "Start a thread…" bar — back by request (Rich,
+                  // 2026-09-19). It was dropped on 2026-08-24 (59266ad) when
+                  // the FAB took over post creation; the FAB is still there,
+                  // this is the in-feed prompt on top of it.
+                  _buildThreadCreationBar(),
+
                   // 6. Threads Feed
                   if (postsToShow.isEmpty && !_isLoading)
                     SliverFillRemaining(
@@ -1337,6 +1352,140 @@ class FeedScreenState extends State<FeedScreen>
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _ownAvatarUrl;
+
+  /// Same resolution chain the feed RPC uses for an author's avatar:
+  /// users.avatar_url → primary user_photo → latest user_photo → the
+  /// partner's profile photo. users.avatar_url alone is NULL for most
+  /// accounts (photos live in user_photos), and for organizer accounts the
+  /// only photo anywhere is partners.profile_photo_url.
+  Future<void> _loadOwnAvatar() async {
+    final uid = SupabaseConfig.client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final c = SupabaseConfig.client;
+      String? url = (await c
+          .from('users')
+          .select('avatar_url')
+          .eq('id', uid)
+          .maybeSingle())?['avatar_url'] as String?;
+
+      if (url == null || url.isEmpty) {
+        final photos = await c
+            .from('user_photos')
+            .select('photo_url, is_primary, uploaded_at')
+            .eq('user_id', uid)
+            .order('is_primary', ascending: false)
+            .order('uploaded_at', ascending: false)
+            .limit(1);
+        if ((photos as List).isNotEmpty) {
+          url = photos.first['photo_url'] as String?;
+        }
+      }
+
+      if (url == null || url.isEmpty) {
+        final partner = await c
+            .from('partners')
+            .select('profile_photo_url')
+            .eq('user_id', uid)
+            .not('profile_photo_url', 'is', null)
+            .limit(1)
+            .maybeSingle();
+        url = partner?['profile_photo_url'] as String?;
+      }
+
+      if (mounted) setState(() => _ownAvatarUrl = url);
+    } catch (_) {}
+  }
+
+  /// Same route the FAB uses (main_navigation_screen._openCreatePost), so the
+  /// composer looks and moves identically from either entry point.
+  Future<void> _showCreatePost() async {
+    final result = await Navigator.of(context).push<Map<String, dynamic>?>(
+      PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: true,
+        barrierColor: Colors.black54,
+        transitionDuration: const Duration(milliseconds: 500),
+        reverseTransitionDuration: const Duration(milliseconds: 400),
+        pageBuilder: (_, __, ___) => const CreatePostModal(),
+        transitionsBuilder: (_, animation, __, child) => SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+              .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+          child: child,
+        ),
+      ),
+    );
+    // Optimistic: show it at the top now, then let the refresh replace it
+    // with the server's copy (likes, top_likers, feed_cursor).
+    if (result != null && mounted) {
+      setState(() => _socialPosts.insert(0, result));
+      _loadSocialPosts();
+    }
+  }
+
+  Widget _buildThreadCreationBar() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    return SliverToBoxAdapter(
+      child: GestureDetector(
+        onTap: _showCreatePost,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.12)
+                    : Colors.black.withValues(alpha: 0.06),
+              ),
+              boxShadow: isDark
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.05),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.grey[300],
+                  backgroundImage: (_ownAvatarUrl != null && _ownAvatarUrl!.isNotEmpty)
+                      ? NetworkImage(_ownAvatarUrl!)
+                      : null,
+                  child: (_ownAvatarUrl == null || _ownAvatarUrl!.isEmpty)
+                      ? const Icon(Icons.person, size: 18, color: Colors.white)
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Start a thread…',
+                    style: TextStyle(
+                      color: theme.textTheme.bodySmall?.color,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                Icon(Icons.image_outlined,
+                    color: theme.textTheme.bodySmall?.color, size: 20),
+              ],
+            ),
           ),
         ),
       ),

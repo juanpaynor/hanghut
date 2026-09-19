@@ -20,6 +20,7 @@ import 'package:bitemates/core/services/weather_effects_preference.dart';
 import 'package:bitemates/features/host/screens/host_apply_screen.dart';
 import 'package:bitemates/features/host/screens/host_pending_screen.dart';
 import 'package:bitemates/features/host/screens/host_dashboard_screen.dart';
+import 'package:bitemates/features/support/screens/support_inbox_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -377,9 +378,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: Theme.of(context).iconTheme.color,
                 ),
                 title: const Text('Contact Support'),
+                subtitle: const Text('Chat with us — we reply within a day'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _launchUrl(
-                  'mailto:support@bitemates.app?subject=Support%20Request',
+                // Was a mailto: to the old bitemates.app domain, which left no
+                // record on either side and no way for us to answer in-app.
+                // Lands on the support inbox (all conversations, continue or
+                // start new) rather than straight into a thread, so a user
+                // can see and manage what they have already asked.
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const SupportInboxScreen(),
+                  ),
                 ),
               ),
               ListTile(

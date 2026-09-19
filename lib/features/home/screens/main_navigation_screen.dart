@@ -729,8 +729,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
     // Compact-on-scroll: bar shrinks width-inward (centered), labels collapse.
     // Height/stackHeight stay constant so the speed-dial geometry is unaffected.
-    final availableWidth = MediaQuery.of(context).size.width - 32;
-    final compactWidth = (availableWidth * 0.66).clamp(260.0, availableWidth);
+    // Floored at 0: MediaQuery can report a zero-size view on a frame (cold
+    // launch from a push, before the window has metrics), and a negative
+    // width would fail inside AnimatedContainer instead.
+    final availableWidth =
+        math.max(0.0, MediaQuery.of(context).size.width - 32);
+    // clamp() THROWS when lower > upper, so a fixed 260 floor crashed every
+    // frame where the view was narrower than 292 — fatal in the 1.5.0+41 iOS
+    // release (Sentry 08AA7E58). The floor is capped to what is available.
+    final compactWidth = (availableWidth * 0.66)
+        .clamp(math.min(260.0, availableWidth), availableWidth)
+        .toDouble();
 
     return Positioned(
       bottom: bottomInset + 12,

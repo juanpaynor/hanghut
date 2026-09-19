@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 
@@ -80,6 +81,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
   // Immersive (media-forward) card carousel state.
   final PageController _carouselController = PageController();
   int _carouselIndex = 0;
+  bool _captionExpanded = false;
 
   // Inline video playback
   VideoPlayerController? _videoController;
@@ -844,134 +846,178 @@ class _SocialPostCardState extends State<SocialPostCard> {
       }
     }
 
+    // Restructured 2026-09-19 to match the event card: media on top, WHOLE
+    // (contain on a backdrop), text below it. The overlay version capped the
+    // caption at two lines with an ellipsis and tapping opened the image, so
+    // a long caption on a GIF post was simply unreadable — and the GIF itself
+    // was cropped to 3:4, which mangles most of them (square or landscape).
+    final backdrop = (gifUrl != null && gifUrl.isNotEmpty)
+        // A blurred GIF would animate the whole backdrop every frame; a flat
+        // dark ground behind a GIF is the cheaper and calmer choice.
+        ? Container(color: const Color(0xFF15131E))
+        : RepaintBoundary(
+            child: ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(
+                  sigmaX: 28, sigmaY: 28, tileMode: TileMode.clamp),
+              child: CachedNetworkImage(
+                imageUrl: images.first,
+                fit: BoxFit.cover,
+                memCacheWidth: 64,
+                placeholder: (_, __) => Container(color: Colors.grey[850]),
+                errorWidget: (_, __, ___) => Container(color: Colors.grey[850]),
+              ),
+            ),
+          );
+
+    Widget media;
+    if (gifUrl != null && gifUrl.isNotEmpty) {
+      media = Image.network(
+        gifUrl,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => imgPlaceholder(),
+      );
+    } else if (multi) {
+      media = PageView.builder(
+        controller: _carouselController,
+        onPageChanged: (i) => setState(() => _carouselIndex = i),
+        itemCount: images.length,
+        itemBuilder: (_, i) => CachedNetworkImage(
+          imageUrl: ImageUrl.capped(images[i], 1200),
+          fit: BoxFit.contain,
+          memCacheWidth: 1200,
+          placeholder: (_, __) => const SizedBox.shrink(),
+          errorWidget: (_, __, ___) => imgPlaceholder(),
+        ),
+      );
+    } else {
+      media = CachedNetworkImage(
+        imageUrl: ImageUrl.capped(images.first, 1200),
+        fit: BoxFit.contain,
+        memCacheWidth: 1200,
+        placeholder: (_, __) => const SizedBox.shrink(),
+        errorWidget: (_, __, ___) => imgPlaceholder(),
+      );
+    }
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      padding: const EdgeInsets.only(bottom: 20),
       child: GestureDetector(
-        onTap: openMedia,
         onDoubleTap: () {
           if (!_isLiked) _handleLike();
         },
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: AspectRatio(
-            aspectRatio: 3 / 4,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Media
-                if (gifUrl != null && gifUrl.isNotEmpty)
-                  Image.network(
-                    gifUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => imgPlaceholder(),
-                  )
-                else if (multi)
-                  PageView.builder(
-                    controller: _carouselController,
-                    onPageChanged: (i) => setState(() => _carouselIndex = i),
-                    itemCount: images.length,
-                    itemBuilder: (_, i) => CachedNetworkImage(
-                      imageUrl: ImageUrl.capped(images[i], 1200),
-                      fit: BoxFit.cover,
-                      memCacheWidth: 1200,
-                      placeholder: (_, __) => imgPlaceholder(),
-                      errorWidget: (_, __, ___) => imgPlaceholder(),
-                    ),
-                  )
-                else
-                  CachedNetworkImage(
-                    imageUrl: ImageUrl.capped(images.first, 1200),
-                    fit: BoxFit.cover,
-                    memCacheWidth: 1200,
-                    placeholder: (_, __) => imgPlaceholder(),
-                    errorWidget: (_, __, ___) => imgPlaceholder(),
-                  ),
-
-                // Legibility scrims (top for pill/menu, bottom for caption/rail).
-                // Ramps to near-opaque at the bottom so white text stays legible
-                // even over a light/white poster.
-                const IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x73000000),
-                          Color(0x00000000),
-                          Color(0x80000000),
-                          Color(0xF7000000),
-                        ],
-                        stops: [0.0, 0.30, 0.60, 1.0],
-                      ),
-                    ),
-                  ),
+        child: ClipRect(
+          child: Stack(
+            children: [
+              Positioned.fill(child: backdrop),
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: ColoredBox(color: Color(0x59000000)),
                 ),
-
-                // Author pill
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  right: 58,
-                  child: _immersiveAuthorPill(
-                      displayName, avatarUrl, user, postTime),
-                ),
-
-                // More menu
-                Positioned(
-                  top: 12,
-                  right: 10,
-                  child: _immersiveMoreMenu(displayName),
-                ),
-
-                // Vertical action rail
-                Positioned(right: 8, bottom: 22, child: _immersiveActionRail()),
-
-                // Carousel dots
-                if (multi)
-                  Positioned(
-                    left: 16,
-                    bottom: content.isNotEmpty ? 58 : 18,
-                    child: Row(
-                      children: List.generate(images.length, (i) {
-                        final active = i == _carouselIndex;
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: active ? 18 : 6,
-                          height: 6,
-                          margin: const EdgeInsets.only(right: 4),
-                          decoration: BoxDecoration(
-                            color: active ? Colors.white : Colors.white54,
-                            borderRadius: BorderRadius.circular(3),
+              ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ── Media area. Tap opens the image full-screen (or the
+                  // story). Only the author pill, the rail and the carousel
+                  // dots sit over it.
+                  SizedBox(
+                    height: _posterAreaHeight(context),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        GestureDetector(onTap: openMedia, child: media),
+                        const IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [Color(0x80000000), Color(0x00000000)],
+                                stops: [0.0, 0.3],
+                              ),
+                            ),
                           ),
-                        );
-                      }),
+                        ),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          right: 58,
+                          child: _immersiveAuthorPill(
+                              displayName, avatarUrl, user, postTime),
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 10,
+                          child: _immersiveMoreMenu(displayName),
+                        ),
+                        Positioned(
+                          right: 8,
+                          bottom: 12,
+                          child: _immersiveActionRail(),
+                        ),
+                        if (multi)
+                          Positioned(
+                            left: 16,
+                            bottom: 14,
+                            child: Row(
+                              children: List.generate(images.length, (i) {
+                                final active = i == _carouselIndex;
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  width: active ? 18 : 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.only(right: 4),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        active ? Colors.white : Colors.white54,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                );
+                              }),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
 
-                // Caption
-                if (content.isNotEmpty)
-                  Positioned(
-                    left: 16,
-                    right: 60,
-                    bottom: 16,
-                    child: Text(
-                      content,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14.5,
-                        height: 1.3,
-                        fontWeight: FontWeight.w500,
-                        shadows: [
-                          Shadow(color: Color(0x99000000), blurRadius: 8),
+                  // ── Below the media: who liked it, then the caption in
+                  // full. Collapsed to three lines with "more" when long,
+                  // never silently cut.
+                  if (_likeCount > 0 || content.isNotEmpty) ...[
+                    const Divider(
+                        height: 1, thickness: 1, color: Color(0x1FFFFFFF)),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_likeCount > 0) ...[
+                            LikeFacepile(
+                              postId: widget.post['id'].toString(),
+                              likeCount: _likeCount,
+                              onDark: true,
+                              initialLikers: (widget.post['top_likers'] as List?)
+                                  ?.map((e) =>
+                                      Map<String, dynamic>.from(e as Map))
+                                  .toList(),
+                            ),
+                            if (content.isNotEmpty) const SizedBox(height: 8),
+                          ],
+                          if (content.isNotEmpty)
+                            _ExpandableCaption(
+                              text: content,
+                              expanded: _captionExpanded,
+                              onToggle: () => setState(
+                                  () => _captionExpanded = !_captionExpanded),
+                            ),
                         ],
                       ),
                     ),
-                  ),
-              ],
-            ),
+                  ],
+                ],
+              ),
+            ],
           ),
         ),
       ),
@@ -1002,185 +1048,254 @@ class _SocialPostCardState extends State<SocialPostCard> {
       if (event != null) EventDetailModal.show(context, event);
     }
 
+    // Edge-to-edge and uncropped (Rich, 2026-09-19): event posters are
+    // designed as a whole — a 3:4 crop lopped the headline off a 1:1 poster
+    // and the date strip off a 4:5 one. The poster now fits INSIDE its area
+    // on a blurred copy of itself, and the info block sits BELOW it rather
+    // than over it: with the whole artwork visible there is no dark cropped
+    // band left for text to live on, and laying the title and price over the
+    // poster's own footer was unreadable both ways.
+    final infoBlock = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (whenStr.isNotEmpty)
+            Text(
+              whenStr.toUpperCase(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.0,
+              ),
+            ),
+          const SizedBox(height: 5),
+          Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              height: 1.08,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+            ),
+          ),
+          if (venue.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.location_on_outlined,
+                    size: 14, color: Colors.white70),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    venue,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+
+          // Who liked this, directly above the price/CTA row so the social
+          // proof sits next to the buying decision. Renders nothing at 0.
+          if (_likeCount > 0) ...[
+            const SizedBox(height: 8),
+            LikeFacepile(
+              postId: widget.post['id'].toString(),
+              likeCount: _likeCount,
+              onDark: true,
+              initialLikers: (widget.post['top_likers'] as List?)
+                  ?.map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList(),
+            ),
+          ],
+
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: isFree ? const Color(0xFF22A06B) : Colors.white,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Text(
+                  isFree ? 'FREE' : '₱${(price as num).toStringAsFixed(0)}',
+                  style: TextStyle(
+                    color: isFree ? Colors.white : const Color(0xFF15131E),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: open,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Text(
+                    'Get Tickets  →',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      // Clear gap of page background between cards. With no side margins and
+      // no rounded frame, this gap is the ONLY thing separating one card from
+      // the next, so it is deliberately larger than the old 8/12.
+      padding: const EdgeInsets.only(bottom: 20),
       child: GestureDetector(
         onTap: open,
         onDoubleTap: () {
           if (!_isLiked) _handleLike();
         },
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: AspectRatio(
-            aspectRatio: 3 / 4,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                CachedNetworkImage(
-                  imageUrl: ImageUrl.capped(cover, 1200),
-                  fit: BoxFit.cover,
-                  // Cap decode size — a full-res poster decoded at native size is
-                  // a common scroll-jank source in a phone-width card.
-                  memCacheWidth: 1200,
-                  placeholder: (_, __) => Container(color: Colors.grey[800]),
-                  errorWidget: (_, __, ___) => Container(color: Colors.grey[800]),
-                ),
-
-                // Stronger bottom scrim — the info block needs more contrast,
-                // and must stay legible over light/white event posters.
-                const IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x73000000),
-                          Color(0x00000000),
-                          Color(0x80000000),
-                          Color(0xF7000000),
-                        ],
-                        stops: [0.0, 0.28, 0.58, 1.0],
-                      ),
-                    ),
+        // ClipRect is load-bearing, not cosmetic: a blur paints OUTSIDE its
+        // child's bounds by ~3σ (≈84px here), and Stack does not clip paint
+        // overflow — only layout overflow. Without this the backdrop haze
+        // bled over the stories tray above and into the card below.
+        child: ClipRect(
+          child: Stack(
+          children: [
+            // Backdrop under BOTH the poster and the info block: the same
+            // poster, decoded tiny and blurred, so the letterbox and the text
+            // panel read as the poster's own colours rather than a grey slab.
+            // Decode width is what keeps this cheap — the blur runs over the
+            // painted area regardless, so the RepaintBoundary stops it
+            // re-rasterising on every scroll frame.
+            Positioned.fill(
+              child: RepaintBoundary(
+                child: ImageFiltered(
+                  imageFilter: ui.ImageFilter.blur(
+                      sigmaX: 28, sigmaY: 28, tileMode: TileMode.clamp),
+                  child: CachedNetworkImage(
+                    imageUrl: cover,
+                    fit: BoxFit.cover,
+                    memCacheWidth: 64,
+                    placeholder: (_, __) => Container(color: Colors.grey[850]),
+                    errorWidget: (_, __, ___) =>
+                        Container(color: Colors.grey[850]),
                   ),
                 ),
+              ),
+            ),
+            const Positioned.fill(
+              child: IgnorePointer(
+                child: ColoredBox(color: Color(0x59000000)),
+              ),
+            ),
 
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  right: 58,
-                  child: _immersiveAuthorPill(
-                      displayName, avatarUrl, user, postTime),
-                ),
-                Positioned(
-                  top: 12,
-                  right: 10,
-                  child: _immersiveMoreMenu(displayName),
-                ),
-                // Rail sits higher so it never collides with the info block.
-                Positioned(right: 8, bottom: 150, child: _immersiveActionRail()),
-
-                // Event info block
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 16,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── Poster area: the artwork, whole. Only the author pill and
+                // the action rail sit over it, at the edges.
+                //
+                // Sized from the SCREEN HEIGHT, not the width: a 3:4 box on a
+                // full-width card is 524px on a 393-wide phone, and with the
+                // info block under it one card outgrew a small screen. The
+                // poster fits inside whatever box it gets (contain), so a
+                // shorter box just means slimmer side bands on a tall poster
+                // — nothing is cropped either way.
+                SizedBox(
+                  height: _posterAreaHeight(context),
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      if (whenStr.isNotEmpty)
-                        Text(
-                          whenStr.toUpperCase(),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.0,
-                            shadows: [
-                              Shadow(color: Color(0x99000000), blurRadius: 6),
-                            ],
+                      CachedNetworkImage(
+                        imageUrl: ImageUrl.capped(cover, 1200),
+                        fit: BoxFit.contain,
+                        // Cap decode size — a full-res poster decoded at native
+                        // size is a common scroll-jank source in a phone-width
+                        // card.
+                        memCacheWidth: 1200,
+                        placeholder: (_, __) => const SizedBox.shrink(),
+                        errorWidget: (_, __, ___) =>
+                            Container(color: Colors.grey[800]),
+                      ),
+                      // Top scrim only, for the author pill.
+                      const IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Color(0x80000000), Color(0x00000000)],
+                              stops: [0.0, 0.3],
+                            ),
                           ),
-                        ),
-                      const SizedBox(height: 5),
-                      Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 23,
-                          height: 1.08,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.5,
-                          shadows: [
-                            Shadow(color: Color(0x99000000), blurRadius: 10),
-                          ],
                         ),
                       ),
-                      if (venue.isNotEmpty) ...[
-                        const SizedBox(height: 7),
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on_outlined,
-                                size: 14, color: Colors.white70),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                venue,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                  shadows: [
-                                    Shadow(
-                                        color: Color(0x99000000),
-                                        blurRadius: 6),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(height: 13),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: isFree
-                                  ? const Color(0xFF22A06B)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(11),
-                            ),
-                            child: Text(
-                              isFree
-                                  ? 'FREE'
-                                  : '₱${(price as num).toStringAsFixed(0)}',
-                              style: TextStyle(
-                                color:
-                                    isFree ? Colors.white : const Color(0xFF15131E),
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          GestureDetector(
-                            onTap: open,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 15, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: accent,
-                                borderRadius: BorderRadius.circular(11),
-                              ),
-                              child: const Text(
-                                'Get Tickets  →',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                      Positioned(
+                        top: 12,
+                        left: 12,
+                        right: 58,
+                        child: _immersiveAuthorPill(
+                            displayName, avatarUrl, user, postTime),
+                      ),
+                      Positioned(
+                        top: 12,
+                        right: 10,
+                        child: _immersiveMoreMenu(displayName),
+                      ),
+                      Positioned(
+                        right: 8,
+                        bottom: 12,
+                        child: _immersiveActionRail(),
                       ),
                     ],
                   ),
                 ),
+
+                // ── Info block: below the artwork, on the blurred backdrop.
+                // A hairline separates "the poster" from "our chrome".
+                const Divider(height: 1, thickness: 1, color: Color(0x1FFFFFFF)),
+                infoBlock,
               ],
             ),
+          ],
           ),
         ),
       ),
     );
+  }
+
+  /// Roughly half of what is left after the header, tabs and nav bar —
+  /// enough that the poster is the hero, little enough that the info block
+  /// and the top of the next card are on screen with it. Never taller than
+  /// the width-derived 3:4 box, so a large phone does not get a giant one.
+  static double _posterAreaHeight(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final usable = mq.size.height - mq.padding.top - mq.padding.bottom;
+    final byHeight = usable * 0.52;
+    final byWidth = mq.size.width * 4 / 3;
+    return byHeight.clamp(300.0, byWidth);
   }
 
   Widget _immersiveAuthorPill(String displayName, String? avatarUrl,
@@ -1272,8 +1387,22 @@ class _SocialPostCardState extends State<SocialPostCard> {
     );
   }
 
+  /// Like / comment / share, stacked at the poster's edge.
+  ///
+  /// Sits in its own translucent pill rather than bare on the artwork: a
+  /// shadow alone made the white icons vanish on any poster with white
+  /// graphics in that corner — most of them, as it turns out. The pill costs
+  /// no blur (a per-card BackdropFilter in a scrolling list is not free) and
+  /// reads on a white poster, a black one and a photo alike.
   Widget _immersiveActionRail() {
-    return Column(
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0x8A000000),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: const Color(0x33FFFFFF), width: 0.8),
+      ),
+      child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         _railAction(
@@ -1307,6 +1436,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
           ),
         ],
       ],
+      ),
     );
   }
 
@@ -1325,8 +1455,8 @@ class _SocialPostCardState extends State<SocialPostCard> {
           Icon(
             icon,
             color: color,
-            size: 29,
-            shadows: const [Shadow(color: Color(0x99000000), blurRadius: 8)],
+            size: 26,
+            shadows: const [Shadow(color: Color(0x66000000), blurRadius: 4)],
           ),
           if (label.isNotEmpty) ...[
             const SizedBox(height: 3),
@@ -2095,5 +2225,71 @@ Future<void> _launchVideoExternally(String url) async {
   final uri = Uri.parse(url);
   if (await canLaunchUrl(uri)) {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
+
+/// A caption that collapses to a few lines and offers "more" only when it
+/// actually overflows — measured, not guessed from length, so a three-word
+/// caption never shows a toggle and a long one never gets cut without one.
+class _ExpandableCaption extends StatelessWidget {
+  final String text;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  const _ExpandableCaption({
+    required this.text,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  static const _collapsedLines = 3;
+  static const _style = TextStyle(
+    color: Colors.white,
+    fontSize: 14.5,
+    height: 1.35,
+    fontWeight: FontWeight.w500,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: _style),
+          maxLines: _collapsedLines,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final overflows = painter.didExceedMaxLines;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              text,
+              style: _style,
+              maxLines: expanded ? null : _collapsedLines,
+              overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            ),
+            if (overflows)
+              GestureDetector(
+                onTap: onToggle,
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    expanded ? 'less' : 'more',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 }

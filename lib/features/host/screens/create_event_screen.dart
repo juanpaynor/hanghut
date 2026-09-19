@@ -846,7 +846,18 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: Colors.grey[300]!),
                 image: coverProvider != null
-                    ? DecorationImage(image: coverProvider, fit: BoxFit.cover)
+                    ? DecorationImage(
+                        image: coverProvider,
+                        fit: BoxFit.cover,
+                        // A partner-hosted cover (#324) that no longer
+                        // resolves would otherwise leave the editor showing
+                        // an empty box with no way to tell why.
+                        onError: (_, __) {
+                          if (mounted && _coverFile == null) {
+                            setState(() => _coverUrl = null);
+                          }
+                        },
+                      )
                     : null,
               ),
               child: coverProvider == null
@@ -914,7 +925,15 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
               return Stack(fit: StackFit.expand, children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: Image(image: provider, fit: BoxFit.cover),
+                  child: Image(
+                    image: provider,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: Colors.grey[200],
+                      child: const Icon(Icons.broken_image_outlined,
+                          color: Colors.grey),
+                    ),
+                  ),
                 ),
                 Positioned(
                   top: 4,

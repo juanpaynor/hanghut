@@ -10,6 +10,7 @@ import 'package:bitemates/core/services/direct_chat_service.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/utils/image_url.dart';
+import 'package:bitemates/features/support/screens/support_inbox_screen.dart';
 
 /// Unified inbox: DMs, groups, hangouts and trips in ONE recency-sorted list,
 /// with filter chips (All / Unread / Groups / DMs) and a floating +New action.
@@ -115,10 +116,46 @@ class _TabbedInboxState extends State<TabbedInbox> {
     setState(() => _groupAvatars.addAll(avatars));
   }
 
+  /// Every support ticket is its own chat_inbox row (chat_id = ticket id,
+  /// written by web's trigger). Shown raw, a user who contacted support three
+  /// times sees three identical "HangHut Support" conversations, with finished
+  /// ones still looking like chats waiting for a reply. Collapse them into ONE
+  /// row that carries the newest preview and the summed unread, sitting where
+  /// the newest ticket would have, and open the support inbox from it.
+  List<Map<String, dynamic>> get _collapsedChats {
+    final support = _chats.where((c) => c['chat_type'] == 'support').toList();
+    if (support.length <= 1) return _chats;
+
+    // _chats arrives newest-activity-first, so the first support row is the
+    // one whose slot the merged row takes.
+    final newest = support.first;
+    var unread = 0;
+    var hasUnread = false;
+    for (final c in support) {
+      unread += (c['unread_count'] as int?) ?? 0;
+      hasUnread = hasUnread || c['has_unread'] == true;
+    }
+    final merged = Map<String, dynamic>.from(newest)
+      ..['unread_count'] = unread
+      ..['has_unread'] = hasUnread;
+
+    final out = <Map<String, dynamic>>[];
+    var placed = false;
+    for (final c in _chats) {
+      if (c['chat_type'] != 'support') {
+        out.add(c);
+      } else if (!placed) {
+        out.add(merged);
+        placed = true;
+      }
+    }
+    return out;
+  }
+
   // ── Filtered + searched view of the loaded chats
   List<Map<String, dynamic>> get _visibleChats {
     final q = _search.toLowerCase();
-    return _chats.where((c) {
+    return _collapsedChats.where((c) {
       switch (_filter) {
         case _InboxFilter.all:
           break;
@@ -172,6 +209,8 @@ class _TabbedInboxState extends State<TabbedInbox> {
         return Icons.flight;
       case 'person':
         return Icons.person;
+      case 'support':
+        return Icons.support_agent;
       default:
         return Icons.chat_bubble_outline;
     }
@@ -247,6 +286,20 @@ class _TabbedInboxState extends State<TabbedInbox> {
 
   Future<void> _openChat(Map<String, dynamic> chat) async {
     final type = chat['chat_type'];
+
+    // Support rows are pointers: the bodies live in web's support_messages,
+    // not in our `messages` table, so they cannot open in ChatScreen. They
+    // land on the support inbox — all of the user's tickets, active on top,
+    // finished below — rather than straight into one thread, because the row
+    // may stand for several tickets (see _collapsedChats).
+    if (type == 'support') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SupportInboxScreen()),
+      );
+      _loadChats(refresh: true);
+      return;
+    }
 
     // Groups open the full-screen group chat; details/activities live behind
     // the ⓘ button inside it.

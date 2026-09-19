@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:bitemates/core/utils/image_url.dart';
+import 'package:bitemates/features/support/screens/support_entry.dart';
+import 'package:bitemates/features/support/models/support_models.dart';
 
 class TicketCard extends StatelessWidget {
   final Ticket ticket;
@@ -403,6 +405,21 @@ class _TicketDetailModal extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+
+                  // Support, from the surface the problem is actually about.
+                  // Pre-fills the category and hands the agent the event and
+                  // ticket number, so nobody has to ask "which ticket?".
+                  const SizedBox(height: 16),
+                  TextButton.icon(
+                    onPressed: () => SupportEntry.open(
+                      context,
+                      category: SupportCategory.tickets,
+                      subject: 'Ticket issue - ${ticket.eventTitle}',
+                      openedFromPath: 'app/ticket/${ticket.id}',
+                    ),
+                    icon: const Icon(Icons.support_agent, size: 18),
+                    label: const Text('Get help with this ticket'),
                   ),
                 ],
               ),
