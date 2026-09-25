@@ -265,7 +265,9 @@ class _CreatePostModalState extends State<CreatePostModal> {
 
       if (picked.isEmpty || !mounted) return;
 
-      // Run each image through ProImageEditor so users can crop before posting
+      // Run each image through the native cropper so users can crop before
+      // posting. NOTE: this is image_cropper, not ProImageEditor — the
+      // "Changes are being applied" hang (story camera) does not apply here.
       for (final xfile in picked) {
         if (_selectedImages.length >= 4) break;
         final cropped = await _cropWithEditor(File(xfile.path));

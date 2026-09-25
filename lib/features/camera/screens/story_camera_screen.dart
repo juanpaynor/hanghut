@@ -268,6 +268,36 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
     }
   }
 
+  /// How long "Changes are being applied" may run before we take over.
+  ///
+  /// A normal capture is well under a second; this is a stuck-detector, not a
+  /// progress budget, so it is generous enough that a slow device finishes
+  /// normally.
+  static const Duration _applyDeadline = Duration(seconds: 25);
+
+  /// Releases an editor that is stuck behind its "applying changes" overlay.
+  ///
+  /// The overlay is an `OverlayEntry` on the NAVIGATOR's overlay, not part of
+  /// the editor route, so popping the route alone would leave it painted over
+  /// the app forever. Hide it first, then pop.
+  void _escapeStuckEditor(BuildContext? editorContext) {
+    try {
+      // hide() removes the entry via an animation, so `hasActiveOverlay` is
+      // still true on the next line — this must be a BOUNDED loop, never
+      // `while (hasActiveOverlay)`, which would spin forever. One per possible
+      // stacked overlay (main editor + a sub-editor) is plenty.
+      for (var i = 0; i < 3 && LoadingDialog.instance.hasActiveOverlay; i++) {
+        LoadingDialog.instance.hide();
+      }
+    } catch (e) {
+      debugPrint('⚠️ Could not hide the editor overlay: $e');
+    }
+    final ctx = editorContext;
+    if (ctx != null && ctx.mounted && Navigator.of(ctx).canPop()) {
+      Navigator.of(ctx).pop();
+    }
+  }
+
   void _navigateToPreview({File? imageFile, File? videoFile}) {
     if (!mounted) return;
 
@@ -280,35 +310,76 @@ class _StoryCameraScreenState extends State<StoryCameraScreen> {
       // the overlay stranded ("hangs on Applying changes"). We navigate to the
       // final preview afterwards, once the editor route has actually closed.
       var didComplete = false;
+      var didEscape = false;
       File? editedImage;
+      Timer? applyWatchdog;
+      BuildContext? editorContext;
+
+      void cancelWatchdog() {
+        applyWatchdog?.cancel();
+        applyWatchdog = null;
+      }
+
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => ProImageEditor.file(
-            imageFile,
-            callbacks: ProImageEditorCallbacks(
-              onImageEditingComplete: (Uint8List bytes) async {
-                didComplete = true;
-                try {
-                  final Directory tempDir = await getTemporaryDirectory();
-                  editedImage = await File(
-                    '${tempDir.path}/edited_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
-                  ).writeAsBytes(bytes);
-                } catch (e) {
-                  debugPrint('❌ Saving edited image failed: $e');
-                }
-              },
-              // v12 done-path only closes the editor when onCloseEditor is
-              // provided; this also handles the cancel/back case.
-              onCloseEditor: (_) => Navigator.pop(context),
-            ),
-          ),
+          builder: (context) {
+            editorContext = context;
+            return ProImageEditor.file(
+              imageFile,
+              configs: _proEditorConfigs,
+              callbacks: ProImageEditorCallbacks(
+                // Done pressed: the editor now shows "Changes are being
+                // applied" and waits on a capture that has NO timeout of its
+                // own (there is not a single `.timeout(` in the package). If
+                // that capture never returns, the overlay stays up forever and
+                // the route never closes — the bug users report. Give it a
+                // deadline we control.
+                onImageEditingStarted: () {
+                  cancelWatchdog();
+                  applyWatchdog = Timer(_applyDeadline, () {
+                    if (didComplete || didEscape) return;
+                    didEscape = true;
+                    debugPrint(
+                      '⏱️ Image capture exceeded ${_applyDeadline.inSeconds}s — '
+                      'releasing the editor and keeping the original.',
+                    );
+                    _escapeStuckEditor(editorContext);
+                  });
+                },
+                onImageEditingComplete: (Uint8List bytes) async {
+                  didComplete = true;
+                  cancelWatchdog();
+                  try {
+                    final Directory tempDir = await getTemporaryDirectory();
+                    editedImage = await File(
+                      '${tempDir.path}/edited_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
+                    ).writeAsBytes(bytes);
+                  } catch (e) {
+                    debugPrint('❌ Saving edited image failed: $e');
+                  }
+                },
+                // v12 done-path only closes the editor when onCloseEditor is
+                // provided; this also handles the cancel/back case.
+                onCloseEditor: (_) => Navigator.pop(context),
+              ),
+            );
+          },
         ),
       ).then((_) {
+        cancelWatchdog();
         if (!mounted) return;
         final img = editedImage;
         if (img != null) {
           _pushToFinalPreview(imageFile: img);
+        } else if (didEscape) {
+          // The edits are gone, but the photo is not. Continuing with the
+          // original beats stranding the user on a frozen overlay.
+          _showErrorSnackBar(
+            'Editing took too long on this device — continuing with the '
+            'original photo.',
+          );
+          _pushToFinalPreview(imageFile: imageFile);
         } else if (didComplete) {
           _showErrorSnackBar('Could not process the image. Please try again.');
         }
@@ -1043,7 +1114,40 @@ class _VideoEditorScreen extends StatefulWidget {
   State<_VideoEditorScreen> createState() => _VideoEditorScreenState();
 }
 
+/// Editor configuration tuned against the "Changes are being applied" hang.
+///
+/// `enableBackgroundGeneration` pre-renders the image in a capture isolate
+/// after every edit, and on Done the editor does
+/// `await backgroundScreenshot.completer.future` with NO timeout
+/// (`content_recorder_controller.dart` — the package contains no `.timeout(`
+/// at all). If that isolate never answers — killed under memory pressure,
+/// spawn failed, response dropped — the completer is never completed, the
+/// overlay never hides and the route never closes. Capturing on Done instead
+/// removes that await from the path: slightly slower to finish, but it cannot
+/// strand the user.
+///
+/// Shared by both editors; the video editor reaches the same capture code.
+final ProImageEditorConfigs _proEditorConfigs = ProImageEditorConfigs(
+  imageGeneration: const ImageGenerationConfigs(
+    enableBackgroundGeneration: false,
+  ),
+);
+
 class _VideoEditorScreenState extends State<_VideoEditorScreen> {
+  /// Opening the file (metadata + first frame) should be near-instant; this
+  /// only catches a decode that never returns.
+  static const Duration _videoInitDeadline = Duration(seconds: 20);
+
+  /// Rendering re-encodes the whole clip, so this is minutes, not seconds —
+  /// but it is still bounded. Exceeding it falls back to the raw video, which
+  /// is the same fallback iOS already takes.
+  static const Duration _renderDeadline = Duration(minutes: 3);
+
+  /// Whole-apply deadline for the video editor: the capture plus the render,
+  /// with headroom over [_renderDeadline] so a legitimately slow render is not
+  /// cut off by this instead.
+  static const Duration _videoApplyDeadline = Duration(minutes: 4);
+
   final _editorKey = GlobalKey<ProImageEditorState>();
   ProVideoController? _proVideoController;
   VideoPlayerController? _videoController;
@@ -1055,25 +1159,43 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
     _initializeEditor();
   }
 
+  /// Set when the editor could not be opened at all, so the screen can offer a
+  /// way out instead of spinning forever.
+  String? _initError;
+
   Future<void> _initializeEditor() async {
-    final video = EditorVideo.file(widget.videoFile.path);
-    _videoMetadata = await ProVideoEditor.instance.getMetadata(video);
+    try {
+      final video = EditorVideo.file(widget.videoFile.path);
+      // Both calls below decode the file through platform codecs and neither
+      // has a timeout of its own. On an unsupported or truncated recording
+      // they can hang, and the screen then shows a spinner with no way out.
+      _videoMetadata = await ProVideoEditor.instance
+          .getMetadata(video)
+          .timeout(_videoInitDeadline);
 
-    _videoController = VideoPlayerController.file(widget.videoFile);
-    await _videoController!.initialize();
-    _videoController!.setLooping(true);
-    _videoController!.play();
+      _videoController = VideoPlayerController.file(widget.videoFile);
+      await _videoController!.initialize().timeout(_videoInitDeadline);
+      _videoController!.setLooping(true);
+      _videoController!.play();
 
-    _proVideoController = ProVideoController(
-      videoPlayer: _buildVideoPlayer(),
-      initialResolution: _videoMetadata.resolution,
-      videoDuration: _videoMetadata.duration,
-      fileSize: _videoMetadata.fileSize,
-    );
+      _proVideoController = ProVideoController(
+        videoPlayer: _buildVideoPlayer(),
+        initialResolution: _videoMetadata.resolution,
+        videoDuration: _videoMetadata.duration,
+        fileSize: _videoMetadata.fileSize,
+      );
 
-    _videoController!.addListener(() {
-      _proVideoController?.setPlayTime(_videoController!.value.position);
-    });
+      _videoController!.addListener(() {
+        _proVideoController?.setPlayTime(_videoController!.value.position);
+      });
+    } catch (e) {
+      debugPrint('❌ Could not open the video editor: $e');
+      if (mounted) {
+        setState(() => _initError =
+            'This video could not be opened for editing on this device.');
+      }
+      return;
+    }
 
     if (mounted) setState(() {});
   }
@@ -1087,11 +1209,51 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
 
   @override
   void dispose() {
+    _applyWatchdog?.cancel();
     _videoController?.dispose();
     super.dispose();
   }
 
+  Timer? _applyWatchdog;
+  bool _escaped = false;
+
+  /// Done pressed. If neither the capture nor the render reports back within
+  /// the deadline, take over rather than leaving the overlay up forever.
+  void _armApplyWatchdog() {
+    _applyWatchdog?.cancel();
+    _applyWatchdog = Timer(_videoApplyDeadline, () async {
+      if (!mounted || _escaped) return;
+      _escaped = true;
+      debugPrint('⏱️ Video apply exceeded the deadline — using raw video.');
+      try {
+        final bytes = await widget.videoFile.readAsBytes();
+        await widget.onComplete(bytes);
+      } catch (e) {
+        debugPrint('❌ Raw video fallback failed: $e');
+      }
+      if (!mounted) return;
+      _escapeEditorOverlay();
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+    });
+  }
+
+  /// The loading overlay lives on the navigator's overlay, not the route, so
+  /// popping alone would leave it painted over the app. Bounded loop: hide()
+  /// removes the entry through an animation, so `hasActiveOverlay` is still
+  /// true on the next line.
+  void _escapeEditorOverlay() {
+    try {
+      for (var i = 0; i < 3 && LoadingDialog.instance.hasActiveOverlay; i++) {
+        LoadingDialog.instance.hide();
+      }
+    } catch (e) {
+      debugPrint('⚠️ Could not hide the editor overlay: $e');
+    }
+  }
+
   Future<void> _generateVideo(CompleteParameters parameters) async {
+    _applyWatchdog?.cancel();
+    if (_escaped) return; // the watchdog already finished for us
     _videoController?.pause();
 
     try {
@@ -1128,7 +1290,9 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
       final String outputPath =
           '${directory.path}/rendered_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      await ProVideoEditor.instance.renderVideoToFile(outputPath, renderData);
+      await ProVideoEditor.instance
+          .renderVideoToFile(outputPath, renderData)
+          .timeout(_renderDeadline);
       final bytes = await File(outputPath).readAsBytes();
 
       // Safety check: if standard Media3/FFmpeg fallback produces empty/invalid file, throw
@@ -1156,6 +1320,48 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_initError != null) {
+      // A dead end with a spinner is the worst outcome; the recording is fine,
+      // only the editor could not open it, so offer to post it as it is.
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.videocam_off,
+                      color: Colors.white70, size: 44),
+                  const SizedBox(height: 14),
+                  Text(
+                    _initError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 15),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () async {
+                      final bytes = await widget.videoFile.readAsBytes();
+                      await widget.onComplete(bytes);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                    child: const Text('Use video without editing'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Back',
+                        style: TextStyle(color: Colors.white70)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (_proVideoController == null) {
       return const Scaffold(
         backgroundColor: Colors.black,
@@ -1166,7 +1372,12 @@ class _VideoEditorScreenState extends State<_VideoEditorScreen> {
     return ProImageEditor.video(
       _proVideoController!,
       key: _editorKey,
+      configs: _proEditorConfigs,
       callbacks: ProImageEditorCallbacks(
+        // The video path runs the SAME unbounded capture before
+        // onCompleteWithParameters is ever called, so it needs the same
+        // deadline as the image path.
+        onImageEditingStarted: _armApplyWatchdog,
         onCompleteWithParameters: _generateVideo,
         onCloseEditor: (editorMode) => Navigator.pop(context),
       ),
