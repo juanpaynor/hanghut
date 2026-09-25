@@ -71,6 +71,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       GlobalKey<FeedScreenState>();
   StreamSubscription<Map<String, dynamic>>? _geofenceSubscription;
 
+  /// Tabs that have been shown at least once.
+  ///
+  /// `IndexedStack` builds EVERY child, so all four tabs used to run their
+  /// `initState` on cold start — roughly 15 requests and 3 realtime
+  /// subscriptions, three quarters of it for screens the user was not looking
+  /// at. An unvisited tab is now an empty box; once visited it stays built, so
+  /// switching back is still instant and scroll position survives.
+  final Set<int> _visitedTabs = <int>{};
+
   // Live total-unread count for the chat bubble badge. Created once so we don't
   // re-subscribe to realtime on every rebuild.
   final Stream<int> _chatUnreadStream =
@@ -101,6 +110,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
+    // Only the tab we open on is built now; the rest wait until visited.
+    _visitedTabs.add(_selectedIndex);
+    // A fly-to target is a map instruction, so the map must be built to receive
+    // it regardless of which tab we land on.
+    if (widget.flyToLat != null && widget.flyToLng != null) {
+      _visitedTabs.add(0);
+    }
     _setupGeofenceListener();
     WidgetsBinding.instance.addObserver(this);
 
@@ -132,6 +148,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
 
     // Handle Deep Link for Table
     if (widget.initialTableId != null) {
+      // The target lives on the map, so that tab must exist even if we opened
+      // on another one — an unvisited tab has no state for `currentState` to
+      // find, and the link would silently do nothing.
+      _visitedTabs.add(0);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _mapScreenKey.currentState?.showTableDetails(widget.initialTableId!);
       });
@@ -281,7 +301,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           eventData: event,
           onCheckIn: () {
             setState(() {
-              _selectedIndex = 0; // Switch to Map Tab
+              _showTab(0); // Switch to Map Tab
             });
             // Small delay to ensure tab switch
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -291,6 +311,28 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         );
       }
     });
+  }
+
+  /// Switch tabs from code. Must be used instead of assigning
+  /// `_selectedIndex` directly: a tab that was never marked visited renders as
+  /// the empty placeholder, so a programmatic jump would land on a blank
+  /// screen.
+  void _showTab(int index) {
+    _selectedIndex = index;
+    _visitedTabs.add(index);
+  }
+
+  /// [_screens], with never-visited tabs replaced by an empty placeholder.
+  ///
+  /// The placeholder keeps the child count and index positions identical, so
+  /// `IndexedStack`'s index still means the same tab and element matching does
+  /// not reshuffle state between real screens.
+  List<Widget> get _lazyScreens {
+    final screens = _screens;
+    return [
+      for (int i = 0; i < screens.length; i++)
+        if (_visitedTabs.contains(i)) screens[i] else const SizedBox.shrink(),
+    ];
   }
 
   List<Widget> get _screens {
@@ -306,7 +348,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         key: _feedScreenKey,
         onJoinTable: (tableId) {
           setState(() {
-            _selectedIndex = 0;
+            _showTab(0);
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showTableDetails(tableId);
@@ -314,7 +356,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         },
         onStoryTap: (story) {
           setState(() {
-            _selectedIndex = 0;
+            _showTab(0);
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showStoryDetails(story);
@@ -322,14 +364,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         },
         onSeeAllHangouts: () {
           setState(() {
-            _selectedIndex = 0;
+            _showTab(0);
           });
         },
       ),
       ActivityScreen(
         onHangoutTap: (tableId) {
           setState(() {
-            _selectedIndex = 0;
+            _showTab(0);
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _mapScreenKey.currentState?.showTableDetails(tableId);
@@ -352,9 +394,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     HapticFeedback.selectionClick();
     navCompactNotifier.value = false;
     _scrollAccum = 0;
-    setState(() {
-      _selectedIndex = index;
-    });
+    setState(() => _showTab(index));
     // Track tab switch
     const tabNames = ['map', 'home_feed', 'activity', 'profile'];
     if (index < tabNames.length) {
@@ -377,7 +417,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               currentLng: position?.longitude,
               onTableCreated: () {
                 setState(() {
-                  _selectedIndex = 1;
+                  _showTab(1);
                 });
                 _mapScreenKey.currentState?.refreshTables();
               },
@@ -552,7 +592,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           children: [
             Positioned.fill(
               child: _wrapScrollDetector(
-                IndexedStack(index: _selectedIndex, children: _screens),
+                IndexedStack(index: _selectedIndex, children: _lazyScreens),
               ),
             ),
 

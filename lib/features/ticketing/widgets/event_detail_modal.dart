@@ -408,14 +408,17 @@ class _EventDetailModalState extends State<EventDetailModal> {
       ...widget.event.imageUrls,
     ];
 
-    final venueLocked =
-        widget.event.hideVenueUntilRegistered && !_userHasTicket;
+    // Nothing to hide for an online event: the joining link is never on the
+    // event row anyway (web #328), so "register to see venue" would be noise.
+    final venueLocked = widget.event.hideVenueUntilRegistered &&
+        !_userHasTicket &&
+        !widget.event.isOnline;
     final dateStr = widget.event.isMultiDay
         ? widget.event.dateRangeWithTimeLabel
         : DateFormat('EEE, MMM d · h:mm a').format(widget.event.startLocal);
-    final subtitle = (venueLocked || widget.event.venueName.isEmpty)
+    final subtitle = (venueLocked || widget.event.placeLabel.isEmpty)
         ? dateStr
-        : '$dateStr  ·  ${widget.event.venueName}';
+        : '$dateStr  ·  ${widget.event.placeLabel}';
 
     return GestureDetector(
       onTap: allImages.isNotEmpty ? () => _openImageViewer(allImages, 0) : null,
@@ -683,8 +686,9 @@ class _EventDetailModalState extends State<EventDetailModal> {
   /// clean rows in a single container (replaces the old scattered boxes).
   Widget _buildInfoCard() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final venueLocked =
-        widget.event.hideVenueUntilRegistered && !_userHasTicket;
+    final venueLocked = widget.event.hideVenueUntilRegistered &&
+        !_userHasTicket &&
+        !widget.event.isOnline;
     final divider = Divider(
       height: 20,
       thickness: 1,
@@ -709,8 +713,12 @@ class _EventDetailModalState extends State<EventDetailModal> {
           ),
           divider,
           _infoRow(
-            venueLocked ? Icons.lock_outline_rounded : Icons.location_on_rounded,
-            venueLocked ? 'Register to see venue' : widget.event.venueName,
+            venueLocked
+                ? Icons.lock_outline_rounded
+                : widget.event.isOnline
+                    ? Icons.videocam_rounded
+                    : Icons.location_on_rounded,
+            venueLocked ? 'Register to see venue' : widget.event.placeLabel,
             muted: venueLocked,
             // Tap the venue to fly the map there — but only when the venue is
             // actually shown (not register-to-see) and has real coordinates.
@@ -775,7 +783,8 @@ class _EventDetailModalState extends State<EventDetailModal> {
   }
 
   bool get _hasVenueCoords =>
-      widget.event.latitude != 0 || widget.event.longitude != 0;
+      widget.event.hasLocation &&
+      (widget.event.latitude != 0 || widget.event.longitude != 0);
 
   /// Close the event detail and fly the map to the venue.
   void _flyToVenue() {
@@ -783,8 +792,8 @@ class _EventDetailModalState extends State<EventDetailModal> {
       MaterialPageRoute(
         builder: (_) => MainNavigationScreen(
           initialIndex: 0,
-          flyToLat: widget.event.latitude,
-          flyToLng: widget.event.longitude,
+          flyToLat: widget.event.latitude!,
+          flyToLng: widget.event.longitude!,
         ),
       ),
       (route) => false,

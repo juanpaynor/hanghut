@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:bitemates/core/services/location_service.dart';
 import 'package:flutter/services.dart';
 import 'package:bitemates/main.dart'; // Import for AuthGate
 import 'package:flutter_animate/flutter_animate.dart';
@@ -13,12 +14,25 @@ class SocialMagnetSplashScreen extends StatefulWidget {
 }
 
 class _SocialMagnetSplashScreenState extends State<SocialMagnetSplashScreen> {
+  /// How long the intro animation is on screen. Nothing is gated on it, so
+  /// shortening it is purely a brand call — the data below is already warming
+  /// while it plays.
+  static const Duration _introDuration = Duration(milliseconds: 3500);
+
   @override
   void initState() {
     super.initState();
-    // Navigate after a delay (GIF duration + buffer)
-    // Assuming GIF is short, giving it 3.5 seconds total
-    Future.delayed(const Duration(milliseconds: 3500), () {
+    // Use the intro instead of just waiting it out. The first GPS fix is the
+    // slowest thing on startup and THREE tabs block on it (map, feed,
+    // Explore), so resolving it here means it is already cached by the time
+    // any of them mount. Fire-and-forget: navigation must never wait on
+    // location, which can be slow, denied, or unavailable indoors.
+    LocationService().getCurrentLocation().catchError((e) {
+      print('⚠️ Splash location warm-up failed (non-critical): $e');
+      return null;
+    });
+
+    Future.delayed(_introDuration, () {
       _navigateToHome();
     });
   }

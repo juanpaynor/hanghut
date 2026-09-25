@@ -14,15 +14,35 @@ class LocationService {
   static const _cacheValidityMinutes = 5;
 
   /// Get current device location with caching
-  Future<Position?> getCurrentLocation() async {
+  /// The fix currently being resolved, if any. The 5-minute cache below only
+  /// helps SEQUENTIAL callers; on cold start the map, feed and Explore tabs all
+  /// ask at the same moment, find the cache empty, and each runs its own
+  /// permission check and GPS fix. Sharing the in-flight future collapses those
+  /// into one.
+  Future<Position?>? _inFlight;
+
+  Future<Position?> getCurrentLocation() {
     // Return cached position if still valid
     if (_cachedPosition != null && _lastUpdate != null) {
       final age = DateTime.now().difference(_lastUpdate!);
       if (age.inMinutes < _cacheValidityMinutes) {
-        return _cachedPosition;
+        return Future.value(_cachedPosition);
       }
     }
+    final pending = _inFlight;
+    if (pending != null) return pending;
 
+    final future = _resolveCurrentLocation();
+    _inFlight = future;
+    // Clear the slot whatever happens, so a failure never wedges every later
+    // caller onto the same dead future.
+    future.whenComplete(() {
+      if (identical(_inFlight, future)) _inFlight = null;
+    });
+    return future;
+  }
+
+  Future<Position?> _resolveCurrentLocation() async {
     try {
       // Check if location services are enabled
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
