@@ -248,17 +248,33 @@ class _StepWhoInvitedState extends State<StepWhoInvited> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Search by @username to invite friends',
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              flow.invitedUsers.isEmpty
+                  ? 'Hangouts with invites are the ones that actually happen.'
+                  : '${flow.invitedUsers.length} invited — '
+                      'they get a direct notification.',
+              style: TextStyle(
+                fontSize: 12,
+                color: flow.invitedUsers.isEmpty
+                    ? Colors.grey[500]
+                    : AppTheme.primaryColor,
+                fontWeight: flow.invitedUsers.isEmpty
+                    ? FontWeight.w400
+                    : FontWeight.w600,
+              ),
             ),
+            const SizedBox(height: 12),
+
+            // Tap-to-invite faces, populated before anything is typed.
+            _SuggestedPeople(flow: flow),
+
             const SizedBox(height: 12),
             TextField(
               controller: flow.inviteController,
               onChanged: flow.onInviteSearchChanged,
               decoration: InputDecoration(
-                hintText: '@username',
+                hintText: 'Search by name or @username',
                 prefixIcon: Icon(
-                  Icons.alternate_email,
+                  Icons.search,
                   color: theme.iconTheme.color?.withOpacity(0.5),
                 ),
                 filled: true,
@@ -820,4 +836,189 @@ class _EnforcementOption extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A horizontal row of tap-to-invite faces, ranked by the server.
+///
+/// This replaces "search by @username" as the primary way in. Nobody recalls
+/// usernames — with search as the only affordance, 42 hangouts produced 8
+/// invites and 68% of hangouts got nobody. The search field survives as a
+/// secondary path for people not in the list.
+class _SuggestedPeople extends StatelessWidget {
+  final CreateHangoutFlowState flow;
+  const _SuggestedPeople({required this.flow});
+
+  @override
+  Widget build(BuildContext context) {
+    if (flow.loadingSuggestions) {
+      return const SizedBox(
+        height: 96,
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    // 6 of 39 hosts have nobody to suggest. Say something useful rather than
+    // rendering an empty strip.
+    if (flow.inviteSuggestions.isEmpty) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          'No one to suggest yet — search for a friend below, or share the '
+          'hangout once it is created.',
+          style: TextStyle(
+            fontSize: 12.5,
+            height: 1.35,
+            color: isDark ? Colors.white60 : Colors.grey[600],
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 104,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        itemCount: flow.inviteSuggestions.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        itemBuilder: (context, i) {
+          final u = flow.inviteSuggestions[i];
+          return _SuggestionChip(
+            user: u,
+            selected: flow.isInvited(u['id'] as String),
+            onTap: () => flow.toggleInvitedUser(u),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SuggestionChip extends StatelessWidget {
+  final Map<String, dynamic> user;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _SuggestionChip({
+    required this.user,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = AppTheme.primaryColor;
+    final name = (user['display_name'] ?? 'Someone').toString();
+    final avatar = (user['avatar_url'] as String?)?.trim();
+    final first = name.trim().split(' ').first;
+
+    return SizedBox(
+      width: 68,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected ? primary : Colors.transparent,
+                      width: 2.5,
+                    ),
+                  ),
+                  child: ClipOval(
+                    child: (avatar != null && avatar.isNotEmpty)
+                        ? CachedNetworkImage(
+                            imageUrl: ImageUrl.avatar(avatar, 56),
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) =>
+                                _initial(name, isDark, primary),
+                            placeholder: (_, __) =>
+                                _initial(name, isDark, primary),
+                          )
+                        : _initial(name, isDark, primary),
+                  ),
+                ),
+                if (selected)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        color: primary,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+                          width: 2,
+                        ),
+                      ),
+                      child: const Icon(Icons.check,
+                          size: 12, color: Colors.white),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              first,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected
+                    ? primary
+                    : (isDark ? Colors.white70 : Colors.black87),
+              ),
+            ),
+            Text(
+              (user['reason'] ?? '').toString(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 9.5,
+                color: isDark ? Colors.white38 : Colors.grey[500],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _initial(String name, bool isDark, Color primary) => Container(
+        color: primary.withValues(alpha: isDark ? 0.25 : 0.12),
+        alignment: Alignment.center,
+        child: Text(
+          name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase(),
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: primary,
+          ),
+        ),
+      );
 }

@@ -21,6 +21,9 @@ import 'step_when_vibes.dart';
 import 'step_who_invited.dart';
 import 'step_review.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/sharing/models/share_payload.dart';
+import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
+import 'package:bitemates/main.dart' show navigatorKey;
 
 /// Full-screen multi-step wizard for creating a hangout.
 class CreateHangoutFlow extends StatefulWidget {
@@ -102,6 +105,14 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
   // Invite
   List<Map<String, dynamic>> inviteSearchResults = [];
   List<Map<String, dynamic>> invitedUsers = [];
+
+  /// People the host plausibly wants to invite, ranked by the server
+  /// (recent DMs > past guests > mutuals > follows). Loaded up front so the
+  /// picker is populated BEFORE anything is typed — inviting used to require
+  /// recalling a @username from memory, which is why 42 hangouts produced 8
+  /// invites and 68% of them got nobody.
+  List<Map<String, dynamic>> inviteSuggestions = [];
+  bool loadingSuggestions = true;
   Timer? _inviteDebounce;
   bool showInviteResults = false;
 
@@ -120,6 +131,7 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
     super.initState();
     visibility = widget.groupId != null ? 'group_only' : 'public';
     _loadUserProfile();
+    _loadInviteSuggestions();
     venueController.addListener(_onSearchChanged);
 
     final now = DateTime.now().add(const Duration(minutes: 60));
@@ -487,6 +499,39 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
 
   // ─── Invite ────────────────────────────────────────
 
+  Future<void> _loadInviteSuggestions() async {
+    try {
+      final res = await SupabaseConfig.client
+          .rpc('get_invite_suggestions', params: {'p_limit': 30});
+      if (!mounted) return;
+      setState(() {
+        inviteSuggestions =
+            List<Map<String, dynamic>>.from((res as List?) ?? const []);
+        loadingSuggestions = false;
+      });
+    } catch (e) {
+      debugPrint('⚠️ Could not load invite suggestions: $e');
+      // Never block the step on this — the search field still works.
+      if (mounted) setState(() => loadingSuggestions = false);
+    }
+  }
+
+  bool isInvited(String userId) =>
+      invitedUsers.any((u) => u['id'] == userId);
+
+  /// Tap a suggested face to add or remove them.
+  void toggleInvitedUser(Map<String, dynamic> user) {
+    final id = user['id'] as String;
+    setState(() {
+      final at = invitedUsers.indexWhere((u) => u['id'] == id);
+      if (at >= 0) {
+        invitedUsers.removeAt(at);
+      } else {
+        invitedUsers.add(user);
+      }
+    });
+  }
+
   void onInviteSearchChanged(String query) {
     if (_inviteDebounce?.isActive ?? false) _inviteDebounce!.cancel();
     _inviteDebounce = Timer(const Duration(milliseconds: 400), () {
@@ -605,9 +650,17 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
       if (mounted) {
         Navigator.of(context).pop();
         widget.onTableCreated();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Hangout created! 🎉')));
+        // A toast was the host's LAST interaction with their hangout — no
+        // share, no link, nothing asked of them at the moment they are most
+        // motivated. With 7 live hangouts and a 10% notification open rate,
+        // the host's own network is the only distribution that reliably
+        // works, so ask for it here.
+        _offerToShare(
+          tableId: tableId,
+          title: title,
+          venue: venueName,
+          invited: invitedUsers.length,
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -620,6 +673,37 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+
+  /// Post-creation share prompt. Best-effort and never blocking: the hangout
+  /// already exists by the time this runs, so any failure here is cosmetic.
+  void _offerToShare({
+    required String tableId,
+    required String title,
+    required String? venue,
+    required int invited,
+  }) {
+    final ctx = navigatorKey.currentContext ?? context;
+    final payload = SharePayload(
+      type: ShareEntityType.hangout,
+      id: tableId,
+      title: title,
+      subtitle: venue,
+    );
+    showModalBottomSheet<void>(
+      context: ctx,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetCtx) => _HangoutCreatedSheet(
+        invited: invited,
+        onShare: () {
+          Navigator.of(sheetCtx).pop();
+          ShareToChatSheet.show(ctx, payload);
+        },
+        onDismiss: () => Navigator.of(sheetCtx).pop(),
+      ),
+    );
   }
 
   // ─── UI ────────────────────────────────────────────
@@ -798,6 +882,99 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
                             ),
                     ),
                   ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Shown once, immediately after a hangout is created.
+///
+/// Deliberately NOT a blocking step: the hangout already exists. It exists to
+/// catch the host at the one moment they are motivated to tell someone —
+/// previously they got a toast and nothing else.
+class _HangoutCreatedSheet extends StatelessWidget {
+  final int invited;
+  final VoidCallback onShare;
+  final VoidCallback onDismiss;
+
+  const _HangoutCreatedSheet({
+    required this.invited,
+    required this.onShare,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white24 : Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('Hangout created 🎉',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            Text(
+              // Tell the truth about reach. 68% of hangouts get nobody, and a
+              // host who invited no one currently has no way to know that.
+              invited > 0
+                  ? '$invited ${invited == 1 ? 'person has' : 'people have'} '
+                      'been invited. Share it to bring more.'
+                  : 'No one has been invited yet — share it so people know '
+                      'it is happening.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13.5,
+                height: 1.4,
+                color: isDark ? Colors.white70 : Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: onShare,
+                icon: const Icon(Icons.share),
+                label: const Text('Share hangout',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onDismiss,
+              child: Text(
+                invited > 0 ? 'Done' : 'Not now',
+                style: TextStyle(
+                  color: isDark ? Colors.white60 : Colors.grey[600],
                 ),
               ),
             ),
