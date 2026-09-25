@@ -4,6 +4,8 @@ import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'package:bitemates/core/constants/app_constants.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/event_analytics_service.dart';
 import 'package:bitemates/features/ticketing/screens/ticket_success_screen.dart';
@@ -12,6 +14,8 @@ import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'dart:async';
 import 'package:bitemates/core/services/push_notification_service.dart';
+import 'package:bitemates/features/ticketing/models/checkout_terms.dart';
+import 'package:bitemates/features/ticketing/services/registration_file_service.dart';
 import 'package:bitemates/features/ticketing/widgets/registration_questions_form.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/seat_map_service.dart';
@@ -73,6 +77,22 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   Event? _fullEvent;
   bool _isLoadingEventDetails = false;
 
+  // ── Terms & conditions (team_comms #332) ──
+  CheckoutTerms _terms = const CheckoutTerms();
+  /// True once the buyer ticks the HangHut Terms of Service box.
+  bool _acceptedPlatformTerms = false;
+  /// True once the buyer ticks the organizer's terms box.
+  bool _acceptedOrganizerTerms = false;
+
+  String? get _organizerTerms => _terms.organizerTerms;
+  bool get _hasOrganizerTerms => _terms.hasOrganizerTerms;
+
+  /// Both gates satisfied; payment is blocked until true.
+  bool get _termsAccepted => _terms.accepted(
+        platform: _acceptedPlatformTerms,
+        organizer: _acceptedOrganizerTerms,
+      );
+
   // Real availability (counted from tickets table)
   int _realTicketsAvailable = 10; // default max per person
 
@@ -114,6 +134,16 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
 
   // Registration questions
   List<Map<String, dynamic>> _registrationQuestions = [];
+
+  /// Questions this buyer is actually asked, after tier scoping and
+  /// conditional rules (#330). Recomputed on every read because it depends on
+  /// the chosen tier AND on answers given so far.
+  List<Map<String, dynamic>> get _visibleQuestions =>
+      RegistrationQuestionsForm.applicable(
+        _registrationQuestions,
+        _registrationAnswers,
+        tierId: _selectedTier?.id,
+      );
   Map<String, dynamic> _registrationAnswers = {};
   String? _registrationId;
 
@@ -132,6 +162,27 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     // the answers were submitted in the original request.
     if (_registrationId == null) {
       _loadRegistrationQuestions();
+    }
+    _loadTerms();
+  }
+
+  /// Fetch the organizer's terms for this event. Event-level text wins;
+  /// otherwise the partner's applies to all their events (#332).
+  Future<void> _loadTerms() async {
+    try {
+      final row = await SupabaseConfig.client
+          .from('events')
+          .select('custom_tos, partners:organizer_id (custom_tos)')
+          .eq('id', widget.event.id)
+          .maybeSingle();
+      if (!mounted) return;
+      setState(() => _terms = CheckoutTerms.fromEventRow(
+            row == null ? null : Map<String, dynamic>.from(row),
+          ));
+    } catch (e) {
+      // Never block checkout on this fetch failing — but the platform ToS gate
+      // stands regardless, since it does not depend on any fetch.
+      print('⚠️ Could not load organizer terms: $e');
     }
   }
 
@@ -585,9 +636,25 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         'submit_event_request',
         params: {
           'p_event_id': widget.event.id,
-          'p_answers': _registrationAnswers.entries
-              .map((e) => {'question_id': e.key, 'answer': e.value})
-              .toList(),
+          // Only answers to questions that actually applied — a tier change
+          // can strand an answer from a question no longer asked, and a
+          // `section` heading never has one (#330).
+          // `file` answers are a map here and must go over as JSON text, the
+          // shape web writes (#334); everything else passes through.
+          'p_answers': RegistrationQuestionsForm.answersFor(
+            _registrationQuestions,
+            _registrationAnswers,
+            tierId: _selectedTier?.id,
+          ).entries.map((e) {
+            final v = e.value;
+            return {
+              'question_id': e.key,
+              'answer': v is Map
+                  ? RegistrationFileService.encodeAnswer(
+                      Map<String, dynamic>.from(v))
+                  : v,
+            };
+          }).toList(),
           if (_selectedTier != null) 'p_tier_id': _selectedTier!.id,
           if (isGuest) ...{
             'p_guest_email': _emailController.text.trim(),
@@ -686,6 +753,18 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       // (Trap 2); the picker guarantees that.
       if (_seatSessionId != null && _selectedSeatIds.isNotEmpty)
         'seat_session_id': _seatSessionId,
+      // What the buyer actually ticked (#337). The server resolves and
+      // snapshots the organizer's terms text itself — a snapshot the client
+      // authored would prove nothing — so we only report the two booleans.
+      //
+      // `platform_version` is deliberately OMITTED: the buyer reads web's live
+      // /terms page, so web is the only party that knows which revision was
+      // served. The function stamps its own constant when we send none, and
+      // that is accurate precisely because we do not bundle a copy.
+      'terms': {
+        'platform_accepted': _acceptedPlatformTerms,
+        'organizer_accepted': _hasOrganizerTerms && _acceptedOrganizerTerms,
+      },
     };
 
     EventAnalyticsService.instance.logCheckoutStarted(widget.event.id);
@@ -713,6 +792,17 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           }
           // Tier refused before any write (#320). The server's message is
           // already worded per state, so it is shown as-is.
+          // The terms gate, once web flips REQUIRE_TERMS_ACCEPTANCE (#337).
+          // Their message names the missing acceptance and is written for the
+          // buyer, so it is shown as-is. Reaching this means our client-side
+          // gate and their server disagreed — a bug on our side, not the
+          // buyer's, so it must never read like a generic failure.
+          if (code == 'TERMS_NOT_ACCEPTED') {
+            throw Exception(
+              err['error']['message']?.toString() ??
+                  'Please accept the terms before paying.',
+            );
+          }
           if (code == 'TIER_LOCKED' ||
               code == 'TIER_NOT_YET_ON_SALE' ||
               code == 'TIER_SALES_CLOSED') {
@@ -738,6 +828,19 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   Future<void> _proceedToPayment() async {
     if (_isLoading) return;
 
+    // The button is disabled without these, but never let another entry point
+    // reach payment without them (#332).
+    if (!_termsAccepted) {
+      _showErrorDialog(
+        'Terms not accepted',
+        _hasOrganizerTerms && !_acceptedOrganizerTerms
+            ? "Please accept the organizer's terms and conditions and the "
+                'HangHut Terms of Service before paying.'
+            : 'Please accept the HangHut Terms of Service before paying.',
+      );
+      return;
+    }
+
     // Validate Form
     if (!_formKey.currentState!.validate()) {
       return;
@@ -747,6 +850,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     final questionError = RegistrationQuestionsForm.validate(
       _registrationQuestions,
       _registrationAnswers,
+      tierId: _selectedTier?.id,
     );
     if (questionError != null) {
       _showErrorDialog('Registration Required', questionError);
@@ -1057,7 +1161,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
     }
 
     // ── STEP DEFINITIONS (Questions step only when the event has them) ──
-    final hasQuestions = _registrationQuestions.isNotEmpty;
+    final hasQuestions = _visibleQuestions.isNotEmpty;
     final stepTitles = <String>[
       'Ticket',
       'Details',
@@ -1138,8 +1242,34 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
               ),
               child: SafeArea(
                 top: false,
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    // A disabled pay button must say why it is disabled.
+                    if (isLast && !_termsAccepted)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline,
+                                size: 15, color: Colors.grey[600]),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                _hasOrganizerTerms && !_acceptedOrganizerTerms
+                                    ? "Accept the organizer's terms and the "
+                                        'HangHut Terms of Service to continue.'
+                                    : 'Accept the HangHut Terms of Service to '
+                                        'continue.',
+                                style: TextStyle(
+                                    fontSize: 12.5, color: Colors.grey[600]),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Row(
+                      children: [
                     if (step > 0) ...[
                       SizedBox(
                         height: 56,
@@ -1167,7 +1297,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                       child: SizedBox(
                         height: 56,
                         child: ElevatedButton(
-                          onPressed: _isLoading
+                          onPressed: _isLoading || (isLast && !_termsAccepted)
                               ? null
                               : (isLast
                                   ? _proceedToPayment
@@ -1199,6 +1329,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                         ),
                       ),
                     ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1227,6 +1359,7 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       final err = RegistrationQuestionsForm.validate(
         _registrationQuestions,
         _registrationAnswers,
+        tierId: _selectedTier?.id,
       );
       if (err != null) {
         _snack(err);
@@ -1490,6 +1623,8 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         RegistrationQuestionsForm(
           questions: _registrationQuestions,
           answers: _registrationAnswers,
+          eventId: widget.event.id,
+          tierId: _selectedTier?.id,
           onChanged: (updated) =>
               setState(() => _registrationAnswers = updated),
         ),
@@ -1590,6 +1725,10 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           activeColor: AppTheme.primaryColor,
         ),
 
+        const SizedBox(height: 8),
+
+        _buildTermsGate(),
+
         const SizedBox(height: 16),
 
         if (_isLoadingEventDetails)
@@ -1606,6 +1745,113 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           promoCode: _appliedPromoCode,
           subscriberDiscount: subscriberDiscountAmount,
           total: total,
+        ),
+      ],
+    );
+  }
+
+  /// Opens the buyer Purchase Agreement. The in-app ToS screen is a DIFFERENT
+  /// document (general app terms, and it does not mention finality of sale,
+  /// refunds or the service fee), so showing it here would mean an app buyer
+  /// ticked a box for terms web buyers never see and vice versa (#337).
+  Future<void> _openPurchaseTerms() async {
+    final uri = Uri.parse(AppConstants.purchaseTermsUrl);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        _snack('Could not open the terms. Please check your connection.');
+      }
+    }
+  }
+
+  /// The two acceptance gates (#332). Both are mandatory and both block pay:
+  /// HangHut's Terms of Service always, and the organizer's own terms whenever
+  /// the event has them — a refund policy, liability waiver or race rules that
+  /// a web buyer has always had to tick and an app buyer never saw.
+  Widget _buildTermsGate() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = AppTheme.primaryColor;
+    final border = isDark ? Colors.white24 : Colors.grey.shade300;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_hasOrganizerTerms) ...[
+          const Text(
+            'Organizer Terms & Conditions',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Set by the organizer of this event.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: isDark ? Colors.white54 : Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Shown in full, scrollable and capped in height. Terms must be
+          // readable before the tick, not hidden behind a link.
+          Container(
+            constraints: const BoxConstraints(maxHeight: 190),
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.04)
+                  : Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Scrollbar(
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _organizerTerms!.trim(),
+                  style: const TextStyle(fontSize: 13, height: 1.45),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          CheckboxListTile(
+            value: _acceptedOrganizerTerms,
+            onChanged: (v) =>
+                setState(() => _acceptedOrganizerTerms = v ?? false),
+            title: const Text(
+              "I have read and accept the organizer's terms and conditions",
+              style: TextStyle(fontSize: 13.5, height: 1.35),
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            activeColor: primary,
+          ),
+          const SizedBox(height: 4),
+        ],
+        CheckboxListTile(
+          value: _acceptedPlatformTerms,
+          onChanged: (v) => setState(() => _acceptedPlatformTerms = v ?? false),
+          title: Row(
+            children: [
+              const Text('I accept the ', style: TextStyle(fontSize: 13.5)),
+              GestureDetector(
+                onTap: _openPurchaseTerms,
+                child: Text(
+                  'HangHut Terms of Service',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: primary,
+                    decoration: TextDecoration.underline,
+                    decorationColor: primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          activeColor: primary,
         ),
       ],
     );
@@ -1880,7 +2126,11 @@ class _EventSummaryCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                _InfoRow(icon: Icons.location_on, text: event.venueName),
+                _InfoRow(
+                    icon: event.isOnline
+                        ? Icons.videocam
+                        : Icons.location_on,
+                    text: event.placeLabel),
                 const SizedBox(height: 4),
                 _InfoRow(
                   icon: Icons.calendar_today,
