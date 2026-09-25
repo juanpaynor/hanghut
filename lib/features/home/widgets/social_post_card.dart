@@ -690,7 +690,16 @@ class _SocialPostCardState extends State<SocialPostCard> {
 
                 // Video Display (if video_url present)
                 if (videoUrl != null && videoUrl.isNotEmpty) ...[
-                  _buildVideoThumbnail(videoUrl, imageUrl),
+                  // A video post has no image_url; its poster frame lives in
+                  // thumbnail_url. Passing imageUrl alone left a black box
+                  // until the player initialised.
+                  _buildVideoThumbnail(
+                    videoUrl,
+                    (widget.post['thumbnail_url'] as String?)?.isNotEmpty ==
+                            true
+                        ? widget.post['thumbnail_url'] as String
+                        : imageUrl,
+                  ),
                   const SizedBox(height: 12),
                 ]
                 // Post Images (Grid Collage for multiple, single for one)
