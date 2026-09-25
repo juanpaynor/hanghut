@@ -142,7 +142,7 @@ class SharePayload {
       type: ShareEntityType.event,
       id: event.id,
       title: event.title,
-      subtitle: event.venueName,
+      subtitle: event.placeLabel,
       imageUrl: event.coverImageUrl ??
           (event.imageUrls.isNotEmpty ? event.imageUrls.first : null),
     );

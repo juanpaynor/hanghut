@@ -19,6 +19,15 @@ class Ticket {
   final String? tier;
   final Map<String, dynamic>? seatInfo; // { section, row, seat, label }
 
+  /// Online event (web #327/#328). [eventVenue] is "Online event" then.
+  final bool isOnline;
+
+  /// The order's access token, returned only for online events. It is the key
+  /// to web's `get_ticket_order(p_token)`, the one path that releases the
+  /// joining link — and only while the order is `completed`, so a refund
+  /// revokes it. Never persisted, never shared, never put in a deep link.
+  final String? orderAccessToken;
+
   Ticket({
     required this.id,
     required this.eventId,
@@ -36,6 +45,8 @@ class Ticket {
     required this.createdAt,
     this.tier,
     this.seatInfo,
+    this.isOnline = false,
+    this.orderAccessToken,
   });
 
   factory Ticket.fromJson(Map<String, dynamic> json) {
@@ -55,7 +66,9 @@ class Ticket {
       id: json['id'] as String,
       eventId: json['event_id'] as String,
       eventTitle: (json['event_title'] ?? 'Event').toString(),
-      eventVenue: (json['event_venue'] ?? 'Venue').toString(),
+      eventVenue: json['event_is_online'] == true
+          ? 'Online event'
+          : (json['event_venue'] ?? 'Venue').toString(),
       // These are timestamptz from the DB (UTC). Convert to the device's local
       // zone so the ticket shows the real event time — without .toLocal() a
       // 7:00 PM Manila (UTC+8) event renders as its raw 11:00 UTC value.
@@ -79,6 +92,8 @@ class Ticket {
       seatInfo: json['seat_info'] is Map
           ? Map<String, dynamic>.from(json['seat_info'] as Map)
           : null,
+      isOnline: json['event_is_online'] == true,
+      orderAccessToken: json['order_access_token']?.toString(),
     );
   }
 
@@ -143,6 +158,16 @@ class Ticket {
       !isUsed &&
       !isCancelled &&
       !isRefunded;
+
+  /// Show a "Join online" action: an online event we hold an order token for,
+  /// that is not cancelled/refunded and has not ended. Whether the link is
+  /// actually released is web's call at tap time (see [TicketService.joinUrl]).
+  bool get canJoinOnline =>
+      isOnline &&
+      orderAccessToken != null &&
+      !isCancelled &&
+      !isRefunded &&
+      !isExpired;
 }
 
 class TicketService {
@@ -211,6 +236,29 @@ class TicketService {
 
   /// Invalidate cache (call on pull-to-refresh or after a new purchase)
   void clearCache() => _cachedTickets = null;
+
+  /// The joining link for an online event, or null when web will not release
+  /// it (order not `completed` — refunded/cancelled — or event not online).
+  ///
+  /// Goes through web's `get_ticket_order(p_token)` on purpose (team_comms
+  /// #328): the link lives in an RLS-locked table the app cannot read, and
+  /// this RPC is the single place their revocation rule is enforced.
+  Future<String?> joinUrl(Ticket ticket) async {
+    final token = ticket.orderAccessToken;
+    if (token == null) return null;
+    try {
+      final res = await SupabaseConfig.client.rpc(
+        'get_ticket_order',
+        params: {'p_token': token},
+      );
+      final url = (res as Map?)?['event']?['online_url'];
+      final s = url?.toString().trim();
+      return (s == null || s.isEmpty) ? null : s;
+    } catch (e) {
+      print('❌ get_ticket_order failed: $e');
+      return null;
+    }
+  }
 
   /// Total ticket count (for UI display), or null if not yet loaded
   int? get totalCount => _cachedTickets?.length;

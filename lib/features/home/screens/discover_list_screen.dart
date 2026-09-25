@@ -369,7 +369,7 @@ class _EventCard extends StatelessWidget {
                       const SizedBox(width: 5),
                       Expanded(
                         child: Text(
-                          event.venueName,
+                          event.placeLabel,
                           style: GoogleFonts.inter(
                             color: Colors.white.withOpacity(0.85),
                             fontSize: 12,

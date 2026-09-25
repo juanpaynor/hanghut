@@ -10,10 +10,27 @@ class Event {
   /// Null for events created before this field or via paths that don't set it.
   final String? descriptionHtml;
 
+  /// Empty string for an online event (web #327/#328 writes NULL).
   final String venueName;
   final String venueAddress;
-  final double latitude;
-  final double longitude;
+
+  /// Null only when [isOnline] — the DB CHECK
+  /// `events_location_required_unless_online` guarantees a venue event always
+  /// has both. Never plot, sort by distance or "get directions" without
+  /// checking [hasLocation] first: 0,0 would drop it in the Gulf of Guinea.
+  final double? latitude;
+  final double? longitude;
+
+  /// Web-created online event (Zoom etc.). The joining link is NOT on this
+  /// row — it lives in the RLS-locked `event_online_access` table and is only
+  /// released to a completed order through `get_ticket_order(p_token)`.
+  final bool isOnline;
+  bool get hasLocation => latitude != null && longitude != null;
+
+  /// What to print where a card/row shows "where": the venue, or "Online
+  /// event" when there is none. Use this instead of [venueName] in any
+  /// user-facing label.
+  String get placeLabel => isOnline ? 'Online event' : venueName;
   final DateTime startDatetime;
   final DateTime? endDatetime;
   final String? coverImageUrl;
@@ -112,8 +129,9 @@ class Event {
     this.descriptionHtml,
     required this.venueName,
     required this.venueAddress,
-    required this.latitude,
-    required this.longitude,
+    this.latitude,
+    this.longitude,
+    this.isOnline = false,
     required this.startDatetime,
     this.endDatetime,
     this.coverImageUrl,
@@ -195,10 +213,11 @@ class Event {
       title: json['title'] as String,
       description: json['description'] as String? ?? '',
       descriptionHtml: json['description_html'] as String?,
-      venueName: json['venue_name'] as String,
+      venueName: json['venue_name'] as String? ?? '',
       venueAddress: (json['venue_address'] ?? json['address'] ?? '') as String,
-      latitude: (json['latitude'] as num).toDouble(),
-      longitude: (json['longitude'] as num).toDouble(),
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+      isOnline: json['is_online'] as bool? ?? false,
       startDatetime: DateTime.parse(json['start_datetime'] as String),
       endDatetime: json['end_datetime'] != null
           ? DateTime.parse(json['end_datetime'] as String)
@@ -253,6 +272,7 @@ class Event {
       'venue_address': venueAddress,
       'latitude': latitude,
       'longitude': longitude,
+      'is_online': isOnline,
       'start_datetime': startDatetime.toIso8601String(),
       'end_datetime': endDatetime?.toIso8601String(),
       'cover_image_url': coverImageUrl,

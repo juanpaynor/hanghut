@@ -338,7 +338,7 @@ class _DiscoverDeckState extends State<DiscoverDeck> {
                     const SizedBox(width: 5),
                     Expanded(
                       child: Text(
-                        e.venueName,
+                        e.placeLabel,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(

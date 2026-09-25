@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:bitemates/core/utils/image_url.dart';
 import 'package:bitemates/features/support/screens/support_entry.dart';
 import 'package:bitemates/features/support/models/support_models.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class TicketCard extends StatelessWidget {
   final Ticket ticket;
@@ -105,7 +106,7 @@ class TicketCard extends StatelessWidget {
                   Row(
                     children: [
                       Icon(
-                        Icons.location_on,
+                        ticket.isOnline ? Icons.videocam : Icons.location_on,
                         size: 14,
                         color: Colors.grey[600],
                       ),
@@ -176,7 +177,7 @@ class TicketCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        'Tap to view QR',
+                        ticket.canJoinOnline ? 'Tap to join' : 'Tap to view QR',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.deepPurple,
@@ -302,11 +303,17 @@ class _TicketDetailModal extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   _DetailRow(
-                    icon: Icons.location_on,
-                    label: 'Venue',
+                    icon: ticket.isOnline
+                        ? Icons.videocam
+                        : Icons.location_on,
+                    label: ticket.isOnline ? 'Where' : 'Venue',
                     value: ticket.eventVenue,
                   ),
                   const SizedBox(height: 16),
+                  if (ticket.canJoinOnline) ...[
+                    _JoinOnlineButton(ticket: ticket),
+                    const SizedBox(height: 16),
+                  ],
                   if (ticket.seatLabel != null) ...[
                     _DetailRow(
                       icon: Icons.event_seat,
@@ -490,6 +497,68 @@ class _MetaChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "Join online" for an online-event ticket. The link is fetched on tap, not
+/// at list time: it lives behind web's `get_ticket_order`, which returns NULL
+/// once an order is refunded, so we never cache or display a stale link.
+class _JoinOnlineButton extends StatefulWidget {
+  final Ticket ticket;
+  const _JoinOnlineButton({required this.ticket});
+
+  @override
+  State<_JoinOnlineButton> createState() => _JoinOnlineButtonState();
+}
+
+class _JoinOnlineButtonState extends State<_JoinOnlineButton> {
+  bool _busy = false;
+
+  Future<void> _join() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final url = await TicketService().joinUrl(widget.ticket);
+      if (!mounted) return;
+      if (url == null) {
+        messenger?.showSnackBar(const SnackBar(
+          content: Text(
+            'The joining link is not available for this order. '
+            'If you think this is a mistake, contact support below.',
+          ),
+        ));
+        return;
+      }
+      final uri = Uri.tryParse(url);
+      final ok = uri != null &&
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('Could not open the joining link.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: _busy ? null : _join,
+        icon: _busy
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.videocam_rounded),
+        label: const Text('Join online'),
       ),
     );
   }
