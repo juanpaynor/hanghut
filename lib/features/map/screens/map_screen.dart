@@ -1876,7 +1876,39 @@ class MapScreenState extends State<MapScreen>
           final markerType =
               properties?['type']; // Check if it's an event marker
 
-          if (markerType == 'event' &&
+          if (markerType == 'stack') {
+            // Venue stack (6+ events at one pin). It carries no `index`, only
+            // the comma-joined event ids, so resolve those and open the sheet.
+            final ids = properties?['ids']?.toString().split(',') ?? const [];
+            final byId = {for (final e in _events) e.id: e};
+            final stackedItems = [
+              for (final id in ids)
+                if (byId[id] != null)
+                  {
+                    'id': byId[id]!.id,
+                    'title': byId[id]!.title,
+                    'datetime': byId[id]!.startDatetime.toIso8601String(),
+                    'current_capacity': byId[id]!.ticketsSold,
+                    'max_guests': byId[id]!.capacity,
+                    'location_name': byId[id]!.venueName,
+                    'type': 'event',
+                    'original_object': byId[id],
+                  },
+            ];
+            print('📚 Stack marker tapped: ${stackedItems.length} events');
+            if (stackedItems.isNotEmpty && mounted) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (context) => MapClusterSheet(
+                  items: stackedItems,
+                  currentUserData: _currentUserData,
+                  matchingService: _matchingService,
+                ),
+              );
+            }
+          } else if (markerType == 'event' &&
               index != null &&
               index < _events.length) {
             // Event marker tapped
@@ -2434,7 +2466,11 @@ class MapScreenState extends State<MapScreen>
       ]);
 
       var fetchedTables = results[0] as List<Map<String, dynamic>>;
-      final fetchedEvents = results[1] as List<Event>;
+      // Online events (web #327) have no coordinates. The map is the one place
+      // they simply do not belong — drop them here so every index-based lookup
+      // below (markers, stacks, tap handlers) only ever sees plottable events.
+      final fetchedEvents =
+          (results[1] as List<Event>).where((e) => e.hasLocation).toList();
       final fetchedStories = results[2] as List<Map<String, dynamic>>;
 
       print('📍 Found ${fetchedTables.length} tables in viewport');
@@ -2781,7 +2817,7 @@ class MapScreenState extends State<MapScreen>
       final Map<String, List<Event>> eventGroups = {};
       for (final event in _events) {
         final key =
-            '${event.latitude.toStringAsFixed(6)},${event.longitude.toStringAsFixed(6)}';
+            '${event.latitude!.toStringAsFixed(6)},${event.longitude!.toStringAsFixed(6)}';
         if (!eventGroups.containsKey(key)) {
           eventGroups[key] = [];
         }
@@ -2813,8 +2849,8 @@ class MapScreenState extends State<MapScreen>
         }
         // 2. Spiderfy (2-5 Events)
         else if (count <= 5) {
-          final centerLat = firstEvent.latitude;
-          final centerLng = firstEvent.longitude;
+          final centerLat = firstEvent.latitude!;
+          final centerLng = firstEvent.longitude!;
           final radius = 0.0002;
 
           for (var i = 0; i < count; i++) {

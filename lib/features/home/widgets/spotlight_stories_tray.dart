@@ -225,9 +225,24 @@ class _SpotlightTile extends StatelessWidget {
   bool get _isSeen => story['is_seen'] == true;
   bool get _hasStory => (story['story_count'] ?? 0) > 0;
 
+  /// Preview image for the tile.
+  ///
+  /// A VIDEO story has no `image_url` — its poster frame is uploaded to
+  /// `thumbnail_url` — so reading only the image left video stories showing
+  /// the letter placeholder. `latest_cover_url` is the server's resolved
+  /// answer (newest post's image or thumbnail, falling back to the newest
+  /// cover the author has); the rest are fallbacks for a client running
+  /// against an older response shape.
   String? get _coverUrl {
-    final img = story['latest_image_url'] as String?;
-    return (img != null && img.isNotEmpty) ? img : null;
+    for (final key in const [
+      'latest_cover_url',
+      'latest_image_url',
+      'latest_thumbnail_url',
+    ]) {
+      final v = story[key] as String?;
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return null;
   }
 
   String get _authorName =>

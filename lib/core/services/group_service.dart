@@ -25,61 +25,60 @@ class GroupService {
       final user = SupabaseConfig.client.auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      // 1. Insert the group
-      final response = await SupabaseConfig.client
-          .from('groups')
-          .insert({
-            'name': name,
-            'description': description,
-            'rules': rules,
-            'category': category,
-            'privacy': privacy,
-            'icon_emoji': iconEmoji,
-            'location_city': locationCity,
-            'location_lat': locationLat,
-            'location_lng': locationLng,
-            'created_by': user.id,
-            // Start at 0 — the group_members INSERT below fires
-            // update_group_member_count() which bumps this to 1. Seeding 1 here
-            // caused a permanent +1 (the count trigger double-counted the owner).
-            'member_count': 0,
-          })
-          .select('id')
-          .single();
+      // 1. Group + owner membership in ONE transaction (create_group_with_owner).
+      //
+      // This used to be three round trips — insert group, upload images and
+      // UPDATE, insert owner — and the order was wrong twice over: the UPDATE
+      // policy on groups needs an approved owner/admin row that did not exist
+      // yet, so a cover/icon picked at creation was silently dropped; and any
+      // failure after the first insert left a group on disk with nobody in it,
+      // which the user then recreated. Prod had three such orphans.
+      final groupId = (await SupabaseConfig.client.rpc(
+        'create_group_with_owner',
+        params: {
+          'p_name': name,
+          'p_description': description,
+          'p_rules': rules,
+          'p_category': category,
+          'p_privacy': privacy,
+          'p_icon_emoji': iconEmoji,
+          'p_location_city': locationCity,
+          'p_location_lat': locationLat,
+          'p_location_lng': locationLng,
+        },
+      ))
+          .toString();
 
-      final groupId = response['id'] as String;
-
-      // 2. Upload cover image if provided
+      // 2. Images, AFTER the membership exists so the UPDATE is permitted.
+      // Best-effort: the group is already real; a failed upload must not
+      // report the whole creation as failed.
       if (coverImage != null) {
-        final coverUrl = await _uploadCoverImage(groupId, coverImage);
-        if (coverUrl != null) {
-          await SupabaseConfig.client
-              .from('groups')
-              .update({'cover_image_url': coverUrl})
-              .eq('id', groupId);
+        try {
+          final coverUrl = await _uploadCoverImage(groupId, coverImage);
+          if (coverUrl != null) {
+            await SupabaseConfig.client
+                .from('groups')
+                .update({'cover_image_url': coverUrl})
+                .eq('id', groupId);
+          }
+        } catch (e) {
+          print('⚠️ GROUP SERVICE: cover upload failed for $groupId - $e');
         }
       }
 
-      // 2b. Upload group profile picture if provided
       if (iconImage != null) {
-        final iconUrl = await _uploadIconImage(groupId, iconImage);
-        if (iconUrl != null) {
-          await SupabaseConfig.client
-              .from('groups')
-              .update({'icon_image_url': iconUrl})
-              .eq('id', groupId);
+        try {
+          final iconUrl = await _uploadIconImage(groupId, iconImage);
+          if (iconUrl != null) {
+            await SupabaseConfig.client
+                .from('groups')
+                .update({'icon_image_url': iconUrl})
+                .eq('id', groupId);
+          }
+        } catch (e) {
+          print('⚠️ GROUP SERVICE: icon upload failed for $groupId - $e');
         }
       }
-
-      // 3. Add creator as owner (auto-approved)
-      await SupabaseConfig.client.from('group_members').insert({
-        'group_id': groupId,
-        'user_id': user.id,
-        'role': 'owner',
-        'status': 'approved',
-        'joined_at': DateTime.now().toUtc().toIso8601String(),
-        'last_read_at': DateTime.now().toUtc().toIso8601String(),
-      });
 
       return {'success': true, 'group_id': groupId};
     } catch (e) {

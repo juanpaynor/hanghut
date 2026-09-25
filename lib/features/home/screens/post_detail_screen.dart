@@ -23,41 +23,29 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     _fetchPost();
   }
 
+  /// One RPC, the feed's exact row shape. This screen used to assemble the
+  /// row by hand from a PostgREST select and the shape drifted from what
+  /// SocialPostCard reads (`user` vs `user_data`, `like_count` vs
+  /// `likes_count`, no top_likers, a comment count that was always 1) — so a
+  /// shared post opened with a blank avatar, zero likes and no comments.
   Future<void> _fetchPost() async {
     try {
-      // Manual Construct
-      final postData = await SupabaseConfig.client
-          .from('posts')
-          .select('''
-            *,
-            user:user_id (
-              id,
-              display_name,
-              avatar_url
-            ),
-            post_likes (user_id),
-            comments (count)
-          ''')
-          .eq('id', widget.postId)
-          .single();
-
-      // Transform to match Feed format
-      final userId = SupabaseConfig.client.auth.currentUser?.id;
-      final likes = postData['post_likes'] as List;
-
-      final formattedPost = {
-        ...postData,
-        'like_count': likes.length,
-        'is_liked': likes.any((l) => l['user_id'] == userId),
-        'comment_count': (postData['comments'] as List).length, // simple count
-      };
-
-      if (mounted) {
+      final row = await SupabaseConfig.client.rpc(
+        'get_post_by_id',
+        params: {'p_post_id': widget.postId},
+      );
+      if (!mounted) return;
+      if (row == null) {
         setState(() {
-          _post = formattedPost;
+          _error = 'This post is no longer available';
           _isLoading = false;
         });
+        return;
       }
+      setState(() {
+        _post = Map<String, dynamic>.from(row as Map);
+        _isLoading = false;
+      });
     } catch (e) {
       print('Error fetching post: $e');
       if (mounted) {
@@ -115,10 +103,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     }
 
     return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SocialPostCard(post: _post!),
-      ),
+      child: SocialPostCard(post: _post!),
     );
   }
 }

@@ -341,11 +341,21 @@ class _SocialPostCardState extends State<SocialPostCard> {
     // own controls); event-attached & story posts stay classic too.
     final hasVideo = videoUrl != null && videoUrl.isNotEmpty;
 
-    // Event-attached posts → immersive with the event cover as the media and the
-    // event info (date / title / venue / price / Get Tickets) overlaid.
+    final hasOwnMedia =
+        images.isNotEmpty || (gifUrl != null && gifUrl.isNotEmpty);
+
+    // Event-attached post WITHOUT its own photos → the event cover is the
+    // hero and the event info sits below it. (The caption shows there too;
+    // it used to be dropped on the floor.)
     final evCover = _attachedEvent?['cover_image_url']?.toString();
-    if (!isStory && _attachedEvent != null && evCover != null && evCover.isNotEmpty) {
+    if (!isStory &&
+        _attachedEvent != null &&
+        !hasOwnMedia &&
+        !hasVideo &&
+        evCover != null &&
+        evCover.isNotEmpty) {
       return _buildImmersiveEventCard(
+        content: content,
         displayName: displayName,
         avatarUrl: avatarUrl,
         user: user,
@@ -353,11 +363,12 @@ class _SocialPostCardState extends State<SocialPostCard> {
       );
     }
 
-    final useImmersive = !isStory &&
-        _attachedEvent == null &&
-        widget.post['event_id'] == null && // event handled above
-        !hasVideo &&
-        (images.isNotEmpty || (gifUrl != null && gifUrl.isNotEmpty));
+    // Photo/GIF post — with or without an event attached. The poster's own
+    // media is what they chose to show, so it is the media; an attached event
+    // becomes a compact chip under the caption. Previously the event cover
+    // REPLACED the user's photos and their text was discarded, so "post an
+    // event with pictures" rendered as if they had posted nothing of their own.
+    final useImmersive = !isStory && !hasVideo && hasOwnMedia;
     if (useImmersive) {
       return _buildImmersiveCard(
         content: content,
@@ -367,6 +378,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
         avatarUrl: avatarUrl,
         user: user,
         postTime: postTime,
+        attachedEvent: _attachedEvent,
       );
     }
 
@@ -820,6 +832,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
     String? avatarUrl,
     Map<String, dynamic>? user,
     DateTime? postTime,
+    Map<String, dynamic>? attachedEvent,
   }) {
     final multi = images.length > 1;
     Widget imgPlaceholder() => Container(color: Colors.grey[800]);
@@ -983,7 +996,7 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   // ── Below the media: who liked it, then the caption in
                   // full. Collapsed to three lines with "more" when long,
                   // never silently cut.
-                  if (_likeCount > 0 || content.isNotEmpty) ...[
+                  if (_likeCount > 0 || content.isNotEmpty || attachedEvent != null) ...[
                     const Divider(
                         height: 1, thickness: 1, color: Color(0x1FFFFFFF)),
                     Padding(
@@ -1011,6 +1024,11 @@ class _SocialPostCardState extends State<SocialPostCard> {
                               onToggle: () => setState(
                                   () => _captionExpanded = !_captionExpanded),
                             ),
+                          if (attachedEvent != null) ...[
+                            if (content.isNotEmpty || _likeCount > 0)
+                              const SizedBox(height: 12),
+                            _immersiveEventChip(attachedEvent),
+                          ],
                         ],
                       ),
                     ),
@@ -1024,7 +1042,111 @@ class _SocialPostCardState extends State<SocialPostCard> {
     );
   }
 
+  /// The attached event, as a compact dark chip inside a photo post: cover
+  /// thumbnail, title, date · venue, price, arrow. Tap opens the event. The
+  /// light-grey EventAttachmentCard the classic layout uses would sit like a
+  /// sticker on the dark immersive card, hence a chip drawn for this ground.
+  Widget _immersiveEventChip(Map<String, dynamic> ev) {
+    final cover = ev['cover_image_url']?.toString();
+    final title = (ev['title'] ?? 'Event').toString();
+    final venue = (ev['venue_name'] ?? '').toString();
+    final price = ev['ticket_price'];
+    final isFree = price == null || (price is num && price <= 0);
+    String whenStr = '';
+    final raw = ev['start_datetime']?.toString();
+    if (raw != null) {
+      final dt = DateTime.tryParse(raw)?.toLocal();
+      if (dt != null) whenStr = DateFormat('MMM d · h:mm a').format(dt);
+    }
+    void open() {
+      final event = _attachedEventModel();
+      if (event != null) EventDetailModal.show(context, event);
+    }
+
+    return GestureDetector(
+      onTap: open,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0x26FFFFFF),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0x33FFFFFF), width: 0.8),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(9),
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: (cover != null && cover.isNotEmpty)
+                    ? CachedNetworkImage(
+                        imageUrl: ImageUrl.avatar(cover, 56),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) =>
+                            Container(color: const Color(0x33FFFFFF)),
+                      )
+                    : Container(
+                        color: const Color(0x33FFFFFF),
+                        child: const Icon(Icons.event, color: Colors.white70),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (whenStr.isNotEmpty) whenStr,
+                      if (venue.isNotEmpty) venue,
+                    ].join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: isFree ? const Color(0xFF22A06B) : Colors.white,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(
+                isFree ? 'FREE' : '₱${(price as num).toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: isFree ? Colors.white : const Color(0xFF15131E),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildImmersiveEventCard({
+    required String content,
     required String displayName,
     String? avatarUrl,
     Map<String, dynamic>? user,
@@ -1104,6 +1226,18 @@ class _SocialPostCardState extends State<SocialPostCard> {
                   ),
                 ),
               ],
+            ),
+          ],
+
+          // The poster's own words about the event. Was never rendered on
+          // this card before — the text simply vanished.
+          if (content.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _ExpandableCaption(
+              text: content,
+              expanded: _captionExpanded,
+              onToggle: () =>
+                  setState(() => _captionExpanded = !_captionExpanded),
             ),
           ],
 
