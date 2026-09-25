@@ -1,5 +1,7 @@
 import 'dart:math';
 import 'dart:io';
+
+import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:bitemates/core/services/social_service.dart';
@@ -277,6 +279,81 @@ class TableService {
   }
 
   // Create a new table
+  /// At most one follower broadcast per host per window.
+  ///
+  /// Two team accounts produced 85% of all hangout notifications (146 and 118
+  /// of 309 in 45 days), which trains everyone to ignore the channel — so by
+  /// the time an ordinary user posts a hangout, nobody opens it. One host
+  /// posting three hangouts should reach their followers once, not three times.
+  static const Duration _followerBroadcastCooldown = Duration(hours: 12);
+
+  /// The host's display name from `users`, falling back to auth metadata.
+  ///
+  /// The old code read ONLY `user.userMetadata['display_name']`, which is
+  /// written at signup and not kept in sync with profile edits — so it is
+  /// frequently absent and 28 pushes went out titled "New Hangout from
+  /// Someone 🔥".
+  Future<String> _resolveHostName(String userId) async {
+    try {
+      final row = await SupabaseConfig.client
+          .from('users')
+          .select('display_name')
+          .eq('id', userId)
+          .maybeSingle();
+      final name = (row?['display_name'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) return name;
+    } catch (e) {
+      print('⚠️ Could not resolve host name: $e');
+    }
+    final meta = SupabaseConfig.client.auth.currentUser?.userMetadata;
+    for (final key in const ['display_name', 'full_name', 'name']) {
+      final v = (meta?[key] as String?)?.trim();
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return 'Someone';
+  }
+
+  /// "Tonight at 7:00 PM", "Tomorrow at 9:30 AM", "Sat at 2:00 PM".
+  ///
+  /// A notification that does not say WHEN cannot be acted on — the old body
+  /// ("X just created \"X wants to Network\" — join now!") named the host three
+  /// times and never gave a time or a place.
+  /// Public and [now]-injectable so it can be tested: the label is a function
+  /// of the instant it is rendered at, and "Tonight" vs "Tomorrow" flips over
+  /// a midnight boundary that a test must be able to sit on either side of.
+  static String whenLabel(DateTime when, {DateTime? now}) {
+    final local = when.toLocal();
+    now ??= DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(local.year, local.month, local.day);
+    final days = day.difference(today).inDays;
+    final time = DateFormat('h:mm a').format(local);
+    if (days == 0) return local.hour >= 17 ? 'Tonight at $time' : 'Today at $time';
+    if (days == 1) return 'Tomorrow at $time';
+    if (days > 1 && days < 7) return '${DateFormat('EEE').format(local)} at $time';
+    return '${DateFormat('MMM d').format(local)} at $time';
+  }
+
+  /// Whether this host already broadcast to followers inside the cooldown.
+  Future<bool> _recentlyBroadcast(String userId) async {
+    try {
+      final cutoff = DateTime.now().toUtc().subtract(_followerBroadcastCooldown);
+      final rows = await SupabaseConfig.client
+          .from('notifications')
+          .select('id')
+          .eq('actor_id', userId)
+          .eq('type', 'follower_hangout')
+          .gte('created_at', cutoff.toIso8601String())
+          .limit(1);
+      return (rows as List).isNotEmpty;
+    } catch (e) {
+      // Never block a hangout on this check — notifying twice beats not
+      // creating.
+      print('⚠️ Broadcast cooldown check failed: $e');
+      return false;
+    }
+  }
+
   Future<String> createTable({
     required double latitude,
     required double longitude,
@@ -518,18 +595,44 @@ class TableService {
       // ═══ FOLLOWER NOTIFICATIONS (in-app + push) — public only ═══
       if (visibility == 'public') {
         try {
-          final hostName = user.userMetadata?['display_name'] ?? 'Someone';
+          final hostName = await _resolveHostName(user.id);
           final tableTitle = title ?? venueName;
+          // Answer "when and where" in the notification itself. Without them
+          // there is nothing to decide on, which is why only 10% were opened.
+          final whereLabel = venueName.trim().isEmpty || venueName == 'TBD'
+              ? null
+              : venueName.trim();
+          final pushTitle = tableTitle.trim().isNotEmpty
+              ? tableTitle.trim()
+              : '$hostName wants to hang out';
+          final pushBody = [
+            whenLabel(scheduledTime),
+            if (whereLabel != null) whereLabel,
+          ].join(' · ');
+
+          // NOT an early return: the badge award and group notifications run
+          // after this block, and skipping them would be a silent regression.
+          final muted = await _recentlyBroadcast(user.id);
+          if (muted) {
+            print(
+              '🔕 TABLE SERVICE: skipping follower broadcast '
+              '(host already broadcast within '
+              '${_followerBroadcastCooldown.inHours}h)',
+            );
+          }
+
           print('🔔 TABLE SERVICE: Fetching followers for notification...');
 
           // Fetch up to 50 followers
-          final followersResp = await SupabaseConfig.client
-              .from('follows')
-              .select('follower_id')
-              .eq('following_id', user.id)
-              .limit(50);
+          final List<dynamic> followersResp = muted
+              ? const <dynamic>[]
+              : await SupabaseConfig.client
+                  .from('follows')
+                  .select('follower_id')
+                  .eq('following_id', user.id)
+                  .limit(50);
 
-          final followerIds = (followersResp as List)
+          final followerIds = followersResp
               .map((f) => f['follower_id'] as String)
               .where(
                 (fid) =>
@@ -550,9 +653,8 @@ class TableService {
                       'user_id': fid,
                       'actor_id': user.id,
                       'type': 'follower_hangout',
-                      'title': 'New Hangout from $hostName 🔥',
-                      'body':
-                          '$hostName just created "$tableTitle" — join now!',
+                      'title': pushTitle,
+                      'body': pushBody,
                       'entity_id': tableId,
                       'metadata': {'table_id': tableId},
                     },
@@ -572,9 +674,8 @@ class TableService {
                     'send-push',
                     body: {
                       'user_id': fid,
-                      'title': 'New Hangout from $hostName 🔥',
-                      'body':
-                          '$hostName just created "$tableTitle" — join now!',
+                      'title': pushTitle,
+                      'body': pushBody,
                       'data': {'type': 'table_join', 'table_id': tableId},
                     },
                   )

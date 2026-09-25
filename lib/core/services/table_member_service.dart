@@ -134,7 +134,7 @@ class TableMemberService {
           (locationName == null || locationName.toUpperCase() != 'TBD');
       final maxDistKm =
           (table['max_join_distance_km'] as num?)?.toDouble() ??
-          100.0; // default 100km
+          500.0; // default 500km (was 100; Rich, 2026-09-21)
       if (hasFixedLocation) {
         try {
           bool locationPermissionOk = false;

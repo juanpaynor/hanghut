@@ -226,15 +226,40 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
   // ─── User profile ──────────────────────────────────
 
   Future<void> _loadUserProfile() async {
+    // Unguarded before: a thrown query left userName null and every hangout
+    // this user created was titled "Someone wants to …".
+    try {
+      final name = await _fetchDisplayName();
+      if (name != null && mounted) setState(() => userName = name);
+    } catch (e) {
+      debugPrint('⚠️ Could not load host name: $e');
+    }
+  }
+
+  /// The host's display name, or null if it genuinely cannot be resolved.
+  ///
+  /// `users.display_name` is the source of truth; auth metadata is only a
+  /// fallback because it is often unset (it is written at signup, not kept in
+  /// sync with profile edits).
+  Future<String?> _fetchDisplayName() async {
     final user = SupabaseConfig.client.auth.currentUser;
-    if (user != null) {
-      final response = await SupabaseConfig.client
+    if (user == null) return null;
+    try {
+      final row = await SupabaseConfig.client
           .from('users')
           .select('display_name')
           .eq('id', user.id)
-          .single();
-      if (mounted) setState(() => userName = response['display_name']);
+          .maybeSingle();
+      final name = (row?['display_name'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) return name;
+    } catch (e) {
+      debugPrint('⚠️ display_name lookup failed: $e');
     }
+    for (final key in const ['display_name', 'full_name', 'name']) {
+      final v = (user.userMetadata?[key] as String?)?.trim();
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return null;
   }
 
   // ─── Venue / Places ────────────────────────────────
@@ -534,7 +559,14 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
 
     try {
       final activity = activityController.text.trim();
-      final hostLabel = widget.groupName ?? userName ?? 'Someone';
+      // Resolve at SUBMIT time, not only at init: the profile load is
+      // fire-and-forget from initState, so a fast submitter (or a failed
+      // lookup) used to fall straight through to "Someone".
+      var resolvedName = userName?.trim();
+      if (resolvedName == null || resolvedName.isEmpty) {
+        resolvedName = await _fetchDisplayName();
+      }
+      final hostLabel = widget.groupName ?? resolvedName ?? 'Someone';
       final title = '$hostLabel wants to $activity';
       final description = descriptionController.text.trim();
 
