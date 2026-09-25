@@ -52,6 +52,13 @@ class _DiscoverTabState extends State<DiscoverTab>
   bool _searchExpanded = false;
   Timer? _searchDebounce;
   String _query = '';
+
+  /// Server-side search results for [_query]. Explore only holds the first
+  /// page or two of the calendar in [_events], so text search MUST go to the
+  /// server or events further out are simply unfindable.
+  List<Event> _searchResults = [];
+  bool _searchLoading = false;
+  int _searchSeq = 0;
   String _sort = 'soonest'; // soonest | price_low | nearest | popular
   String? _eventCategory; // null = all categories
 
@@ -117,10 +124,67 @@ class _DiscoverTabState extends State<DiscoverTab>
     }
   }
 
+  /// 350ms, not the 250 this had while search was a local filter: every fire
+  /// is now TWO network requests (text match + organizer-name match), and at
+  /// 250ms a normal typist sends one round trip per character.
+  static const Duration _searchDebounceDelay = Duration(milliseconds: 350);
+
+  /// Below this, don't go to the server — a single letter matches a large
+  /// fraction of the catalogue, so the request costs a round trip to return
+  /// something nobody wanted. One-character queries filter the loaded list
+  /// locally instead, which is instant. See [_minServerQueryLength] use in
+  /// [_visibleEvents].
+  static const int _minServerQueryLength = 2;
+
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() => _query = value);
+    // Clearing the box is not a search — react immediately rather than making
+    // the buyer watch stale results for another 350ms.
+    if (value.trim().isEmpty) {
+      _searchSeq++;
+      setState(() {
+        _query = '';
+        _searchResults = [];
+        _searchLoading = false;
+      });
+      return;
+    }
+    // Show the typed text at once so the field and the header agree; only the
+    // network call is debounced. Mark it pending in the SAME frame: otherwise
+    // the 350ms window has a non-empty query, no results yet and nothing
+    // loading, which renders "No results" and then replaces it with a spinner.
+    final willQueryServer = value.trim().length >= _minServerQueryLength;
+    setState(() {
+      _query = value;
+      if (willQueryServer) _searchLoading = true;
+    });
+    _searchDebounce = Timer(_searchDebounceDelay, () {
+      if (mounted) _runSearch(value);
+    });
+  }
+
+  /// Ask the server for matches. [_searchSeq] drops a slow response that lands
+  /// after a newer keystroke, so the list always reflects the current text.
+  Future<void> _runSearch(String value) async {
+    final term = value.trim();
+    if (term.length < _minServerQueryLength) {
+      setState(() {
+        _searchResults = [];
+        _searchLoading = false;
+      });
+      return;
+    }
+    final seq = ++_searchSeq;
+    setState(() => _searchLoading = true);
+    final results = await EventService().searchEvents(
+      term,
+      startDate: _rangeStart,
+      endDate: _rangeEndOfDay,
+    );
+    if (!mounted || seq != _searchSeq) return;
+    setState(() {
+      _searchResults = results;
+      _searchLoading = false;
     });
   }
 
@@ -140,7 +204,12 @@ class _DiscoverTabState extends State<DiscoverTab>
       _searchFocus.unfocus();
       _searchDebounce?.cancel();
       _searchController.clear();
-      setState(() => _query = '');
+      _searchSeq++;
+      setState(() {
+        _query = '';
+        _searchResults = [];
+        _searchLoading = false;
+      });
     }
   }
 
@@ -166,15 +235,23 @@ class _DiscoverTabState extends State<DiscoverTab>
 
   // ── Filtered / sorted events ───────────────────────────────────────────────
   List<Event> get _visibleEvents {
-    final q = _query.trim().toLowerCase();
-    final list = _events.where((e) {
-      if (_eventCategory != null && e.category != _eventCategory) return false;
-      if (q.isNotEmpty) {
-        return e.title.toLowerCase().contains(q) ||
-            e.venueName.toLowerCase().contains(q);
-      }
-      return true;
-    }).toList();
+    final q = _query.trim();
+    // A real search reads the server results; a one-character query never went
+    // to the server, so fall back to filtering what is loaded rather than
+    // showing an empty "no results".
+    final searchingServerSide = q.length >= _minServerQueryLength;
+    final source = q.isEmpty
+        ? _events
+        : (searchingServerSide
+            ? _searchResults
+            : _events
+                .where((e) =>
+                    e.title.toLowerCase().contains(q.toLowerCase()) ||
+                    e.placeLabel.toLowerCase().contains(q.toLowerCase()))
+                .toList());
+    final list = source
+        .where((e) => _eventCategory == null || e.category == _eventCategory)
+        .toList();
     _sortEvents(list);
     return list;
   }
@@ -190,13 +267,14 @@ class _DiscoverTabState extends State<DiscoverTab>
       case 'nearest':
         final pos = _userPosition;
         if (pos != null) {
-          list.sort((a, b) {
-            final da = Geolocator.distanceBetween(
-                pos.latitude, pos.longitude, a.latitude, a.longitude);
-            final db = Geolocator.distanceBetween(
-                pos.latitude, pos.longitude, b.latitude, b.longitude);
-            return da.compareTo(db);
-          });
+          // Online events have no coordinates; sort them to the end rather
+          // than at 0,0 (which would rank them by distance to the Gulf of
+          // Guinea — web #327 Q2).
+          double dist(Event e) => e.hasLocation
+              ? Geolocator.distanceBetween(
+                  pos.latitude, pos.longitude, e.latitude!, e.longitude!)
+              : double.infinity;
+          list.sort((a, b) => dist(a).compareTo(dist(b)));
         }
         break;
       case 'soonest':
@@ -338,6 +416,9 @@ class _DiscoverTabState extends State<DiscoverTab>
   // Next page (infinite scroll). Appends to the base list the rails/grid derive
   // from. Date-range scoping is preserved via the cursor offset.
   Future<void> _loadMoreEvents() async {
+    // While searching, the visible list is the server's answer — paging the
+    // calendar underneath it would do nothing but burn requests.
+    if (_query.trim().isNotEmpty) return;
     if (_loadingMoreEvents || !_hasMoreEvents || _events.isEmpty) return;
     setState(() => _loadingMoreEvents = true);
     try {
@@ -1009,6 +1090,15 @@ class _DiscoverTabState extends State<DiscoverTab>
     final total = events.length + experiences.length;
 
     if (total == 0) {
+      // Don't claim "no results" while the server is still answering.
+      if (searching && _searchLoading) {
+        return const [
+          Padding(
+            padding: EdgeInsets.only(top: 80),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        ];
+      }
       return [
         Padding(
           padding: const EdgeInsets.only(top: 80),
@@ -1172,7 +1262,12 @@ class _DiscoverTabState extends State<DiscoverTab>
                 onPressed: () {
                   _searchDebounce?.cancel();
                   _searchController.clear();
-                  setState(() => _query = '');
+                  _searchSeq++;
+                  setState(() {
+                    _query = '';
+                    _searchResults = [];
+                    _searchLoading = false;
+                  });
                 },
               )
             : null,
@@ -1673,7 +1768,7 @@ class _EventRailCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    event.venueName,
+                    event.placeLabel,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1846,7 +1941,11 @@ class _FeaturedHero extends StatelessWidget {
                     const SizedBox(height: 12),
                     _heroMetaRow(Icons.calendar_today_outlined, dateStr),
                     const SizedBox(height: 5),
-                    _heroMetaRow(Icons.location_on_outlined, event.venueName),
+                    _heroMetaRow(
+                        event.isOnline
+                            ? Icons.videocam
+                            : Icons.location_on_outlined,
+                        event.placeLabel),
                     const SizedBox(height: 16),
                     Row(
                       children: [

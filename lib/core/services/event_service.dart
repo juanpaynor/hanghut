@@ -135,6 +135,7 @@ class EventService {
           .from('events')
           .select('''
             id, title, description, description_html, venue_name, address, latitude, longitude,
+            is_online,
             start_datetime, end_datetime, cover_image_url, ticket_price,
             capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
             max_seats_per_order,
@@ -173,6 +174,135 @@ class EventService {
       return events;
     } catch (e) {
       print('❌ Error fetching upcoming events: $e');
+      return [];
+    }
+  }
+
+  /// Columns every list/search query selects. Keep the search and the
+  /// calendar list on the same shape so a card built from either parses the
+  /// same way.
+  static const String _listColumns = '''
+            id, title, description, description_html, venue_name, address, latitude, longitude,
+            is_online,
+            start_datetime, end_datetime, cover_image_url, ticket_price,
+            capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
+            max_seats_per_order,
+            is_external, external_ticket_url, external_provider_name,
+            require_approval, hide_venue_until_registered,
+            subscriber_early_access_hours, is_subscriber_only,
+            partners:organizer_id (
+              pass_fees_to_customer,
+              pass_fixed_to_customer,
+              pass_percentage_to_customer,
+              fixed_fee_per_ticket,
+              custom_percentage
+            )
+          ''';
+
+  /// Free-text search over upcoming public events — title, venue and
+  /// description — run ON THE SERVER.
+  ///
+  /// Explore used to filter the 20 events it had already paged in, so anything
+  /// further down the calendar (95 upcoming events as of 2026-09-22) was
+  /// unfindable: you could type an event's exact name and get "No results".
+  ///
+  /// [query] is sanitised for PostgREST's filter grammar, where `,` `(` `)`
+  /// separate clauses and `*` is the wildcard — an unescaped one turns the
+  /// whole `or=` into a syntax error and the search silently returns nothing.
+  Future<List<Event>> searchEvents(
+    String query, {
+    int limit = 40,
+    int offset = 0,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final term = query.replaceAll(RegExp(r'[,()*%\\":]'), ' ').trim();
+    if (term.isEmpty) return [];
+    try {
+      var q = SupabaseConfig.client
+          .from('events')
+          .select(_listColumns)
+          .eq('status', 'active')
+          .eq('is_subscriber_only', false)
+          .neq('invite_only', true)
+          .gte('start_datetime', (startDate ?? DateTime.now()).toIso8601String())
+          .or('title.ilike.*$term*,venue_name.ilike.*$term*,'
+              'description.ilike.*$term*');
+
+      if (endDate != null) {
+        q = q.lte('start_datetime', endDate.toIso8601String());
+      }
+
+      final response = await q
+          .order('start_datetime', ascending: true)
+          .order('id', ascending: true)
+          .range(offset, offset + limit - 1);
+
+      final rows = <String, Map<String, dynamic>>{
+        for (final e in (response as List? ?? []))
+          (e as Map<String, dynamic>)['id'] as String: e,
+      };
+
+      // People search by who is running it ("mimic") at least as often as by
+      // the event's name, and an organizer's name lives on `partners`, not on
+      // `events`. PostgREST cannot OR across an embedded table, so resolve the
+      // organizers first and union their events in.
+      final organizerRows = await _eventsByOrganizerName(
+        term,
+        startDate: startDate,
+        endDate: endDate,
+        limit: limit,
+      );
+      for (final e in organizerRows) {
+        rows.putIfAbsent(e['id'] as String, () => e);
+      }
+
+      final events = rows.values
+          .map((e) => Event.fromJson(e))
+          .toList()
+        ..sort((a, b) => a.startDatetime.compareTo(b.startDatetime));
+      final page = events.take(limit).toList();
+      await _enrichWithPriceRanges(page);
+      return page;
+    } catch (e) {
+      print('❌ Error searching events: $e');
+      return [];
+    }
+  }
+
+  /// Upcoming events whose organizer's business name matches [term].
+  Future<List<Map<String, dynamic>>> _eventsByOrganizerName(
+    String term, {
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 40,
+  }) async {
+    try {
+      final partners = await SupabaseConfig.client
+          .from('partners')
+          .select('id')
+          .ilike('business_name', '%$term%')
+          .limit(10);
+      final ids = (partners as List)
+          .map((p) => (p as Map)['id'].toString())
+          .toList();
+      if (ids.isEmpty) return [];
+
+      var q = SupabaseConfig.client
+          .from('events')
+          .select(_listColumns)
+          .inFilter('organizer_id', ids)
+          .eq('status', 'active')
+          .eq('is_subscriber_only', false)
+          .neq('invite_only', true)
+          .gte('start_datetime', (startDate ?? DateTime.now()).toIso8601String());
+      if (endDate != null) {
+        q = q.lte('start_datetime', endDate.toIso8601String());
+      }
+      final res = await q.order('start_datetime', ascending: true).limit(limit);
+      return List<Map<String, dynamic>>.from(res as List? ?? []);
+    } catch (e) {
+      print('❌ Error searching events by organizer: $e');
       return [];
     }
   }
@@ -239,6 +369,7 @@ class EventService {
           .from('events')
           .select('''
             id, title, description, description_html, venue_name, address, latitude, longitude,
+            is_online,
             start_datetime, end_datetime, cover_image_url, ticket_price,
             capacity, tickets_sold, event_type, category, organizer_id, status, created_at,
             max_seats_per_order,
