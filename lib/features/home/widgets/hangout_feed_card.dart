@@ -51,6 +51,13 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
   String? _liveTableStatus; // Live status fetched from DB
   bool _tableExists = true; // False if the table was deleted
 
+  /// The viewer's own interest toggle, applied locally. The feed screen owns
+  /// the batched proof and will not refetch on a tap, so without this the
+  /// count line above the button still reads "Be first" after tapping it.
+  HangoutSocialProof? _proofOverride;
+
+  HangoutSocialProof? get _proof => _proofOverride ?? widget.proof;
+
   @override
   void initState() {
     super.initState();
@@ -68,7 +75,10 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
       _isLiked =
           widget.post['is_liked'] ?? widget.post['user_has_liked'] ?? false;
       _likeCount = widget.post['like_count'] ?? widget.post['likes_count'] ?? 0;
+      _proofOverride = null;
     }
+    // A refetched page is the truth — drop the local optimistic copy.
+    if (!identical(oldWidget.proof, widget.proof)) _proofOverride = null;
   }
 
   /// Fetch the real title/description from the `tables` row
@@ -1482,7 +1492,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         ),
       );
     }
-    final proof = widget.proof;
+    final proof = _proof;
     final tableId = metadata['table_id']?.toString();
 
     final join = ElevatedButton(
@@ -1520,6 +1530,9 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
             tableId: tableId,
             proof: proof,
             compact: true,
+            onChanged: (p) {
+              if (mounted) setState(() => _proofOverride = p);
+            },
           ),
         ],
       ],
