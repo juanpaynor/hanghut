@@ -9,11 +9,12 @@ import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/features/chat/screens/chat_screen.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
-import 'package:bitemates/core/widgets/avatar_stack.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
 import 'package:bitemates/features/map/widgets/manage_members_sheet.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
+import 'package:bitemates/features/map/widgets/hangout_social_proof_row.dart';
 import 'package:bitemates/features/groups/screens/group_detail_screen.dart';
 import 'package:bitemates/core/utils/image_url.dart';
 
@@ -33,9 +34,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
   Map<String, dynamic>? _membershipStatus;
   bool _isHost = false;
   bool _isInvited = false;
-  List<String> _memberPhotoUrls = [];
-  int _totalMembers = 0;
   int _pendingCount = 0;
+  HangoutSocialProof _proof = HangoutSocialProof.unknown;
   String? _autoGifUrl;
   String? _hostName;
   String? _hostPhotoUrl;
@@ -50,8 +50,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
   void initState() {
     super.initState();
     _checkMembershipStatus();
-    _fetchMembers();
     _fetchPendingCount();
+    _fetchSocialProof();
     _fetchHostInfo();
     _fetchAutoGifIfNeeded();
     _fetchLiveTableStatus();
@@ -237,44 +237,9 @@ class _TableCompactModalState extends State<TableCompactModal> {
     } catch (_) {}
   }
 
-  Future<void> _fetchMembers() async {
-    try {
-      final members = await _memberService.getTableMembers(widget.table['id']);
-      final photos = <String>[];
-
-      for (var member in members) {
-        final user = member['users'];
-        if (user == null) continue;
-
-        String? photoUrl = user['avatar_url'];
-
-        if (user['user_photos'] != null) {
-          final userPhotos = List<Map<String, dynamic>>.from(
-            user['user_photos'],
-          );
-          final primary = userPhotos.firstWhere(
-            (p) => p['is_primary'] == true,
-            orElse: () => userPhotos.isNotEmpty ? userPhotos.first : {},
-          );
-          if (primary.isNotEmpty && primary['photo_url'] != null) {
-            photoUrl = primary['photo_url'];
-          }
-        }
-
-        if (photoUrl != null) {
-          photos.add(photoUrl);
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _memberPhotoUrls = photos;
-          _totalMembers = members.length;
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ Error fetching members for bubbles: $e');
-    }
+  Future<void> _fetchSocialProof() async {
+    final proof = await _memberService.getSocialProofFor(widget.table['id']);
+    if (proof != null && mounted) setState(() => _proof = proof);
   }
 
   Future<void> _checkMembershipStatus() async {
@@ -327,7 +292,6 @@ class _TableCompactModalState extends State<TableCompactModal> {
           widget.table['scheduled_time'] ??
           DateTime.now().toIso8601String(),
     );
-    final currentCapacity = widget.table['current_capacity'] ?? 0;
     final maxCapacity =
         widget.table['max_guests'] ?? widget.table['max_capacity'] ?? 0;
 
@@ -593,9 +557,17 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                 fg: pillTextColor,
                                 iconColor: primaryColor,
                               ),
+                            // The old '$currentCapacity / $maxCapacity spots'
+                            // pill counted the host, so an empty hangout read
+                            // as "1 / 4 spots" — indistinguishable from one
+                            // someone had joined. Say how many GUESTS are
+                            // coming, and ask for the gap.
                             _buildPill(
                               icon: Icons.people_rounded,
-                              label: '$currentCapacity / $maxCapacity spots',
+                              label: _proof.isFull
+                                  ? 'Full'
+                                  : (_proof.needsMoreLabel ??
+                                      '$maxCapacity spots'),
                               bg: pillBg,
                               fg: pillTextColor,
                               iconColor: primaryColor,
@@ -728,15 +700,20 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
                               const SizedBox(width: 12),
 
-                              // Attendee Avatar Stack
-                              if (_memberPhotoUrls.isNotEmpty)
-                                AvatarStack(
-                                  avatarUrls: _memberPhotoUrls,
-                                  totalCount: _totalMembers,
-                                  size: 36,
-                                  borderColor: modalBg,
-                                  borderWidth: 2,
+                              // Who is actually coming. Always rendered —
+                              // hiding this when nobody has joined is what let
+                              // an empty hangout pass for a populated one.
+                              Flexible(
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: HangoutGoingRow(
+                                    proof: _proof,
+                                    showAsk: false,
+                                    avatarSize: 32,
+                                    background: modalBg,
+                                  ),
                                 ),
+                              ),
                             ],
                           ),
                         ),
@@ -1116,17 +1093,40 @@ class _TableCompactModalState extends State<TableCompactModal> {
       );
     }
 
-    // Join Button (Default) — full-width vibrant CTA
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: _joinTable,
-        style: buttonStyle,
-        child: Text(
-          'Join Hangout',
-          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
+    // Join Button (Default) — full-width vibrant CTA, with the lighter
+    // "I'm interested" step underneath it.
+    //
+    // Joining commits you to a place, a time and strangers; over 90 days that
+    // ask converted 19 people while 63% of hangouts got nobody. Interested
+    // costs the viewer nothing and gives the host a reason to believe, so it
+    // sits below Join rather than competing with it.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _joinTable,
+            style: buttonStyle,
+            child: Text(
+              'Join Hangout',
+              style:
+                  GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+          ),
         ),
-      ),
+        if (_proof.canMarkInterested ||
+            _proof.viewerState == HangoutViewerState.interested) ...[
+          const SizedBox(height: 8),
+          InterestedButton(
+            tableId: widget.table['id'],
+            proof: _proof,
+            onChanged: (p) {
+              if (mounted) setState(() => _proof = p);
+            },
+          ),
+        ],
+      ],
     );
   }
 
@@ -1147,7 +1147,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
       ),
     ).then((_) {
       _fetchPendingCount();
-      _fetchMembers();
+      _fetchSocialProof();
     });
   }
 
@@ -1162,7 +1162,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
         tableId: widget.table['id'],
         tableTitle: tableTitle,
       ),
-    ).then((_) => _fetchMembers());
+    ).then((_) => _fetchSocialProof());
   }
 
   void _openChat() {

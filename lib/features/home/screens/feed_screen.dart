@@ -18,6 +18,8 @@ import 'package:bitemates/core/services/connectivity_service.dart';
 import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:bitemates/features/home/widgets/hangout_feed_card.dart';
+import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/notifications/screens/notifications_screen.dart';
 import 'package:bitemates/features/camera/screens/location_story_viewer_screen.dart';
@@ -50,6 +52,11 @@ class FeedScreenState extends State<FeedScreen>
   final StoryService _storyService = StoryService();
 
   List<Map<String, dynamic>> _socialPosts = [];
+
+  /// Social proof for the hangout posts currently in the feed, keyed by
+  /// table id. Fetched in ONE batched call per page — each HangoutFeedCard
+  /// asking for its own would be an N+1 across the whole feed.
+  Map<String, HangoutSocialProof> _hangoutProof = {};
   List<Map<String, dynamic>> _friendsStories = [];
   bool _isLoadingStories = false;
   bool _hasMoreStories = false;
@@ -309,6 +316,25 @@ class FeedScreenState extends State<FeedScreen>
     }
   }
 
+  /// Loads "N going" for every hangout post in [posts] in one round trip.
+  /// Best-effort: on failure the cards fall back to
+  /// [HangoutSocialProof.unknown] and simply read as empty.
+  Future<void> _loadHangoutProof(List<Map<String, dynamic>> posts) async {
+    final ids = <String>[];
+    for (final p in posts) {
+      if (p['post_type'] != 'hangout') continue;
+      final meta = p['metadata'];
+      if (meta is Map && meta['table_id'] != null) {
+        ids.add(meta['table_id'].toString());
+      }
+    }
+    if (ids.isEmpty) return;
+    final proof = await TableMemberService().getSocialProof(ids);
+    if (proof.isNotEmpty && mounted) {
+      setState(() => _hangoutProof = {..._hangoutProof, ...proof});
+    }
+  }
+
   Future<void> _loadSocialPosts({bool force = false}) async {
     // ✅ Check cache freshness first
     if (!force && _socialPosts.isNotEmpty && _lastFetchTime != null) {
@@ -353,6 +379,7 @@ class FeedScreenState extends State<FeedScreen>
           _pendingInserts.clear();
           _pendingDeletes.clear();
         });
+        _loadHangoutProof(posts);
       }
     } catch (e) {
       print('❌ Error loading social posts: $e');
@@ -401,6 +428,7 @@ class FeedScreenState extends State<FeedScreen>
             _nextCursorId = result['nextCursorId'] as String?;
             _isLoadingMore = false;
           });
+          _loadHangoutProof(newPosts);
         } else {
           setState(() {
             _hasMore = false;
@@ -1225,9 +1253,16 @@ class FeedScreenState extends State<FeedScreen>
 
                           // Check post type for Hangout Feed Card
                           if (post['post_type'] == 'hangout') {
+                            final tableId = (post['metadata']
+                                is Map)
+                                ? post['metadata']['table_id']?.toString()
+                                : null;
                             return HangoutFeedCard(
                               key: ValueKey(post['id']),
                               post: post,
+                              proof: tableId == null
+                                  ? null
+                                  : _hangoutProof[tableId],
                               onTap: () {
                                 final metadata = post['metadata'];
                                 if (metadata != null &&

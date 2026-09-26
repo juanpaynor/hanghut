@@ -119,7 +119,13 @@ class _SupportInboxScreenState extends State<SupportInboxScreen>
             width: double.infinity,
             child: FilledButton.icon(
               onPressed: _loading ? null : _primaryAction,
-              icon: Icon(active.isEmpty ? Icons.add_comment_outlined : Icons.chat_bubble_outline),
+              // add_comment_outlined is NOT in release 11305a4, so it would
+              // render as a "?" box in a Shorebird patch — patches ship Dart,
+              // never new icon-font glyphs. add_circle_outline is in the
+              // release and says the same thing.
+              icon: Icon(active.isEmpty
+                  ? Icons.add_circle_outline
+                  : Icons.chat_bubble_outline),
               label: Text(active.isEmpty
                   ? 'New conversation'
                   : 'Continue conversation'),

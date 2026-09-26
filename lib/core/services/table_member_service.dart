@@ -4,6 +4,7 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
 import 'package:bitemates/features/gamification/services/badge_service.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 
 class TableMemberService {
   // Helper: get user display name for notification copy
@@ -76,10 +77,17 @@ class TableMemberService {
           };
         }
 
-        return {
-          'success': false,
-          'message': 'You are already a member of this table',
-        };
+        // 'interested' holds no spot, so tapping Join has to run the real join
+        // path — capacity, approval and distance all still have to be checked.
+        // Falling through instead of returning is deliberate: the writes below
+        // upsert on (table_id, user_id), so the interested row is upgraded in
+        // place rather than colliding with the unique constraint.
+        if (status != 'interested') {
+          return {
+            'success': false,
+            'message': 'You are already a member of this table',
+          };
+        }
       }
 
       // Get table info to check status, capacity, and approval setting
@@ -267,13 +275,13 @@ class TableMemberService {
 
       if (requiresApproval) {
         // Host approval required — insert as pending
-        await SupabaseConfig.client.from('table_members').insert({
+        await SupabaseConfig.client.from('table_members').upsert({
           'table_id': tableId,
           'user_id': user.id,
           'role': 'member',
           'status': 'pending',
           'requested_at': DateTime.now().toIso8601String(),
-        });
+        }, onConflict: 'table_id,user_id');
 
         // Send notification to host
         final hostId = table['host_id'] as String;
@@ -299,13 +307,14 @@ class TableMemberService {
       }
 
       // No approval required — auto-join
-      await SupabaseConfig.client.from('table_members').insert({
+      await SupabaseConfig.client.from('table_members').upsert({
         'table_id': tableId,
         'user_id': user.id,
         'role': 'member',
         'status': 'joined',
         'joined_at': DateTime.now().toIso8601String(),
-      });
+        'left_at': null,
+      }, onConflict: 'table_id,user_id');
 
       // Schedule a reminder notification for 30 min before event
       if (table['datetime'] != null) {
@@ -697,6 +706,160 @@ class TableMemberService {
       return row?['is_muted'] == true;
     } catch (e) {
       return false;
+    }
+  }
+
+  // ───────────────────────── Interested ─────────────────────────
+  // Joining a hangout means committing to a place, a time and strangers. Over
+  // the last 90 days that ask converted 19 distinct people while 63% of
+  // hangouts got nobody, so "Interested" exists as a cheaper first step: it
+  // takes no spot, needs no approval, and gives the host a reason to believe
+  // someone will turn up.
+
+  /// Social proof for a page of hangouts in ONE round trip, keyed by table id.
+  /// Returns an empty map on failure — callers fall back to
+  /// [HangoutSocialProof.unknown], which renders as empty rather than blank.
+  Future<Map<String, HangoutSocialProof>> getSocialProof(
+    List<String> tableIds,
+  ) async {
+    final ids = tableIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return {};
+    try {
+      final res = await SupabaseConfig.client
+          .rpc('get_hangout_social_proof', params: {'p_table_ids': ids});
+      final map = Map<String, dynamic>.from(res as Map);
+      return map.map(
+        (k, v) => MapEntry(
+          k,
+          HangoutSocialProof.fromJson(Map<String, dynamic>.from(v as Map)),
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ Error fetching hangout social proof: $e');
+      return {};
+    }
+  }
+
+  Future<HangoutSocialProof?> getSocialProofFor(String tableId) async {
+    final all = await getSocialProof([tableId]);
+    return all[tableId];
+  }
+
+  /// Marks the current user interested. Idempotent.
+  Future<Map<String, dynamic>> markInterested(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) {
+        return {'success': false, 'message': 'Please sign in first'};
+      }
+
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select('host_id, title, status')
+          .eq('id', tableId)
+          .maybeSingle();
+      if (table == null) {
+        return {'success': false, 'message': 'This hangout no longer exists'};
+      }
+      if (table['host_id'] == user.id) {
+        return {'success': false, 'message': "It's your own hangout"};
+      }
+      if (table['status'] != 'open') {
+        return {'success': false, 'message': 'This hangout is closed'};
+      }
+
+      // Never downgrade someone who already holds a spot or has a request in.
+      final existing = await SupabaseConfig.client
+          .from('table_members')
+          .select('status')
+          .eq('table_id', tableId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+      if (existing != null) {
+        final status = existing['status'] as String?;
+        if (status == 'interested') {
+          return {'success': true, 'message': null};
+        }
+        if (status == 'approved' ||
+            status == 'joined' ||
+            status == 'attended' ||
+            status == 'pending') {
+          return {'success': false, 'message': "You're already on the list"};
+        }
+      }
+
+      await SupabaseConfig.client.from('table_members').upsert({
+        'table_id': tableId,
+        'user_id': user.id,
+        'role': 'member',
+        'status': 'interested',
+        'requested_at': DateTime.now().toIso8601String(),
+        'joined_at': null,
+        'left_at': null,
+      }, onConflict: 'table_id,user_id');
+
+      // Tell the host. This is the entire point of the signal — a host does not
+      // reopen their own hangout to check, so it has to reach them. Best-effort:
+      // the interest itself is already recorded.
+      try {
+        final userName = await _getUserDisplayName(user.id);
+        await SupabaseConfig.client.from('notifications').insert({
+          'user_id': table['host_id'],
+          'actor_id': user.id,
+          'type': 'hangout_interest',
+          'entity_id': tableId,
+          'title': '$userName is interested',
+          'body': table['title'] ?? 'Your hangout',
+          'metadata': {'table_id': tableId},
+        });
+      } catch (e) {
+        debugPrint('⚠️ Could not notify host of interest: $e');
+      }
+
+      return {'success': true, 'message': null};
+    } catch (e) {
+      debugPrint('⚠️ Error marking interested: $e');
+      return {'success': false, 'message': 'Could not save that. Try again.'};
+    }
+  }
+
+  /// Undoes [markInterested]. Only ever removes an 'interested' row, so it can
+  /// never be used to drop a real membership.
+  Future<bool> removeInterest(String tableId) async {
+    try {
+      final user = SupabaseConfig.client.auth.currentUser;
+      if (user == null) return false;
+      await SupabaseConfig.client
+          .from('table_members')
+          .delete()
+          .eq('table_id', tableId)
+          .eq('user_id', user.id)
+          .eq('status', 'interested');
+      return true;
+    } catch (e) {
+      debugPrint('⚠️ Error removing interest: $e');
+      return false;
+    }
+  }
+
+  /// The interested list, for the host. Separate from [getTableMembers] because
+  /// these people are NOT members and must never appear as guests.
+  Future<List<Map<String, dynamic>>> getInterestedUsers(String tableId) async {
+    try {
+      final rows = await SupabaseConfig.client
+          .from('table_members')
+          .select(
+            'user_id, requested_at, '
+            'users:user_id ( id, display_name, avatar_url, '
+            'user_photos ( photo_url, is_primary ) )',
+          )
+          .eq('table_id', tableId)
+          .eq('status', 'interested')
+          .order('requested_at', ascending: true);
+      return List<Map<String, dynamic>>.from(rows);
+    } catch (e) {
+      debugPrint('⚠️ Error getting interested users: $e');
+      return [];
     }
   }
 }

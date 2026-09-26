@@ -17,6 +17,8 @@ import 'package:bitemates/features/home/widgets/edit_post_modal.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
 import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
 import 'package:bitemates/core/utils/image_url.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
+import 'package:bitemates/features/map/widgets/hangout_social_proof_row.dart';
 
 class HangoutFeedCard extends StatefulWidget {
   final Map<String, dynamic> post;
@@ -24,12 +26,17 @@ class HangoutFeedCard extends StatefulWidget {
   final Function(String)? onPostDeleted;
   final ValueChanged<Map<String, dynamic>>? onPostEdited;
 
+  /// Who is actually coming. Supplied by the feed screen, which batches one
+  /// lookup for the whole page — null until that lands, or if it failed.
+  final HangoutSocialProof? proof;
+
   const HangoutFeedCard({
     super.key,
     required this.post,
     required this.onTap,
     this.onPostDeleted,
     this.onPostEdited,
+    this.proof,
   });
 
   @override
@@ -1475,7 +1482,10 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         ),
       );
     }
-    return ElevatedButton(
+    final proof = widget.proof;
+    final tableId = metadata['table_id']?.toString();
+
+    final join = ElevatedButton(
       onPressed: widget.onTap,
       style: ElevatedButton.styleFrom(
         backgroundColor: Colors.indigo,
@@ -1484,6 +1494,35 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       ),
       child: const Text('Join', style: TextStyle(fontWeight: FontWeight.bold)),
+    );
+
+    if (proof == null || tableId == null) return join;
+
+    // Social proof above the CTA, and the lighter "interested" step below it.
+    // Compact copy because this column is the narrow side of a Row whose left
+    // half is an Expanded.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        HangoutGoingRow(
+          proof: proof,
+          compact: true,
+          showAsk: false,
+          avatarSize: 22,
+        ),
+        const SizedBox(height: 6),
+        join,
+        if (proof.canMarkInterested ||
+            proof.viewerState == HangoutViewerState.interested) ...[
+          const SizedBox(height: 2),
+          InterestedButton(
+            tableId: tableId,
+            proof: proof,
+            compact: true,
+          ),
+        ],
+      ],
     );
   }
 

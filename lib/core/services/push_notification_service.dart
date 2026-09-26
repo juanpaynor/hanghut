@@ -240,6 +240,7 @@ class PushNotificationService {
         data['type'] == 'declined' ||
         data['type'] == 'hangout_invite' ||
         data['type'] == 'follower_hangout' ||
+        data['type'] == 'hangout_interest' ||
         data['type'] == 'friend_joined' ||
         data['type'] == 'event_reminder' ||
         data['type'] == 'ticket_purchase' ||

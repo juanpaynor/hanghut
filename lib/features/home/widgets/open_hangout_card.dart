@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/utils/image_url.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 
 /// A rich hangout card for the Open Hangouts carousel.
 /// Shows avatar stack, capacity badge, location/time, category pills,
@@ -11,7 +12,17 @@ class OpenHangoutCard extends StatefulWidget {
   final Map<String, dynamic> table;
   final VoidCallback onTap;
 
-  const OpenHangoutCard({super.key, required this.table, required this.onTap});
+  /// Who is actually coming. The card's own avatar stack merges host + members,
+  /// so without this an empty hangout shows the host's face and reads as though
+  /// someone joined. Null until the tab's batched lookup lands.
+  final HangoutSocialProof? proof;
+
+  const OpenHangoutCard({
+    super.key,
+    required this.table,
+    required this.onTap,
+    this.proof,
+  });
 
   @override
   State<OpenHangoutCard> createState() => _OpenHangoutCardState();
@@ -170,6 +181,7 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
                   children: [
                     // Avatar stack
                     _buildAvatarStack(),
+                    _buildGoingLine(),
                     const SizedBox(height: 8),
 
                     // Title
@@ -328,6 +340,57 @@ class _OpenHangoutCardState extends State<OpenHangoutCard> {
           fontWeight: FontWeight.w800,
           letterSpacing: 0.3,
         ),
+      ),
+    );
+  }
+
+  /// States plainly whether anyone joined, and asks for the gap.
+  ///
+  /// Styled locally because this card sits on a photo and the shared
+  /// HangoutGoingRow takes its colours from the theme — but the WORDS come from
+  /// the model, so this can never drift from the feed card or the modal.
+  Widget _buildGoingLine() {
+    final proof = widget.proof;
+    if (proof == null) return const SizedBox.shrink();
+
+    final ask = proof.needsMoreLabel;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Flexible(
+            child: Text(
+              proof.goingLabelCompact,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: proof.isEmpty
+                    ? Colors.white.withOpacity(0.75)
+                    : Colors.white,
+              ),
+            ),
+          ),
+          if (ask != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.22),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                ask,
+                style: GoogleFonts.inter(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

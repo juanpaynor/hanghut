@@ -4,6 +4,8 @@ import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
+import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 
 /// Dedicated "Hangouts" browse tab in Explore — a paginated grid of open
 /// hangouts with quick vibe filters. Split out of DiscoverTab so Discover can
@@ -29,9 +31,13 @@ class _HangoutsTabState extends State<HangoutsTab> {
   ];
 
   final TableService _service = TableService();
+  final TableMemberService _memberService = TableMemberService();
   final ScrollController _scroll = ScrollController();
 
   final List<Map<String, dynamic>> _hangouts = [];
+
+  /// "N going" per hangout, batched one call per page rather than one per card.
+  Map<String, HangoutSocialProof> _proof = {};
   final Set<String> _vibeFilters = {};
 
   bool _loading = true; // first load / refresh
@@ -71,6 +77,18 @@ class _HangoutsTabState extends State<HangoutsTab> {
     return _service.enrichTablesWithMembers(filtered);
   }
 
+  Future<void> _loadProof(List<Map<String, dynamic>> page) async {
+    final ids = page
+        .map((t) => t['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (ids.isEmpty) return;
+    final proof = await _memberService.getSocialProof(ids);
+    if (proof.isNotEmpty && mounted) {
+      setState(() => _proof = {..._proof, ...proof});
+    }
+  }
+
   Future<void> _loadFirst() async {
     setState(() {
       _loading = true;
@@ -87,6 +105,7 @@ class _HangoutsTabState extends State<HangoutsTab> {
         _hasMore = page.length >= _pageSize;
         _loading = false;
       });
+      _loadProof(page);
     } catch (e) {
       debugPrint('❌ HangoutsTab: first load failed: $e');
       if (mounted) {
@@ -110,6 +129,7 @@ class _HangoutsTabState extends State<HangoutsTab> {
         _hasMore = page.length >= _pageSize;
         _loadingMore = false;
       });
+      _loadProof(page);
     } catch (e) {
       debugPrint('❌ HangoutsTab: load more failed: $e');
       if (mounted) setState(() => _loadingMore = false);
@@ -199,6 +219,7 @@ class _HangoutsTabState extends State<HangoutsTab> {
                 final table = items[i];
                 return OpenHangoutCard(
                   table: table,
+                  proof: _proof[table['id']?.toString() ?? ''],
                   onTap: () => _openHangout(table),
                 );
               },

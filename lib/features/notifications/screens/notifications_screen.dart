@@ -138,6 +138,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         iconData = Icons.celebration;
         iconColor = Colors.deepOrange;
         break;
+      case 'hangout_interest':
+        iconData = Icons.star_outline;
+        iconColor = Colors.amber;
+        break;
       case 'friend_joined':
         iconData = Icons.person_add_alt_1;
         iconColor = Colors.teal;
@@ -560,6 +564,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         'follower_hangout',
         'friend_joined',
         'member_joined',
+        'hangout_interest',
         'host_status_update',
       ].contains(type)) {
         // Table / hangout — entity_id is the table id
