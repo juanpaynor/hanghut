@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:math';
+// Marker shape language — one definition, verified in marker_silhouettes_test.
+import 'package:bitemates/features/map/widgets/marker_silhouettes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:geolocator/geolocator.dart' as geo;
@@ -2634,9 +2636,12 @@ class MapScreenState extends State<MapScreen>
                   );
                 }
 
+                // Experience = 120 body + 16 tail; hangout = 120 + 20.
+                // Anchor is BOTTOM, so a taller bitmap grows upward and the
+                // tail tip stays at the pinned coordinate.
                 final int imgHeight = table['is_experience'] == true
                     ? 136
-                    : 120;
+                    : MarkerSilhouettes.kHangoutMarkerHeight.round();
 
                 await style.addStyleImage(
                   imageId,
@@ -3145,12 +3150,60 @@ class MapScreenState extends State<MapScreen>
   /// Fetches image bytes through the shared disk cache so marker photos are
   /// downloaded from Storage at most once per device (not per map view).
   /// Returns null on any failure so callers can fall back to a placeholder.
-  Future<Uint8List?> _loadMarkerImageBytes(String url) async {
+  /// Marker image fetches, deduplicated and negatively cached.
+  ///
+  /// A viewport with 61 events fired 61 independent fetches for 6 distinct URLs
+  /// — one cover was requested 8 times in a single batch — and a host that
+  /// cannot be resolved was retried on every pan, filling the log and blocking
+  /// marker generation each time. DefaultCacheManager caches successes on disk;
+  /// what it does not do is collapse concurrent requests or remember failures.
+  ///
+  /// Static so the memory survives the State being rebuilt.
+  static final Map<String, Future<Uint8List?>> _markerImageInFlight = {};
+  static final Map<String, DateTime> _markerImageFailedAt = {};
+
+  /// How long a failed URL is treated as unavailable before we try again. Long
+  /// enough that panning around does not re-attempt a dead host, short enough
+  /// that a transient DNS blip heals without a restart.
+  static const Duration _markerImageFailureTtl = Duration(minutes: 5);
+
+  /// Cap on remembered failures, so a large broken dataset cannot grow this map
+  /// without bound over a long session.
+  static const int _maxRememberedFailures = 250;
+
+  Future<Uint8List?> _loadMarkerImageBytes(String url) {
+    final failedAt = _markerImageFailedAt[url];
+    if (failedAt != null) {
+      if (DateTime.now().difference(failedAt) < _markerImageFailureTtl) {
+        return Future<Uint8List?>.value(null); // known bad — stay silent
+      }
+      _markerImageFailedAt.remove(url);
+    }
+
+    // Collapse concurrent requests for the same URL onto one fetch.
+    final existing = _markerImageInFlight[url];
+    if (existing != null) return existing;
+
+    final future = _fetchMarkerImageBytes(url);
+    _markerImageInFlight[url] = future;
+    // whenComplete, not then: the slot must clear on failure too.
+    future.whenComplete(() => _markerImageInFlight.remove(url));
+    return future;
+  }
+
+  Future<Uint8List?> _fetchMarkerImageBytes(String url) async {
     try {
       final file = await DefaultCacheManager().getSingleFile(url);
       return await file.readAsBytes();
     } catch (e) {
-      print('⚠️ Marker image fetch failed ($url): $e');
+      if (_markerImageFailedAt.length >= _maxRememberedFailures) {
+        _markerImageFailedAt.clear();
+      }
+      _markerImageFailedAt[url] = DateTime.now();
+      print(
+        '⚠️ Marker image fetch failed ($url): $e '
+        '— suppressed for ${_markerImageFailureTtl.inMinutes}m',
+      );
       return null;
     }
   }
@@ -3195,7 +3248,10 @@ class MapScreenState extends State<MapScreen>
     final int size = 120; // Same size as other markers
     final double tailHeight = 16.0;
     final double totalHeight = size + tailHeight;
-    final double borderRadius = 12.0;
+    // Deliberately near-square: hangouts are a ROUND-headed pin, experiences a
+    // SQUARE-headed one, and head shape is what separates them at 60px. A 12px
+    // radius read as "roundish" next to a circle. See MARKER SILHOUETTES.
+    final double borderRadius = 5.0;
 
     // Experience markers always use fixed amber — consistent brand color
     const Color color = Color(0xFFFF6F00); // Amber
@@ -3570,23 +3626,12 @@ class MapScreenState extends State<MapScreen>
       }
     }
 
-    // Draw outer glow ring with match-based or type-based color
-    if (glowIntensity > 0 || activityType != null) {
-      final Paint ringPaint = Paint()
-        ..color = color.withOpacity(glowIntensity > 0 ? glowIntensity : 0.8)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 10;
+    // Round-headed pin — the hangout silhouette. See MARKER SILHOUETTES.
+    // A host-chosen image gets circle-cropped, which is the cost of hangouts
+    // owning one consistent shape; the emoji variant is 2x more common anyway.
+    MarkerSilhouettes.paintRoundPinFrame(canvas, color.withOpacity(1.0));
 
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(4, 4, size - 8, size - 8),
-          const Radius.circular(16),
-        ),
-        ringPaint,
-      );
-    }
-
-    // Try to load custom image
+    final Rect content = MarkerSilhouettes.roundPinContentRect();
     try {
       final bytes = await _loadMarkerImageBytes(imageUrl);
       if (bytes == null) throw Exception('image unavailable');
@@ -3594,49 +3639,21 @@ class MapScreenState extends State<MapScreen>
       final ui.FrameInfo frameInfo = await codec.getNextFrame();
       final ui.Image customImage = frameInfo.image;
 
-      // Draw rounded rectangle background
-      final Paint bgPaint = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.fill;
-
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(10, 10, size - 20, size - 20),
-          const Radius.circular(12),
-        ),
-        bgPaint,
-      );
-
-      // Draw custom image with rounded corners
       canvas.save();
-      final Path clipPath = Path()
-        ..addRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTWH(12, 12, size - 24, size - 24),
-            const Radius.circular(10),
-          ),
-        );
-      canvas.clipPath(clipPath);
+      canvas.clipPath(Path()..addOval(content));
       paintImage(
         canvas: canvas,
-        rect: Rect.fromLTWH(12, 12, size - 24, size - 24),
+        rect: content,
         image: customImage,
         fit: BoxFit.cover,
       );
       canvas.restore();
     } catch (e) {
       print('❌ Error loading custom marker image: $e');
-      // Fallback to icon
-      final Paint fallbackPaint = Paint()
-        ..color = Colors.black
-        ..style = PaintingStyle.fill;
-
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(10, 10, size - 20, size - 20),
-          const Radius.circular(12),
-        ),
-        fallbackPaint,
+      canvas.drawCircle(
+        content.center,
+        content.width / 2,
+        Paint()..color = const Color(0xFF2A2F3A),
       );
     }
 
@@ -3669,7 +3686,7 @@ class MapScreenState extends State<MapScreen>
     // Convert to image
     final ui.Image image = await pictureRecorder.endRecording().toImage(
       size,
-      size,
+      MarkerSilhouettes.kHangoutMarkerHeight.round(),
     );
     final ByteData? byteData = await image.toByteData(
       format: ui.ImageByteFormat.png,
@@ -3704,27 +3721,10 @@ class MapScreenState extends State<MapScreen>
       }
     }
 
-    // Draw outer glow ring with match-based or type-based color
-    if (glowIntensity > 0 || activityType != null) {
-      final Paint ringPaint = Paint()
-        ..color = color
-            .withOpacity(
-              glowIntensity > 0 ? glowIntensity : 0.8,
-            ) // Use given intensity or default to strong glow for types
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 8;
+    // Round-headed pin — the hangout silhouette. See MARKER SILHOUETTES.
+    MarkerSilhouettes.paintRoundPinFrame(canvas, color.withOpacity(1.0));
 
-      canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 4, ringPaint);
-    }
-
-    // Draw white background
-    final Paint bgPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2 - 8, bgPaint);
-
-    // Try to load host photo
+    final Rect content = MarkerSilhouettes.roundPinContentRect();
     if (photoUrl != null) {
       try {
         final bytes = await _loadMarkerImageBytes(photoUrl);
@@ -3733,20 +3733,11 @@ class MapScreenState extends State<MapScreen>
         final ui.FrameInfo frameInfo = await codec.getNextFrame();
         final ui.Image profileImage = frameInfo.image;
 
-        // Draw circular clipped profile photo
         canvas.save();
-        final Path clipPath = Path()
-          ..addOval(
-            Rect.fromCircle(
-              center: Offset(size / 2, size / 2),
-              radius: size / 2 - 12,
-            ),
-          );
-        canvas.clipPath(clipPath);
-
+        canvas.clipPath(Path()..addOval(content));
         paintImage(
           canvas: canvas,
-          rect: Rect.fromLTWH(12, 12, size - 24, size - 24),
+          rect: content,
           image: profileImage,
           fit: BoxFit.cover,
         );
@@ -3788,7 +3779,7 @@ class MapScreenState extends State<MapScreen>
     // Convert to image
     final ui.Image image = await pictureRecorder.endRecording().toImage(
       size,
-      size,
+      MarkerSilhouettes.kHangoutMarkerHeight.round(),
     );
     final ByteData? byteData = await image.toByteData(
       format: ui.ImageByteFormat.png,
@@ -3822,40 +3813,14 @@ class MapScreenState extends State<MapScreen>
       }
     }
 
-    // Draw outer glow ring
-    if (glowIntensity > 0 || activityType != null) {
-      final Paint ringPaint = Paint()
-        ..color = color.withOpacity(glowIntensity > 0 ? glowIntensity : 0.8)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 10;
+    // Round-headed pin — the hangout silhouette. See MARKER SILHOUETTES.
+    MarkerSilhouettes.paintRoundPinFrame(canvas, color.withOpacity(1.0));
 
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(4, 4, size - 8, size - 8),
-          const Radius.circular(16),
-        ),
-        ringPaint,
-      );
-    }
-
-    // Draw white background
-    final Paint bgPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(10, 10, size - 20, size - 20),
-        const Radius.circular(12),
-      ),
-      bgPaint,
-    );
-
-    // Draw Emoji
+    // Draw Emoji, centred in the HEAD (not the bitmap, which includes the tail)
     final textPainter = TextPainter(
       text: TextSpan(
         text: emoji,
-        style: TextStyle(fontSize: size * 0.5),
+        style: TextStyle(fontSize: size * 0.46),
       ),
       textAlign: TextAlign.center,
       textDirection: ui.TextDirection.ltr,
@@ -3870,7 +3835,7 @@ class MapScreenState extends State<MapScreen>
     // Convert to image
     final ui.Image image = await pictureRecorder.endRecording().toImage(
       size,
-      size,
+      MarkerSilhouettes.kHangoutMarkerHeight.round(),
     );
     final ByteData? byteData = await image.toByteData(
       format: ui.ImageByteFormat.png,
@@ -3957,14 +3922,16 @@ class MapScreenState extends State<MapScreen>
     final Canvas canvas = Canvas(pictureRecorder);
     final int size = 120; // Size of the marker
 
-    // 1. Draw White Circle Background
-    final Paint bgPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
+    // 1. Ticket stub body — the event silhouette. Events used to draw a plain
+    // circle, which is the same head shape as a hangout pin; the side notches
+    // are what separate them at 60px. See MARKER SILHOUETTES.
+    final Path ticket = MarkerSilhouettes.ticketPath(inset: 3);
+    canvas.drawShadow(ticket, Colors.black.withOpacity(0.5), 4.0, true);
+    canvas.drawPath(ticket, Paint()..color = Colors.white);
 
-    canvas.drawCircle(Offset(size / 2, size / 2), size / 2, bgPaint);
-
-    // 2. Draw Image (Clip to Circle)
+    // 2. Cover image, clipped to the ticket so the notches stay cut out.
+    // A square crop also keeps more of a poster than the old circle did.
+    final Rect coverRect = MarkerSilhouettes.ticketContentRect();
     if (event.coverImageUrl != null) {
       try {
         final bytes = await _loadMarkerImageBytes(event.coverImageUrl!);
@@ -3974,17 +3941,10 @@ class MapScreenState extends State<MapScreen>
           final ui.Image image = frameInfo.image;
 
           canvas.save();
-          final Path clipPath = Path()
-            ..addOval(
-              Rect.fromCircle(
-                center: Offset(size / 2, size / 2),
-                radius: (size / 2) - 4, // Slight padding
-              ),
-            );
-          canvas.clipPath(clipPath);
+          canvas.clipPath(MarkerSilhouettes.ticketPath(inset: 6));
           paintImage(
             canvas: canvas,
-            rect: Rect.fromLTWH(4, 4, size - 8, size - 8),
+            rect: coverRect,
             image: image,
             fit: BoxFit.cover,
           );
@@ -4011,20 +3971,17 @@ class MapScreenState extends State<MapScreen>
       );
     }
 
-    // 4. Draw Purple double-ring border (Events = Purple #7C4DFF)
-    // Outer ring
-    canvas.drawCircle(
-      Offset(size / 2, size / 2),
-      (size / 2) - 1,
+    // 4. Purple edge, traced along the ticket outline (Events = #7C4DFF).
+    // Following the path rather than a circle is what makes the notches read.
+    canvas.drawPath(
+      ticket,
       Paint()
         ..color = const Color(0xFF7C4DFF)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 6,
     );
-    // Inner accent ring
-    canvas.drawCircle(
-      Offset(size / 2, size / 2),
-      (size / 2) - 9,
+    canvas.drawPath(
+      MarkerSilhouettes.ticketPath(inset: 9),
       Paint()
         ..color = const Color(0xFF7C4DFF).withOpacity(0.35)
         ..style = PaintingStyle.stroke
