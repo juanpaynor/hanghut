@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:math';
+import 'package:bitemates/core/utils/concurrency.dart';
 // Marker shape language — one definition, verified in marker_silhouettes_test.
 import 'package:bitemates/features/map/widgets/marker_silhouettes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -100,6 +101,18 @@ class MapScreenState extends State<MapScreen>
   /// for, and the branch that builds the features. When those two disagreed,
   /// every event inside a stack got a marker image that was never drawn.
   static const int _spiderfyMax = 5;
+
+  /// How many marker bitmaps may be built at once.
+  ///
+  /// Each one downloads a cover, decodes it to a ui.Image, paints a Canvas and
+  /// PNG-encodes the result. Future.wait over the whole list starts every one
+  /// of them in the same tick, so a dense viewport held dozens of decoded
+  /// bitmaps in memory simultaneously — a transient spike of hundreds of MB on
+  /// the exact mid-range devices least able to absorb it.
+  ///
+  /// A small pool barely changes wall-clock (the work is IO-bound and the
+  /// device cannot decode dozens in parallel anyway) and flattens the peak.
+  static const int _markerGenerationConcurrency = 6;
 
   // Experience route polyline
   PolylineAnnotationManager? _routePolylineManager;
@@ -2627,8 +2640,10 @@ class MapScreenState extends State<MapScreen>
           print(
             '🎨 Generating ${tablesNeedImages.length} table markers in parallel...',
           );
-          await Future.wait(
-            tablesNeedImages.map((table) async {
+          await forEachLimited(
+            tablesNeedImages,
+            _markerGenerationConcurrency,
+            (table) async {
               try {
                 final imageId = 'table_img_${table['id']}';
                 final matchData = _matchingService.calculateMatch(
@@ -2693,7 +2708,7 @@ class MapScreenState extends State<MapScreen>
               } catch (e) {
                 print('❌ Error generating table marker for ${table['id']}: $e');
               }
-            }),
+            },
           );
         }
       }();
@@ -2710,8 +2725,10 @@ class MapScreenState extends State<MapScreen>
             '🎨 Generating ${eventsNeedImages.length} event markers in '
             'parallel${skipped > 0 ? ' (skipped $skipped inside venue stacks)' : ''}...',
           );
-          await Future.wait(
-            eventsNeedImages.map((event) async {
+          await forEachLimited(
+            eventsNeedImages,
+            _markerGenerationConcurrency,
+            (event) async {
               try {
                 final imageId = 'event_img_${event.id}';
                 final markerImage = await _createEventMarkerImage(event: event);
@@ -2729,7 +2746,7 @@ class MapScreenState extends State<MapScreen>
               } catch (e) {
                 print('❌ Error generating event marker for ${event.id}: $e');
               }
-            }),
+            },
           );
         }
       }();
@@ -2744,8 +2761,10 @@ class MapScreenState extends State<MapScreen>
           print(
             '📸 Generating ${storiesNeedImages.length} story markers in parallel...',
           );
-          await Future.wait(
-            storiesNeedImages.map((story) async {
+          await forEachLimited(
+            storiesNeedImages,
+            _markerGenerationConcurrency,
+            (story) async {
               try {
                 final imageId = 'story_img_${story['id']}';
                 final markerImage = await _createStoryMarkerImage(story: story);
@@ -2763,7 +2782,7 @@ class MapScreenState extends State<MapScreen>
               } catch (e) {
                 print('❌ Error generating story marker for ${story['id']}: $e');
               }
-            }),
+            },
           );
         }
       }();
@@ -2778,8 +2797,10 @@ class MapScreenState extends State<MapScreen>
 
         if (mysteryNeedImages.isNotEmpty) {
           print('🔮 Generating ${mysteryNeedImages.length} mystery markers...');
-          await Future.wait(
-            mysteryNeedImages.map((table) async {
+          await forEachLimited(
+            mysteryNeedImages,
+            _markerGenerationConcurrency,
+            (table) async {
               try {
                 final imageId = 'mystery_img_${table['id']}';
                 final markerImage = await _createMysteryMarkerImage();
@@ -2799,7 +2820,7 @@ class MapScreenState extends State<MapScreen>
                   '❌ Error generating mystery marker for ${table['id']}: $e',
                 );
               }
-            }),
+            },
           );
         }
       }();
