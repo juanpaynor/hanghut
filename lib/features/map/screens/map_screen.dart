@@ -93,6 +93,14 @@ class MapScreenState extends State<MapScreen>
   final Set<String> _addedImages = {};
   static const int _maxCachedImages = 200; // Prevent memory leak
 
+  /// Largest event pile-up still drawn as individual spiderfied markers.
+  /// Above this, one venue stack is drawn instead.
+  ///
+  /// Read in TWO places that must agree: the set of events we generate bitmaps
+  /// for, and the branch that builds the features. When those two disagreed,
+  /// every event inside a stack got a marker image that was never drawn.
+  static const int _spiderfyMax = 5;
+
   // Experience route polyline
   PolylineAnnotationManager? _routePolylineManager;
   CameraState?
@@ -2576,6 +2584,35 @@ class MapScreenState extends State<MapScreen>
 
       final features = <Map<String, dynamic>>[];
 
+      // Group events by exact coordinate BEFORE generating any bitmaps.
+      //
+      // This grouping decides what is actually drawn — a lone event, a
+      // spiderfied ring of 2-5, or a single venue stack for 6+ — and it used to
+      // run AFTER every event had already been given a marker image. In a dense
+      // Metro Manila viewport that meant 79 bitmaps generated for 37 drawn
+      // markers: one venue (Ayala Malls Circuit) stacks 37 events on one point,
+      // and the stack only ever renders `firstEvent`, so 36 covers were
+      // downloaded, decoded, painted, PNG-encoded and handed to the style
+      // engine purely to be thrown away.
+      //
+      // Grouping first lets us generate exactly the images the features will
+      // reference. Group membership is keyed on coordinate, not zoom, so it is
+      // stable across pans.
+      final Map<String, List<Event>> eventGroups = {};
+      for (final event in _events) {
+        final key =
+            '${event.latitude!.toStringAsFixed(6)},${event.longitude!.toStringAsFixed(6)}';
+        eventGroups.putIfAbsent(key, () => []).add(event);
+      }
+
+      // Events that get their own marker: singles, plus every member of a
+      // spiderfied 2-5 group. A 6+ group draws one stack image instead, built
+      // from its first event further down.
+      final eventsToDraw = <Event>[
+        for (final group in eventGroups.values)
+          if (group.length <= _spiderfyMax) ...group,
+      ];
+
       // --- ✅ PARALLEL Marker Generation: Tables, Events, Stories all at once ---
       // Previously these 3 blocks ran sequentially. Now they run in parallel
       // to reduce marker generation latency by ~60%.
@@ -2662,14 +2699,16 @@ class MapScreenState extends State<MapScreen>
       }();
 
       final eventImagesFuture = () async {
-        final eventsNeedImages = _events.where((event) {
+        final eventsNeedImages = eventsToDraw.where((event) {
           final imageId = 'event_img_${event.id}';
           return !_addedImages.contains(imageId);
         }).toList();
 
         if (eventsNeedImages.isNotEmpty) {
+          final skipped = _events.length - eventsToDraw.length;
           print(
-            '🎨 Generating ${eventsNeedImages.length} event markers in parallel...',
+            '🎨 Generating ${eventsNeedImages.length} event markers in '
+            'parallel${skipped > 0 ? ' (skipped $skipped inside venue stacks)' : ''}...',
           );
           await Future.wait(
             eventsNeedImages.map((event) async {
@@ -2818,17 +2857,8 @@ class MapScreenState extends State<MapScreen>
         print('🔮 Added ${activeMysteryTables.length} mystery markers to map');
       }
 
-      // Add event features (with spiderfy grouping logic)
-      final Map<String, List<Event>> eventGroups = {};
-      for (final event in _events) {
-        final key =
-            '${event.latitude!.toStringAsFixed(6)},${event.longitude!.toStringAsFixed(6)}';
-        if (!eventGroups.containsKey(key)) {
-          eventGroups[key] = [];
-        }
-        eventGroups[key]!.add(event);
-      }
-
+      // Add event features. eventGroups was built above, before image
+      // generation, so that only drawn markers were ever rendered.
       for (final key in eventGroups.keys) {
         final group = eventGroups[key]!;
         final count = group.length;
@@ -2853,7 +2883,7 @@ class MapScreenState extends State<MapScreen>
           });
         }
         // 2. Spiderfy (2-5 Events)
-        else if (count <= 5) {
+        else if (count <= _spiderfyMax) {
           final centerLat = firstEvent.latitude!;
           final centerLng = firstEvent.longitude!;
           final radius = 0.0002;
