@@ -1759,6 +1759,67 @@ class MapScreenState extends State<MapScreen>
   }
 
   // Handle map taps
+  /// Resolves a venue-stack feature's comma-joined `ids` into sheet items.
+  ///
+  /// Shared by the lone-stack tap and the overlap picker, because a stack that
+  /// happens to sit under another marker must contribute its events to that
+  /// sheet too — it carries no `index`, so an index-based loop silently drops
+  /// every one of them.
+  List<Map<String, dynamic>> stackItemsFrom(Map? properties) {
+    final ids = properties?['ids']?.toString().split(',') ?? const <String>[];
+    final byId = {for (final e in _events) e.id: e};
+    return [
+      for (final id in ids)
+        if (byId[id] != null)
+          {
+            'id': byId[id]!.id,
+            'title': byId[id]!.title,
+            'datetime': byId[id]!.startDatetime.toIso8601String(),
+            'current_capacity': byId[id]!.ticketsSold,
+            'max_guests': byId[id]!.capacity,
+            'location_name': byId[id]!.venueName,
+            'type': 'event',
+            'original_object': byId[id],
+          },
+    ];
+  }
+
+  /// Opens the venue-stack sheet for a tapped marker, if it is a stack.
+  /// Returns true when it handled the tap.
+  ///
+  /// Two taps paths are wired at once — a Flutter GestureDetector and Mapbox's
+  /// native onTapListener — and on a platform view the native one is what
+  /// actually fires. The stack branch existed only on the Flutter side, so
+  /// tapping a venue stack did nothing. There were also two near-identical
+  /// copies of this logic that had already drifted: one guarded on
+  /// `index != null`, which a stack feature never carries (it has `ids` and
+  /// `count`, no `index`), making that copy unreachable regardless of path.
+  ///
+  /// One implementation, called from every handler, is what stops a third
+  /// copy drifting again.
+  bool _openStackSheet(Map? properties) {
+    if (properties?['type'] != 'stack') return false;
+
+    final stackedItems = stackItemsFrom(properties);
+    print('📚 Stack marker tapped: ${stackedItems.length} events resolved');
+
+    // Report the tap as handled even when nothing resolved: it WAS a stack, and
+    // falling through would let an index-based branch open an unrelated marker.
+    if (stackedItems.isEmpty || !mounted) return true;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => MapClusterSheet(
+        items: stackedItems,
+        currentUserData: _currentUserData,
+        matchingService: _matchingService,
+      ),
+    );
+    return true;
+  }
+
   Future<void> _onMapTap(TapUpDetails details) async {
     print('👆 Map tapped at ${details.localPosition}');
     if (_mapboxMap == null) return;
@@ -1899,39 +1960,9 @@ class MapScreenState extends State<MapScreen>
           final markerType =
               properties?['type']; // Check if it's an event marker
 
-          if (markerType == 'stack') {
-            // Venue stack (6+ events at one pin). It carries no `index`, only
-            // the comma-joined event ids, so resolve those and open the sheet.
-            final ids = properties?['ids']?.toString().split(',') ?? const [];
-            final byId = {for (final e in _events) e.id: e};
-            final stackedItems = [
-              for (final id in ids)
-                if (byId[id] != null)
-                  {
-                    'id': byId[id]!.id,
-                    'title': byId[id]!.title,
-                    'datetime': byId[id]!.startDatetime.toIso8601String(),
-                    'current_capacity': byId[id]!.ticketsSold,
-                    'max_guests': byId[id]!.capacity,
-                    'location_name': byId[id]!.venueName,
-                    'type': 'event',
-                    'original_object': byId[id],
-                  },
-            ];
-            print('📚 Stack marker tapped: ${stackedItems.length} events');
-            if (stackedItems.isNotEmpty && mounted) {
-              showModalBottomSheet(
-                context: context,
-                backgroundColor: Colors.transparent,
-                isScrollControlled: true,
-                builder: (context) => MapClusterSheet(
-                  items: stackedItems,
-                  currentUserData: _currentUserData,
-                  matchingService: _matchingService,
-                ),
-              );
-            }
-          } else if (markerType == 'event' &&
+          if (_openStackSheet(properties)) return;
+
+          if (markerType == 'event' &&
               index != null &&
               index < _events.length) {
             // Event marker tapped
@@ -2017,62 +2048,22 @@ class MapScreenState extends State<MapScreen>
           '📊 _events.length=${_events.length}, _tables.length=${_tables.length}',
         );
 
-        if ((markerType == 'event' || markerType == 'stack') && index != null) {
-          // Handle Event or Stack
-          if (markerType == 'stack') {
-            // Stack Tap -> Open Cluster Sheet
-            print('📚 Stack Marker Tapped');
-            final ids = properties?['ids']?.toString().split(',') ?? [];
+        // Venue stacks carry `ids`, never an `index`. This block used to guard
+        // the whole branch on `index != null`, so its stack case could not run.
+        if (_openStackSheet(properties)) return;
 
-            // Find events by ID
-            final List<Map<String, dynamic>> stackedItems = [];
-            for (final id in ids) {
-              final event = _events.firstWhere(
-                (e) => e.id == id,
-                orElse: () => _events[0],
-              ); // Fallback safe
-              if (event.id == id) {
-                stackedItems.add({
-                  'id': event.id,
-                  'title': event.title,
-                  'datetime': event.startDatetime.toIso8601String(),
-                  'current_capacity': event.ticketsSold,
-                  'max_guests': event.capacity,
-                  'location_name': event.venueName,
-                  'type': 'event',
-                  'original_object': event,
-                  // Pass full object for detailed view
-                });
-              }
-            }
-
+        if (markerType == 'event' && index != null) {
+          // Single Event (or Spiderfied) Tap
+          print('🎟️ EVENT MARKER TAPPED! Index: $index');
+          if (index < _events.length) {
+            final event = _events[index];
             if (mounted) {
               showModalBottomSheet(
                 context: context,
-                backgroundColor: Colors.transparent,
                 isScrollControlled: true,
-                builder: (context) => MapClusterSheet(
-                  items: stackedItems,
-                  currentUserData: _currentUserData,
-                  matchingService: _matchingService,
-                ),
+                backgroundColor: Colors.transparent,
+                builder: (context) => EventDetailModal(event: event),
               );
-            }
-          } else {
-            // Single Event (or Spiderfied) Tap
-            print('🎟️ EVENT MARKER TAPPED! Index: $index');
-            // Be careful: index might not match _events index if we have phantom spider markers?
-            // Actually, I set index correctly in the loop above.
-            if (index < _events.length) {
-              final event = _events[index];
-              if (mounted) {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (context) => EventDetailModal(event: event),
-                );
-              }
             }
           }
         } else if (markerType == 'story' &&
@@ -4217,7 +4208,12 @@ class MapScreenState extends State<MapScreen>
                   : null;
               final type = props?['type'];
 
-              if (type == 'event' && idx != null && idx < _events.length) {
+              if (type == 'stack') {
+                // Expand the stack's events into this same sheet.
+                stackedItems.addAll(stackItemsFrom(props));
+              } else if (type == 'event' &&
+                  idx != null &&
+                  idx < _events.length) {
                 final event = _events[idx];
                 stackedItems.add({
                   'id': event.id,
@@ -4269,6 +4265,10 @@ class MapScreenState extends State<MapScreen>
               : null;
           final markerType = properties?['type'];
           print('🔖 Marker tapped with index: $index, type: $markerType');
+
+          // Venue stacks first: they carry no `index`, so every branch below
+          // would skip them and the tap would fall on the floor.
+          if (_openStackSheet(properties)) return;
 
           if (markerType == 'event' &&
               index != null &&
