@@ -590,12 +590,23 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                 ),
                               );
                             } else {
+                              // A hangout can reach the map without a
+                              // host_id. UserProfileScreen.userId is
+                              // non-nullable, so pushing null threw
+                              // "Null is not a subtype of String" while
+                              // building the route — and because a build-time
+                              // throw renders ErrorWidget with an empty
+                              // message in release, the tapper was left on a
+                              // blank page (FLUTTER-J). Nothing to open: do
+                              // nothing.
+                              final hostId =
+                                  widget.table['host_id']?.toString();
+                              if (hostId == null || hostId.isEmpty) return;
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (context) => UserProfileScreen(
-                                    userId: widget.table['host_id'],
-                                  ),
+                                  builder: (context) =>
+                                      UserProfileScreen(userId: hostId),
                                 ),
                               );
                             }
