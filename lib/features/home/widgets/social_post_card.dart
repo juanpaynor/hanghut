@@ -1438,6 +1438,13 @@ class _SocialPostCardState extends State<SocialPostCard> {
     final usable = mq.size.height - mq.padding.top - mq.padding.bottom;
     final byHeight = usable * 0.52;
     final byWidth = mq.size.width * 4 / 3;
+    // clamp() throws ArgumentError when the lower limit exceeds the upper, so
+    // any viewport under ~225px wide — including the transient zero-size
+    // MediaQuery you get mid-resume — threw "Invalid argument(s): 300.0"
+    // (FLUTTER-V/T, two issues because there are two call sites). Below the
+    // floor there is nothing to clamp: the width-derived box IS the answer,
+    // which is what the doc comment above already promises.
+    if (byWidth <= 300.0) return byWidth.clamp(0.0, 300.0);
     return byHeight.clamp(300.0, byWidth);
   }
 
