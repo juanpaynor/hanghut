@@ -4810,18 +4810,43 @@ class MapScreenState extends State<MapScreen>
           final sourceId = 'isochrone-ripple-$i';
           final layerId = 'isochrone-ripple-line-$i';
 
-          style.setStyleSourceProperty(
-            sourceId,
-            'data',
-            jsonEncode(circleGeoJson),
+          // Fire-and-forget on purpose: at 15fps an awaited chain would queue
+          // up faster than it drains, and the ripple would stutter. But an
+          // un-awaited Future's error never reaches the `catch` below — it goes
+          // straight to PlatformDispatcher.onError, which is exactly how
+          // "Layer 'isochrone-ripple-line-N' is not in style" became ~1.4k
+          // fatal Sentry events (FLUTTER-N/M/18/H) from five users. The
+          // `catch` was always the right intent; it just cannot see these.
+          // Each call needs its own handler.
+          _dropStyleError(
+            style.setStyleSourceProperty(
+              sourceId,
+              'data',
+              jsonEncode(circleGeoJson),
+            ),
           );
-          style.setStyleLayerProperty(layerId, 'line-opacity', opacity);
-          style.setStyleLayerProperty(layerId, 'line-width', lineWidth);
+          _dropStyleError(
+            style.setStyleLayerProperty(layerId, 'line-opacity', opacity),
+          );
+          _dropStyleError(
+            style.setStyleLayerProperty(layerId, 'line-width', lineWidth),
+          );
         }
       } catch (_) {
-        // Layer may have been removed
+        // Only a synchronous failure lands here now (e.g. the style object
+        // itself is gone). The async ones are handled per-call above.
       }
     });
+  }
+
+  /// Drops the error from one fire-and-forget ripple style call.
+  ///
+  /// The rings are rewritten every frame while their layers can vanish at any
+  /// moment — isochrone toggled off, style reloaded, map disposed. Losing a
+  /// frame's update is the correct outcome there; reporting it as a fatal
+  /// error 90 times a second is not.
+  static void _dropStyleError(Future<void> call) {
+    call.catchError((Object _) {});
   }
 
   void _stopIsochronePulse() {
