@@ -135,6 +135,10 @@ Future<void> _startApp() async {
 
   // Initialize Foreground Geofence Engine + location (deferred to after first frame)
   // This reduces startup jank — these are not needed before the UI renders
+  // MUST be added before runApp: the binding dispatches to observers in
+  // registration order, and this only wins if it is ahead of _WidgetsAppState.
+  WidgetsBinding.instance.addObserver(_DeepLinkRouteClaim());
+
   runApp(const MyApp());
 
   // Defer non-critical work to after the first frame renders
@@ -155,6 +159,34 @@ Future<void> _startApp() async {
 
 // Global Navigator Key for Deep Linking
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// Claims OS route pushes before Flutter's own handling can crash on them.
+///
+/// When the platform hands Flutter a deep link it arrives on
+/// SystemChannels.navigation as `pushRouteInformation`, and WidgetsBinding
+/// offers it to every WidgetsBindingObserver in registration order until one
+/// returns true. `_WidgetsAppState` is such an observer, and its answer is
+/// `Navigator.pushNamed(<the link's path>)` — so `https://hanghut.com/events/x`
+/// becomes `pushNamed('/events/x')`. That path is not in MyApp's `routes`
+/// table, so Navigator falls through to `onUnknownRoute!`, which is null, and
+/// throws "Null check operator used on a null value" (navigator.dart:4728).
+/// The binding catches it and reports it, which is the scary
+/// StickerEditorState.build trace in the device logs — the top frame is a
+/// release-AOT misattribution of the shared null-check throw.
+///
+/// We route deep links ourselves in [DeepLinkService] via app_links, so this
+/// second, parallel path has nothing left to do. Registering before `runApp`
+/// puts us ahead of `_WidgetsAppState` in the observer list, so returning true
+/// stops the dispatch here. It also stops the empty-path case
+/// (`com.hanghut.hang://login-callback` → `pushNamed('/')`) from pushing a
+/// duplicate `home` on top of the running app.
+class _DeepLinkRouteClaim extends WidgetsBindingObserver {
+  @override
+  Future<bool> didPushRouteInformation(RouteInformation routeInformation) async {
+    debugPrint('🔗 OS route push claimed: ${routeInformation.uri}');
+    return true;
+  }
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
