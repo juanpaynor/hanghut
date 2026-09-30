@@ -8,6 +8,17 @@ import 'package:bitemates/features/support/screens/support_entry.dart';
 import 'package:bitemates/features/support/models/support_models.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+/// First 8 characters, uppercased — without assuming there are 8.
+///
+/// `substring(0, 8)` throws RangeError on anything shorter, and both the QR
+/// payload and the ticket id can arrive empty (a NULL column becomes '' in
+/// [Ticket.fromJson]). That threw during build, which in release renders an
+/// ErrorWidget with no message — a blank modal (FLUTTER-G).
+String _shortCode(String value) => value.length <= 8
+    ? value.toUpperCase()
+    : value.substring(0, 8).toUpperCase();
+
+
 class TicketCard extends StatelessWidget {
   final Ticket ticket;
 
@@ -271,24 +282,50 @@ class _TicketDetailModal extends StatelessWidget {
                         ],
                       ),
                       child: Column(
-                        children: [
-                          QrImageView(
-                            data: ticket.qrCode,
-                            version: QrVersions.auto,
-                            size: 250.0,
-                            backgroundColor: Colors.white,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            ticket.qrCode.substring(0, 8).toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              fontFamily: 'monospace',
-                              color: Colors.grey[800],
-                            ),
-                          ),
-                        ],
+                        children: ticket.qrCode.isEmpty
+                            // The model maps a NULL qr_code to '', and
+                            // substring(0, 8) on '' threw RangeError, which
+                            // took out the entire detail modal — a blank sheet
+                            // instead of a ticket (FLUTTER-G). Say so instead;
+                            // the rest of the ticket is still worth showing.
+                            ? [
+                                SizedBox(
+                                  width: 250,
+                                  height: 250,
+                                  child: Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Text(
+                                        'This ticket has no QR code yet. Show '
+                                        'your ticket ID at the door.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ]
+                            : [
+                                QrImageView(
+                                  data: ticket.qrCode,
+                                  version: QrVersions.auto,
+                                  size: 250.0,
+                                  backgroundColor: Colors.white,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _shortCode(ticket.qrCode),
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'monospace',
+                                    color: Colors.grey[800],
+                                  ),
+                                ),
+                              ],
                       ),
                     ),
                   ),
@@ -345,7 +382,7 @@ class _TicketDetailModal extends StatelessWidget {
                   _DetailRow(
                     icon: Icons.confirmation_number,
                     label: 'Ticket ID',
-                    value: ticket.id.substring(0, 8).toUpperCase(),
+                    value: _shortCode(ticket.id),
                   ),
                   const SizedBox(height: 16),
                   _DetailRow(
