@@ -2392,15 +2392,23 @@ class MapScreenState extends State<MapScreen>
             'type': 'FeatureCollection',
             'features': [],
           });
-          _mapboxMap?.style.setStyleSourceProperty(
-            'tables-cluster-source',
-            'data',
-            emptyGeoJson,
+          // Un-awaited and previously unguarded entirely: if the style has
+          // reloaded (or these sources were never added) the rejection lands on
+          // PlatformDispatcher.onError as "Source 'tables-cluster-source' is
+          // not in style" — FLUTTER-D on the Android side, FLUTTER-K on ours.
+          _dropStyleError(
+            _mapboxMap?.style.setStyleSourceProperty(
+              'tables-cluster-source',
+              'data',
+              emptyGeoJson,
+            ),
           );
-          _mapboxMap?.style.setStyleSourceProperty(
-            'tables-3d-source',
-            'data',
-            emptyGeoJson,
+          _dropStyleError(
+            _mapboxMap?.style.setStyleSourceProperty(
+              'tables-3d-source',
+              'data',
+              emptyGeoJson,
+            ),
           );
         }
         return;
@@ -4379,16 +4387,21 @@ class MapScreenState extends State<MapScreen>
       final style = _mapboxMap?.style;
       if (style == null) return;
 
-      // Scale unclustered marker icons
-      style.setStyleLayerProperty('unclustered-points', 'icon-size', scale);
-
-      // Scale cluster circles (base radius = 20)
-      style.setStyleLayerProperty('clusters', 'circle-radius', 20.0 * scale);
-
-      // Scale cluster count text (base size = 14)
-      style.setStyleLayerProperty('cluster-count', 'text-size', 14.0 * scale);
+      // Same shape as the isochrone ripple: un-awaited calls whose rejection
+      // cannot reach the catch below, so "layer may not exist yet during init"
+      // was never actually handled. This one runs at animation rate too, so it
+      // is the ripple storm waiting to happen.
+      _dropStyleError(
+        style.setStyleLayerProperty('unclustered-points', 'icon-size', scale),
+      );
+      _dropStyleError(
+        style.setStyleLayerProperty('clusters', 'circle-radius', 20.0 * scale),
+      );
+      _dropStyleError(
+        style.setStyleLayerProperty('cluster-count', 'text-size', 14.0 * scale),
+      );
     } catch (e) {
-      // Silently ignore — layer may not exist yet during init
+      // Only a synchronous failure reaches here now.
     }
   }
 
@@ -4845,8 +4858,8 @@ class MapScreenState extends State<MapScreen>
   /// moment — isochrone toggled off, style reloaded, map disposed. Losing a
   /// frame's update is the correct outcome there; reporting it as a fatal
   /// error 90 times a second is not.
-  static void _dropStyleError(Future<void> call) {
-    call.catchError((Object _) {});
+  static void _dropStyleError(Future<void>? call) {
+    call?.catchError((Object _) {});
   }
 
   void _stopIsochronePulse() {
