@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:bitemates/core/utils/error_handler.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -149,7 +150,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
 
     try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      // The profile-photos bucket caps uploads at 5 MB and this picker had no
+      // bounds at all, so a full-res photo off a modern phone could exceed it
+      // and fail — while onboarding's picker (profile_setup_screen) has always
+      // capped at 1024/q85 and never failed. 1440 is generous for a photo
+      // displayed at phone width and lands well under the cap.
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1440,
+        maxHeight: 1440,
+        imageQuality: 85,
+      );
       if (image == null) return;
 
       final croppedFile = await ImageCropService.cropImage(
@@ -183,7 +194,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         });
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, st) {
+      // ErrorHandler maps this to a friendly string and debugPrints the cause,
+      // which is invisible in release — so a photo upload failing in the field
+      // left no trace anywhere, in Sentry or otherwise. Report it.
+      await Sentry.captureException(e, stackTrace: st);
       if (mounted) {
         ErrorHandler.showError(
           context,

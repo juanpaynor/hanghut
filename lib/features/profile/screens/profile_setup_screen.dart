@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:country_picker/country_picker.dart';
@@ -167,7 +168,10 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       final filePath = '$userId/${DateTime.now().millisecondsSinceEpoch}.jpg';
       await SupabaseConfig.client.storage.from('profile-photos').uploadBinary(filePath, bytes);
       return SupabaseConfig.client.storage.from('profile-photos').getPublicUrl(filePath);
-    } catch (e) {
+    } catch (e, st) {
+      // Same blind spot as the edit screen: without this, an onboarding upload
+      // failure is a snackbar and nothing else.
+      await Sentry.captureException(e, stackTrace: st);
       if (mounted) ErrorHandler.showError(context, error: e, fallbackMessage: 'Could not upload photo');
       return null;
     }
