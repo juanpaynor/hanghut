@@ -135,7 +135,7 @@ class MapClusterSheet extends StatelessWidget {
                   if (tables.isNotEmpty) ...[
                     if (events.isNotEmpty) const SizedBox(width: 8),
                     _buildTypeChip(
-                      '🍽️ ${tables.length} Table${tables.length > 1 ? 's' : ''}',
+                      '🍽️ ${tables.length} Hangout${tables.length > 1 ? 's' : ''}',
                       const Color(0xFFE17055),
                     ),
                   ],
@@ -450,7 +450,7 @@ class MapClusterSheet extends StatelessWidget {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: const Text(
-                        '🍽️ Table',
+                        '🍽️ Hangout',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,

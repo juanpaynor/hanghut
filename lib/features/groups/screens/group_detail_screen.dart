@@ -435,7 +435,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                         children: [
                           const Flexible(
                             child: Text(
-                              'Activities',
+                              'Hangouts',
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -827,7 +827,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                       ElevatedButton.icon(
                         onPressed: _openCreateActivityModal,
                         icon: const Icon(Icons.add, size: 18),
-                        label: const Text('Create Activity'),
+                        label: const Text('Create Hangout'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: primaryColor,
                           foregroundColor: Colors.white,
@@ -870,7 +870,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               elevation: 3,
               icon: const Icon(Icons.add, size: 20),
               label: const Text(
-                'Activity',
+                'Hangout',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
             ),

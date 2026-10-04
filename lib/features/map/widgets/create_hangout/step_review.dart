@@ -88,7 +88,7 @@ class _StepReviewState extends State<StepReview> with TickerProviderStateMixin {
               children: [
                 _ReviewRow(
                   icon: Icons.local_activity_outlined,
-                  label: 'Activity',
+                  label: 'Hangout',
                   value: flow.activityController.text.trim().isNotEmpty
                       ? flow.activityController.text.trim()
                       : 'Not set',

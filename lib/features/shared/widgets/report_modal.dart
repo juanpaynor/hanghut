@@ -63,7 +63,7 @@ class _ReportModalState extends State<ReportModal> {
       case 'hangout':
         return 'Report Hangout';
       case 'activity':
-        return 'Report Activity';
+        return 'Report Hangout';
       case 'table':
         return 'Report Hangout';
       case 'user':

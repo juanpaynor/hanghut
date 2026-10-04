@@ -2861,7 +2861,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ? 'You will leave this trip group chat.'
         : widget.chatType == 'dm'
         ? 'This conversation will be deleted from your inbox.'
-        : 'You will be removed from this activity and its chat.';
+        : 'You will be removed from this hangout and its chat.';
 
     final confirm = await showModalBottomSheet<bool>(
       context: context,

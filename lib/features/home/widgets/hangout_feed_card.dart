@@ -1484,7 +1484,7 @@ class _HangoutFeedCardState extends State<HangoutFeedCard> {
   Widget _buildJoinButton(Map<String, dynamic> metadata) {
     if (_isTableEnded) {
       return Text(
-        'Activity Done',
+        'Hangout Done',
         style: TextStyle(
           color: Colors.grey[500],
           fontSize: 13,
