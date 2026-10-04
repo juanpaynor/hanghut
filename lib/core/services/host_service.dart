@@ -115,6 +115,34 @@ class HostService {
     return List<Map<String, dynamic>>.from(response);
   }
 
+  /// Refuses to store null island.
+  ///
+  /// (0, 0) is a point in the Gulf of Guinea, 13,349 km from Manila. Because
+  /// `tables.latitude/longitude` are NOT NULL, a missing coordinate had no
+  /// way to be stored as "unknown" and landed there instead, producing a
+  /// listing that looks created to its host and is invisible to everyone
+  /// else: outside every map viewport query, outside max_join_distance_km
+  /// for all users, and unreachable by the nearby broadcast.
+  ///
+  /// Measured 2026-10-05: four live partner experiences sit at (0, 0) —
+  /// "Crafts & Coffee" (Greenbelt Amphitheater), "Crafts & Cocktails"
+  /// (Room 221 at Sabio Makati), "Pickle Project" (Cubiertos) and one test
+  /// row. TWO of them are `verified_by_hanghut = true`, so a human reviewed
+  /// them and the coordinate was not visible enough to notice.
+  ///
+  /// This guard covers the app's own write path. It is NOT proof the app
+  /// wrote those four: all carry a `partner_id`, and this screen defaults to
+  /// Manila and bails on a failed place lookup rather than zeroing. The web
+  /// admin path needs the same check.
+  void _assertRealCoordinates(double latitude, double longitude) {
+    if (latitude == 0 && longitude == 0) {
+      throw ArgumentError(
+        'Refusing to save a listing at (0, 0) — pick the venue again so '
+        'people nearby can find it.',
+      );
+    }
+  }
+
   /// Creates a new experience listing.
   Future<Map<String, dynamic>> createExperience({
     required String partnerId,
@@ -135,6 +163,7 @@ class HostService {
   }) async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) throw Exception('Not authenticated');
+    _assertRealCoordinates(latitude, longitude);
 
     final response = await _supabase
         .from('tables')
@@ -188,6 +217,10 @@ class HostService {
   }) async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) throw Exception('Not authenticated');
+    // Guarded on update too: an edit that loses the coordinate would take a
+    // working listing off the map, which is harder to notice than a create
+    // that never appeared.
+    _assertRealCoordinates(latitude, longitude);
 
     final response = await _supabase
         .from('tables')

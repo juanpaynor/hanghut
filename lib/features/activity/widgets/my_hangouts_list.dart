@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
+import 'package:bitemates/features/activity/widgets/hangout_invites_section.dart';
+import 'package:bitemates/features/activity/widgets/hangout_nudge_card.dart';
+import 'package:bitemates/features/activity/models/hangout_nudge.dart';
+import 'package:bitemates/core/services/hangout_nudge_service.dart';
+import 'package:bitemates/core/services/analytics_service.dart';
+import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:intl/intl.dart';
 
 class MyHangoutsList extends StatefulWidget {
@@ -12,16 +18,35 @@ class MyHangoutsList extends StatefulWidget {
 }
 
 class _MyHangoutsListState extends State<MyHangoutsList> {
+  /// Lets an accepted invite reload the joined list underneath it — accepting
+  /// moves a hangout from the invites section into this list, and without a
+  /// handle on each the user would see it vanish from one and not appear in
+  /// the other until they pulled to refresh.
+  final _invitesKey = GlobalKey<HangoutInvitesSectionState>();
+
   List<Map<String, dynamic>> _myTables = [];
   bool _isLoading = true;
   String _filter = 'upcoming'; // 'upcoming', 'past', 'all'
   final _tableService = TableService();
   final _memberService = TableMemberService();
 
+  /// Null for users the nudge RPC has nothing to say about, including anyone
+  /// who already has an upcoming hangout — who by definition is not looking
+  /// at this empty state anyway.
+  HangoutNudge? _nudge;
+
   @override
   void initState() {
     super.initState();
     _loadMyTables();
+    _loadNudge();
+  }
+
+  /// Cheap here: the service caches for the process lifetime, so mounting the
+  /// card on a second surface costs no extra round trip.
+  Future<void> _loadNudge() async {
+    final nudge = await HangoutNudgeService().fetch();
+    if (mounted && nudge != null) setState(() => _nudge = nudge);
   }
 
   Future<void> _loadMyTables() async {
@@ -66,12 +91,26 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
     }
   }
 
+  Future<void> _refreshAll() async {
+    await Future.wait([
+      _loadMyTables(),
+      _invitesKey.currentState?.reload() ?? Future.value(),
+      _reloadNudge(),
+    ]);
+  }
+
+  /// A deliberate pull asks for current numbers, so it bypasses the cache.
+  Future<void> _reloadNudge() async {
+    final nudge = await HangoutNudgeService().fetch(force: true);
+    if (mounted) setState(() => _nudge = nudge);
+  }
+
   Future<void> _leaveTable(String tableId) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Leave Hangout?'),
-        content: const Text('Are you sure you want to leave this event?'),
+        content: const Text('Are you sure you want to leave this hangout?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -146,6 +185,14 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Column(
         children: [
+          // Invites first: an unanswered invite is the only thing on this
+          // screen that needs a decision, and it renders nothing at all when
+          // there are none.
+          HangoutInvitesSection(
+            key: _invitesKey,
+            onChanged: _loadMyTables,
+          ),
+
           // Filter Tabs
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -171,7 +218,7 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
                 : _filteredTables.isEmpty
                 ? _buildEmptyState()
                 : RefreshIndicator(
-                    onRefresh: _loadMyTables,
+                    onRefresh: _refreshAll,
                     color: Theme.of(context).primaryColor,
                     child: ListView.separated(
                       padding: const EdgeInsets.all(20),
@@ -188,30 +235,96 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
     );
   }
 
+  /// The empty state is the common case — there are 5 live hangouts in the whole
+  /// app — so it has to be the ask, not a dead end. It used to read "No hangouts
+  /// found" with no action, while the sibling Hangouts tab already offered
+  /// "Start a hangout". Same offer here.
+  ///
+  /// Past/All get no CTA: an empty history is a statement of fact, not an
+  /// invitation, and prompting there would read as nagging.
   Widget _buildEmptyState() {
+    final upcoming = _filter == 'upcoming';
+    final primary = Theme.of(context).primaryColor;
+    final nudge = _nudge;
+
+    // When we can name a real pool of nearby people, that beats a generic
+    // ask. "22 people near you are into Nightlife" gives the user a reason;
+    // "Start one and see who's around" only gives them a button.
+    if (upcoming && nudge != null) {
+      return Center(
+        child: HangoutNudgeCard(
+          nudge: nudge,
+          onStart: _startHangout,
+          compact: true,
+        ),
+      );
+    }
+
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.event_busy, size: 64, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          Text(
-            'No hangouts found',
-            style: TextStyle(
-              color: Colors.grey[500],
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          if (_filter == 'upcoming')
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Join a table to get started!',
-                style: TextStyle(color: Colors.grey[400]),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Icons.event_busy is in release 11305a4 (it was already here).
+            Icon(Icons.event_busy, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              upcoming ? 'Nothing lined up yet' : 'No hangouts found',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
               ),
             ),
-        ],
+            if (upcoming) ...[
+              const SizedBox(height: 8),
+              Text(
+                "Start one and see who's around — or join someone else's "
+                'from the Hangouts tab.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[500], height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _startHangout,
+                // Icons.add is in release 11305a4.
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Start a hangout'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: primary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _startHangout() {
+    // Same source-tagged entry as the Hangouts tab, so the funnel can tell
+    // which empty state actually produces hangouts — and whether the nudge
+    // variant beats the plain one.
+    final nudge = _nudge;
+    final source =
+        nudge != null ? 'nudge_my_hangouts' : 'empty_state_my_hangouts';
+    AnalyticsService().logHangoutCreateStart(source);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CreateHangoutFlow(
+          source: source,
+          initialCategory: nudge?.interestKey,
+          onTableCreated: () {
+            HangoutNudgeService.invalidate();
+            if (mounted) _refreshAll();
+          },
+        ),
       ),
     );
   }

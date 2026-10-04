@@ -19,6 +19,11 @@ import 'package:bitemates/core/services/account_status_service.dart';
 import 'package:bitemates/features/auth/screens/account_suspended_screen.dart';
 import 'package:bitemates/core/services/push_notification_service.dart';
 import 'package:bitemates/core/services/admin_popup_service.dart';
+import 'package:bitemates/core/services/hangout_nudge_service.dart';
+import 'package:bitemates/core/services/hangout_seed_service.dart';
+import 'package:bitemates/features/activity/models/hangout_seed.dart';
+import 'package:bitemates/features/activity/widgets/hangout_nudge_prompt.dart';
+import 'package:bitemates/features/activity/widgets/hangout_offer_modal.dart';
 import 'package:bitemates/features/shared/widgets/admin_popup_modal.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/camera/screens/story_camera_screen.dart';
@@ -220,6 +225,51 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       // covers every dismissal path).
       service.markPopupAsSeen(popup['id']);
     }
+
+    // Last in the queue, never alongside: an admin popup is a deliberate
+    // message from the team and outranks our own prompt. Running it here
+    // rather than in MapScreen also means the two can never stack.
+    if (!mounted) return;
+    await _maybePromptToStartHangout();
+  }
+
+  /// "22 people near you are into Nightlife — start something?"
+  ///
+  /// On the landing screen because that is where users are. The Hangouts tab
+  /// card reaches only people who already went looking for hangouts, which is
+  /// the population that least needs convincing.
+  ///
+  /// Self-rationing — see [HangoutNudgePrompt.maybeShow]. Returns silently
+  /// when there is nothing to say, which is the common case.
+  Future<void> _maybePromptToStartHangout() async {
+    try {
+      // A concrete offer outranks the nudge, and gets the richer modal: a
+      // real event with a poster and a GIF is a better ask than "people near
+      // you like Live Music". Only one of the two ever shows.
+      final seed = await HangoutSeedService().fetch();
+      if (!mounted) return;
+      if (seed != null && seed.needsAnswer) {
+        final saidYes = await HangoutOfferModal.show(context, seed: seed);
+        if (saidYes && mounted) await _acceptOffer(seed);
+        return;
+      }
+
+      final nudge = await HangoutNudgeService().fetch();
+      if (!mounted) return;
+      await HangoutNudgePrompt.maybeShow(
+        context,
+        // Reuses the FAB's own entry point, which matters for more than tidiness:
+        // it passes the map's current position into the flow. Without that the
+        // flow has no fallback coordinate, and a hangout with no resolved venue
+        // is exactly how (0, 0) rows used to get written.
+        onStart: () => _showCreateTableModal(
+          source: 'nudge_prompt_map',
+          initialCategory: nudge?.interestKey,
+        ),
+      );
+    } catch (_) {
+      // A prompt is an enhancement; never surface a failure for it.
+    }
   }
 
   Future<void> _openEventFromNotification(String eventId) async {
@@ -343,6 +393,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         key: _mapScreenKey,
         initialFlyToLat: widget.flyToLat,
         initialFlyToLng: widget.flyToLng,
+        onStartHangout: (source, category) =>
+            _showCreateTableModal(source: source, initialCategory: category),
+        onStartHangoutFromSeed: _createFromSeed,
       ),
       FeedScreen(
         key: _feedScreenKey,
@@ -402,7 +455,85 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     }
   }
 
-  void _showCreateTableModal({String source = 'fab_dial'}) {
+  /// Hosts a system-proposed hangout.
+  ///
+  /// The flow opens with the venue, time and category already filled in —
+  /// that pre-fill is the entire value of a seed, since the blank venue and
+  /// time fields are where the create flow loses people.
+  ///
+  /// The seed is claimed only AFTER the hangout exists, so it can never be
+  /// marked claimed against a table that was never created (the user backing
+  /// out is the common case). Claiming is what invites everyone else who said
+  /// yes.
+  void _createFromSeed(HangoutSeed seed) {
+    _showCreateTableModal(
+      source: 'seed_map',
+      initialCategory: seed.category,
+      seed: seed,
+    );
+  }
+
+  /// "I'm in" from the launch modal.
+  ///
+  /// The server decides whether this user hosts or joins — two people tapping
+  /// at the same moment must not both believe they are hosting, and only the
+  /// claim's atomic UPDATE can settle that.
+  Future<void> _acceptOffer(HangoutSeed seed) async {
+    final result = await HangoutSeedService().respond(seed.seedId, isIn: true);
+    if (!mounted) return;
+    if (!result.ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result.message)));
+      return;
+    }
+    if (result.isHost) {
+      _createFromSeed(seed);
+    } else {
+      // Somebody is already hosting — they are simply in.
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result.message)));
+      _mapScreenKey.currentState?.refreshTables();
+    }
+  }
+
+  /// Binds a just-created hangout to the seed it came from.
+  ///
+  /// This is the step that invites everyone else who said yes, so it is worth
+  /// telling the host it happened — "Hosting this. We told 7 people." is the
+  /// moment the system-generated part becomes visible to them.
+  ///
+  /// Best-effort: the hangout already exists by the time this runs, so a
+  /// failure here costs the invitations, not the hangout. Never throws into
+  /// the create flow's completion path.
+  Future<void> _claimSeed(HangoutSeed seed, String tableId) async {
+    try {
+      final result = await HangoutSeedService().claim(
+        seedId: seed.seedId,
+        tableId: tableId,
+      );
+      if (!mounted || !result.ok) return;
+      final n = result.invited;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            n > 0
+                ? "You're hosting this. We told $n ${n == 1 ? 'person' : 'people'} who said they were in."
+                : "You're hosting this. We'll tell people nearby.",
+          ),
+        ),
+      );
+    } catch (_) {
+      // The hangout is made either way; the link-up is not worth an error.
+    }
+  }
+
+  void _showCreateTableModal({
+    String source = 'fab_dial',
+    String? initialCategory,
+    HangoutSeed? seed,
+  }) {
     _closeDial();
     AnalyticsService().logScreenView('create_hangout_flow');
     AnalyticsService().logHangoutCreateStart(source);
@@ -415,12 +546,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
               source: source,
               currentLat: position?.latitude,
               currentLng: position?.longitude,
+              initialCategory: initialCategory,
+              initialVenueName: seed?.venueName,
+              initialVenueLat: seed?.latitude,
+              initialVenueLng: seed?.longitude,
+              initialDateTime: seed?.proposedAt,
               onTableCreated: () {
+                // The user now has an upcoming hangout, so the nudge RPC will
+                // suppress it — but only if we stop serving the cached one.
+                HangoutNudgeService.invalidate();
+                HangoutSeedService.invalidate();
                 setState(() {
                   _showTab(1);
                 });
                 _mapScreenKey.currentState?.refreshTables();
               },
+              onTableCreatedWithId: seed == null
+                  ? null
+                  : (tableId) => _claimSeed(seed, tableId),
             ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return SlideTransition(

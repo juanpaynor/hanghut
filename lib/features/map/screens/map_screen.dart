@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:bitemates/core/utils/concurrency.dart';
 // Marker shape language — one definition, verified in marker_silhouettes_test.
 import 'package:bitemates/features/map/widgets/marker_silhouettes.dart';
+import 'package:bitemates/features/map/models/marker_lookup.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:geolocator/geolocator.dart' as geo;
@@ -36,6 +37,12 @@ import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:bitemates/core/services/event_category_service.dart';
+import 'package:bitemates/core/services/hangout_nudge_service.dart';
+import 'package:bitemates/core/services/hangout_seed_service.dart';
+import 'package:bitemates/features/activity/models/hangout_nudge.dart';
+import 'package:bitemates/features/activity/models/hangout_seed.dart';
+import 'package:bitemates/features/activity/widgets/hangout_nudge_banner.dart';
+import 'package:bitemates/features/activity/widgets/hangout_seed_card.dart';
 
 // Filter enum for toggling marker visibility
 enum MapFilter { all, hangouts, events, experiences, stories }
@@ -44,7 +51,28 @@ class MapScreen extends StatefulWidget {
   final double? initialFlyToLat;
   final double? initialFlyToLng;
 
-  const MapScreen({super.key, this.initialFlyToLat, this.initialFlyToLng});
+  /// Opens the create-hangout flow, tagged with the nudge's category.
+  ///
+  /// Owned by the navigation screen rather than built here: that is where the
+  /// flow already lives, and it is the only place that can pass the map's
+  /// current position into it — which is what gives the flow a fallback
+  /// coordinate instead of writing (0, 0).
+  final void Function(String source, String? category)? onStartHangout;
+
+  /// Opens the create flow pre-filled from a system-proposed hangout, and
+  /// binds the result back to the seed once it exists.
+  ///
+  /// Separate from [onStartHangout] because the follow-up differs: creating
+  /// from a seed must also claim it, which invites everyone else who said yes.
+  final void Function(HangoutSeed seed)? onStartHangoutFromSeed;
+
+  const MapScreen({
+    super.key,
+    this.initialFlyToLat,
+    this.initialFlyToLng,
+    this.onStartHangout,
+    this.onStartHangoutFromSeed,
+  });
 
   @override
   State<MapScreen> createState() => MapScreenState();
@@ -73,6 +101,14 @@ class MapScreenState extends State<MapScreen>
   StreamSubscription<ably.Message>? _feedSubscription;
   int _activeUserCount = 0;
   bool _isFetching = false;
+
+  /// Bumped on every entry to [_fetchTablesInViewport]. That method has 13 call
+  /// sites and no re-entry guard, so panning while marker images download
+  /// starts a second run that replaces `_tables`/`_events`/`_stories` while the
+  /// first is still awaiting. The older run then builds its features against
+  /// lists it no longer owns. A run compares this against its own generation
+  /// after each await and abandons quietly if it has been superseded.
+  int _fetchGeneration = 0;
   bool _showCloudIntro = true;
   int _lastFeatureCount = 0; // Track marker count for pop animation
 
@@ -122,6 +158,28 @@ class MapScreenState extends State<MapScreen>
   // Isochrone layer state
   bool _showIsochrone = false;
   bool _isTableModalOpen = false;
+
+  /// "22 people near you are into Nightlife" — the standing prompt on the
+  /// landing screen. Null for anyone the RPC has nothing to say about,
+  /// including anyone who already has an upcoming hangout.
+  HangoutNudge? _nudge;
+
+  /// Dismissed for this session only, not persisted.
+  ///
+  /// The modal is the rationed interruption (3 times, ever); this banner is
+  /// the standing offer, so a dismissal here means "not right now" rather
+  /// than "never show me this again". It comes back next launch.
+  bool _nudgeDismissed = false;
+
+  /// A system-proposed hangout for this user, if there is one.
+  ///
+  /// Outranks [_nudge] when both exist: a concrete plan with a venue and a
+  /// time is a better ask than "people near you like this".
+  HangoutSeed? _seed;
+
+  /// True while a yes/no is in flight, so the buttons cannot produce two
+  /// conflicting answers.
+  bool _seedBusy = false;
   int _isochroneMinutes = 15;
   Timer? _isochronePulseTimer;
   double _isochronePulsePhase = 0.0;
@@ -151,8 +209,75 @@ class MapScreenState extends State<MapScreen>
     _startHeartbeat();
     _subscribeToFeed();
     _loadEventCategories();
+    _loadNudge();
     // React live to the Settings weather-effects toggle (no app restart).
     WeatherEffectsPreference.changes.addListener(_onWeatherEffectsToggled);
+  }
+
+  /// Loads the standing "start something" prompt.
+  ///
+  /// Shares the service's process-lifetime cache with the Hangouts tab and
+  /// the modal, so mounting it on a third surface costs no extra round trip.
+  /// Only assigns when non-null — a failure or an empty result leaves the map
+  /// exactly as it is today.
+  Future<void> _loadNudge() async {
+    final nudge = await HangoutNudgeService().fetch();
+    if (mounted && nudge != null) setState(() => _nudge = nudge);
+    await _loadSeed();
+  }
+
+  /// Loads the system-proposed hangout, if this user has one.
+  Future<void> _loadSeed() async {
+    final seed = await HangoutSeedService().fetch();
+    if (mounted && seed != null) setState(() => _seed = seed);
+  }
+
+  /// "I'm in" on a proposal.
+  ///
+  /// The server decides whether this user hosts or joins — two people tapping
+  /// at the same moment must not both be told they are hosting, and only the
+  /// claim's atomic UPDATE can settle that.
+  Future<void> _acceptSeed(HangoutSeed seed) async {
+    setState(() => _seedBusy = true);
+    final service = HangoutSeedService();
+    final result = await service.respond(seed.seedId, isIn: true);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _seedBusy = false);
+
+    if (!result.ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result.message)));
+      setState(() => _seed = null);
+      return;
+    }
+
+    if (result.isHost) {
+      // They won the race: open the flow with the venue, time and category
+      // already filled in, then bind the created hangout back to the seed so
+      // everyone else who said yes gets invited to it.
+      widget.onStartHangoutFromSeed?.call(seed);
+    } else {
+      // Somebody is already hosting. Nothing to create — they are in.
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result.message)));
+      setState(() => _seed = null);
+      refreshTables();
+    }
+  }
+
+  Future<void> _declineSeed(HangoutSeed seed) async {
+    setState(() => _seedBusy = true);
+    await HangoutSeedService().respond(seed.seedId, isIn: false);
+    if (mounted) {
+      setState(() {
+        _seedBusy = false;
+        _seed = null;
+      });
+    }
   }
 
   /// Loads the server-driven event category list for the Events sub-filter.
@@ -320,7 +445,7 @@ class MapScreenState extends State<MapScreen>
       print('❌ Error showing table details: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not load table details')),
+          const SnackBar(content: Text('Could not load hangout details')),
         );
       }
     }
@@ -839,6 +964,56 @@ class MapScreenState extends State<MapScreen>
             ),
 
           // Isochrone is fixed at 15 minutes — no picker needed
+
+          // The standing "start something" prompt.
+          //
+          // Two things already live in this corner and both had to be cleared:
+          //   - the floating nav bar, ~105px above `bottomInset + 12`
+          //     (bar 72 + FAB protrusion) — _buildFloatingNavBar in
+          //     main_navigation_screen.dart;
+          //   - DraggableChatBubble, which rests at `bottomInset + 116` to
+          //     `bottomInset + 176` (its own 100 + 60 size + 16 margin) and
+          //     deliberately draws above every surface.
+          //
+          // At `+ 125` the banner sat underneath that bubble, which covered
+          // its start and dismiss buttons. `+ 186` clears the bubble's resting
+          // position by 10px. The bubble is draggable, so a user can still
+          // park it on top — that is their choice and it moves back.
+          //
+          // Hidden while a table modal is open, like every other overlay
+          // here: the sheet covers this area and the banner would show
+          // through the gap above it.
+          // A concrete proposal outranks the nudge. Showing both would be two
+          // asks about the same thing, and the weaker one ("people near you
+          // like Live Music") says nothing the stronger one does not.
+          if (!_isTableModalOpen && !_nudgeDismissed)
+            if (_seed case final seed? when seed.needsAnswer)
+              Positioned(
+                left: 14,
+                right: 14,
+                bottom: MediaQuery.of(context).padding.bottom + 186,
+                child: HangoutSeedCard(
+                  seed: seed,
+                  busy: _seedBusy,
+                  compact: true,
+                  onYes: () => _acceptSeed(seed),
+                  onNo: () => _declineSeed(seed),
+                ),
+              )
+            else if (_nudge case final nudge?)
+              Positioned(
+                left: 14,
+                right: 14,
+                bottom: MediaQuery.of(context).padding.bottom + 186,
+                child: HangoutNudgeBanner(
+                  nudge: nudge,
+                  onStart: () => widget.onStartHangout?.call(
+                    'nudge_banner_map',
+                    nudge.interestKey,
+                  ),
+                  onDismiss: () => setState(() => _nudgeDismissed = true),
+                ),
+              ),
 
           // Cloud Transition (Map Only)
           if (_showCloudIntro)
@@ -1585,10 +1760,8 @@ class MapScreenState extends State<MapScreen>
         case MapFilter.hangouts:
           // Tables that are NOT experiences
           if (type == 'table') {
-            final index = f['properties']?['index'] as int?;
-            if (index != null && index < _tables.length) {
-              return _tables[index]['is_experience'] != true;
-            }
+            final table = markerItem(_tables, markerIndex(f['properties']));
+            if (table != null) return table['is_experience'] != true;
           }
           // Mystery markers are visible hangouts too
           if (type == 'mystery') return true;
@@ -1597,11 +1770,11 @@ class MapScreenState extends State<MapScreen>
           if (type == 'event') {
             // Apply category narrowing when one is picked.
             if (_selectedEventCategory != null) {
-              final index = f['properties']?['index'] as int?;
-              if (index != null && index < _events.length) {
-                return _events[index].category == _selectedEventCategory;
-              }
-              return false;
+              // By id, not index: a stale index here would hide or show the
+              // wrong marker, and a -1 would throw out of this predicate and
+              // take the whole filter rebuild with it.
+              final event = _eventFromMarker(f['properties']);
+              return event?.category == _selectedEventCategory;
             }
             return true;
           }
@@ -1612,10 +1785,8 @@ class MapScreenState extends State<MapScreen>
         case MapFilter.experiences:
           // Tables that ARE experiences
           if (type == 'table') {
-            final index = f['properties']?['index'] as int?;
-            if (index != null && index < _tables.length) {
-              return _tables[index]['is_experience'] == true;
-            }
+            final table = markerItem(_tables, markerIndex(f['properties']));
+            if (table != null) return table['is_experience'] == true;
           }
           return false;
         case MapFilter.stories:
@@ -1691,6 +1862,10 @@ class MapScreenState extends State<MapScreen>
         'properties': {
           'icon_id': imageId,
           'description': event.title,
+          // Taps resolve on the id. This rebuild path drew features without
+          // one, so a filter toggle produced markers that fell back to the
+          // index and could open the wrong event after a refetch.
+          'event_id': event.id,
           'index': i,
           'type': 'event',
         },
@@ -1765,22 +1940,45 @@ class MapScreenState extends State<MapScreen>
   /// happens to sit under another marker must contribute its events to that
   /// sheet too — it carries no `index`, so an index-based loop silently drops
   /// every one of them.
+  /// Resolves an event marker, preferring its `event_id` over its list index.
+  ///
+  /// The index is a position in `_events`, a list replaced wholesale on every
+  /// viewport refetch, and [Event] defines no `==` — so `_events.indexOf()`
+  /// is an identity search that returns **-1** whenever the marker's event
+  /// object came from an earlier fetch. Even a non-negative stale index is
+  /// wrong: it opens whatever event now sits at that position. The id survives
+  /// both, which is why the venue-stack path already keys on it.
+  Event? _eventFromMarker(Map? properties) {
+    final id = markerEventId(properties);
+    if (id != null) {
+      for (final event in _events) {
+        if (event.id == id) return event;
+      }
+      // Known id, no longer in the viewport's event list: the marker outlived
+      // its data. Opening the event at `index` would be opening a lie.
+      return null;
+    }
+    return markerItem(_events, markerIndex(properties));
+  }
+
+  /// The shape [MapClusterSheet] expects for an event row.
+  static Map<String, dynamic> _eventStackItem(Event event) => {
+    'id': event.id,
+    'title': event.title,
+    'datetime': event.startDatetime.toIso8601String(),
+    'current_capacity': event.ticketsSold,
+    'max_guests': event.capacity,
+    'location_name': event.venueName,
+    'type': 'event',
+    'original_object': event,
+  };
+
   List<Map<String, dynamic>> stackItemsFrom(Map? properties) {
     final ids = properties?['ids']?.toString().split(',') ?? const <String>[];
     final byId = {for (final e in _events) e.id: e};
     return [
       for (final id in ids)
-        if (byId[id] != null)
-          {
-            'id': byId[id]!.id,
-            'title': byId[id]!.title,
-            'datetime': byId[id]!.startDatetime.toIso8601String(),
-            'current_capacity': byId[id]!.ticketsSold,
-            'max_guests': byId[id]!.capacity,
-            'location_name': byId[id]!.venueName,
-            'type': 'event',
-            'original_object': byId[id],
-          },
+        if (byId[id] != null) _eventStackItem(byId[id]!),
     ];
   }
 
@@ -1893,45 +2091,30 @@ class MapScreenState extends State<MapScreen>
             for (final stackedFeature in features) {
               final props =
                   stackedFeature?.queriedFeature.feature['properties'] as Map?;
-              final index = props?['index'];
+              final index = markerIndex(props);
               final type = props?['type'];
 
-              if (type == 'event' &&
-                  index != null &&
-                  index is int &&
-                  index < _events.length) {
-                final event = _events[index];
-                stackedItems.add({
-                  'id': event.id,
-                  'title': event.title,
-                  'datetime': event.startDatetime.toIso8601String(),
-                  'current_capacity': event.ticketsSold,
-                  'max_guests': event.capacity,
-                  'location_name': event.venueName,
-                  'type': 'event',
-                  'original_object': event,
-                });
-              } else if (type == 'story' &&
-                  index != null &&
-                  index is int &&
-                  index < _stories.length) {
-                final story = _stories[index];
-                stackedItems.add({...story, 'type': 'story'});
-              } else if (type == 'mystery' &&
-                  index != null &&
-                  index is int &&
-                  index < _mysteryTables.length) {
-                final table = _mysteryTables[index];
-                stackedItems.add({
-                  ...table,
-                  'type': 'table',
-                }); // Treat as table in sheet
-              } else if ((type == 'table' || type == 'experience') &&
-                  index != null &&
-                  index is int &&
-                  index < _tables.length) {
-                final table = _tables[index];
-                stackedItems.add({...table, 'type': 'table'});
+              if (type == 'stack') {
+                stackedItems.addAll(stackItemsFrom(props));
+              } else if (type == 'event') {
+                final event = _eventFromMarker(props);
+                if (event != null) stackedItems.add(_eventStackItem(event));
+              } else if (type == 'story') {
+                final story = markerItem(_stories, index);
+                if (story != null) {
+                  stackedItems.add({...story, 'type': 'story'});
+                }
+              } else if (type == 'mystery') {
+                // Treated as a table in the sheet.
+                final table = markerItem(_mysteryTables, index);
+                if (table != null) {
+                  stackedItems.add({...table, 'type': 'table'});
+                }
+              } else if (type == 'table' || type == 'experience') {
+                final table = markerItem(_tables, index);
+                if (table != null) {
+                  stackedItems.add({...table, 'type': 'table'});
+                }
               }
             }
 
@@ -1953,28 +2136,30 @@ class MapScreenState extends State<MapScreen>
           // Single Marker Tap (Fallback)
           final properties =
               feature?.queriedFeature.feature['properties'] as Map?;
-          final rawIndex = properties?['index'];
-          final index = rawIndex != null
-              ? int.tryParse(rawIndex.toString())
-              : null;
+          final index = markerIndex(properties);
           final markerType =
               properties?['type']; // Check if it's an event marker
 
           if (_openStackSheet(properties)) return;
 
-          if (markerType == 'event' &&
-              index != null &&
-              index < _events.length) {
+          // Resolved up front; null means the marker outlived its fetch.
+          final story = markerItem(_stories, index);
+          final mystery = markerItem(_mysteryTables, index);
+          final tappedTable = markerItem(_tables, index);
+
+          if (markerType == 'event') {
             // Event marker tapped
-            final event = _events[index];
+            final event = _eventFromMarker(properties);
+            if (event == null) {
+              print('⚠️ Event marker is stale (index: $index) — refetching');
+              _fetchTablesInViewport(force: true);
+              return;
+            }
             if (mounted) {
               EventDetailModal.show(context, event);
             }
-          } else if (markerType == 'story' &&
-              index != null &&
-              index < _stories.length) {
+          } else if (markerType == 'story' && story != null) {
             // Story marker tapped
-            final story = _stories[index];
             if (mounted) {
               print('📸 Opening Location Story Viewer for: ${story['id']}');
               Navigator.push(
@@ -1991,21 +2176,18 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return; // STOP processing
-          } else if (markerType == 'mystery' &&
-              index != null &&
-              index < _mysteryTables.length) {
+          } else if (markerType == 'mystery' && mystery != null) {
             // Mystery marker tapped — open as normal table
-            final table = _mysteryTables[index];
             final matchData = _matchingService.calculateMatch(
               currentUser: _currentUserData!,
-              table: table,
+              table: mystery,
             );
             if (mounted) {
-              _openTableModal(context, table, matchData, screenCoordinate);
+              _openTableModal(context, mystery, matchData, screenCoordinate);
             }
-          } else if (index != null && index < _tables.length) {
+          } else if (tappedTable != null) {
             // Table marker tapped
-            final table = _tables[index];
+            final table = tappedTable;
             final matchData = _matchingService.calculateMatch(
               currentUser: _currentUserData!,
               table: table,
@@ -2032,106 +2214,12 @@ class MapScreenState extends State<MapScreen>
         return; // Stop processing if we hit something
       }
 
-      if (features != null && features.isNotEmpty) {
-        // We tapped a marker!
-        final feature = features.first;
-        final properties =
-            feature?.queriedFeature.feature['properties'] as Map?;
-        final rawIndex = properties?['index'];
-        final index = rawIndex != null
-            ? int.tryParse(rawIndex.toString())
-            : null;
-        final markerType = properties?['type'];
-
-        print('🔍 Marker properties: index=$index, type=$markerType');
-        print(
-          '📊 _events.length=${_events.length}, _tables.length=${_tables.length}',
-        );
-
-        // Venue stacks carry `ids`, never an `index`. This block used to guard
-        // the whole branch on `index != null`, so its stack case could not run.
-        if (_openStackSheet(properties)) return;
-
-        if (markerType == 'event' && index != null) {
-          // Single Event (or Spiderfied) Tap
-          print('🎟️ EVENT MARKER TAPPED! Index: $index');
-          if (index < _events.length) {
-            final event = _events[index];
-            if (mounted) {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: Colors.transparent,
-                builder: (context) => EventDetailModal(event: event),
-              );
-            }
-          }
-        } else if (markerType == 'story' &&
-            index != null &&
-            index < _stories.length) {
-          final story = _stories[index];
-          if (mounted) {
-            print('📸 Opening Location Story Viewer for: ${story['id']}');
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => LocationStoryViewerScreen(
-                  initialStory: story,
-                  clusterId:
-                      story['external_place_id'] ??
-                      story['event_id'] ??
-                      story['table_id'],
-                ),
-              ),
-            );
-          }
-          return; // STOP processing
-        } else if (markerType == 'mystery' &&
-            index != null &&
-            index < _mysteryTables.length) {
-          // Mystery marker tapped via 3D layer — open as normal table
-          final table = _mysteryTables[index];
-          final matchData = _matchingService.calculateMatch(
-            currentUser: _currentUserData!,
-            table: table,
-          );
-          if (mounted) {
-            _openTableModal(context, table, matchData, screenCoordinate);
-          }
-        } else if (index != null && index < _tables.length) {
-          // Table marker tapped
-          final table = _tables[index]; // Use index to get full table data
-          final matchData = _matchingService.calculateMatch(
-            currentUser: _currentUserData!,
-            table: table,
-          );
-
-          if (mounted) {
-            if (table['is_experience'] == true) {
-              // Open Experience Detail using LiquidMorphRoute (full screen)
-              print('🎨 Launching ExperienceDetailModal via LiquidMorphRoute');
-              await _drawExperienceRoute(
-                table,
-              ); // Draw route before so it's visible after pop
-              if (mounted) {
-                // Opaque route so the close button reliably returns to the map
-                // (a transparent morph over Mapbox can render black on pop).
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ExperienceDetailModal(
-                      experience: table,
-                      matchData: matchData,
-                    ),
-                  ),
-                );
-              }
-            } else {
-              // Open Standard Handout Modal
-              _openTableModal(context, table, matchData, screenCoordinate);
-            }
-          }
-        }
-      }
+      // NOTE: a second pass over `features` used to live here, meant for the
+      // `tables-3d-layer` query that was removed with the 3D models. It was
+      // unreachable — `features` is queried once and the block above returns
+      // unconditionally — so it was a fifth copy of the index-resolution
+      // chain that could never run, and the obvious place for the next
+      // reader to "fix" a bug that was never live. Deleted.
     } catch (e) {
       print('❌ Error handling map tap: $e');
     }
@@ -2374,6 +2462,11 @@ class MapScreenState extends State<MapScreen>
   Future<void> _fetchTablesInViewport({bool force = false}) async {
     if (_mapboxMap == null || _currentUserData == null) return;
 
+    // Claim a generation. Newest run wins: an older one abandons rather than
+    // writing features built from data it no longer owns.
+    final generation = ++_fetchGeneration;
+    bool superseded() => generation != _fetchGeneration;
+
     try {
       setState(() => _isFetching = true);
 
@@ -2577,6 +2670,10 @@ class MapScreenState extends State<MapScreen>
       */
 
       // DUMMY DATA FOR TESTING EXPERIENCES removed here to fix map indices
+
+      // A newer fetch has already published its own data; publishing ours over
+      // it would make every marker on screen point into the wrong list.
+      if (superseded()) return;
 
       setState(() {
         _tables = fetchedTables;
@@ -2832,6 +2929,12 @@ class MapScreenState extends State<MapScreen>
         mysteryImagesFuture,
       ]);
 
+      // This is the long await — marker images come off the network — and so
+      // the one most likely to be outrun by a pan. The style images we just
+      // added are harmless to leave behind (they are keyed by id and cached);
+      // the feature data below is not, so stop here.
+      if (superseded()) return;
+
       // --- Build feature data (fast, just data mapping) ---
 
       // Add table features
@@ -2897,6 +3000,10 @@ class MapScreenState extends State<MapScreen>
             'properties': {
               'icon_id': imageId,
               'description': firstEvent.title,
+              // The id is what the tap handler resolves on; the index is kept
+              // only as a fallback. `indexOf` is an identity search over a list
+              // a concurrent refetch may already have replaced, so it can be -1.
+              'event_id': firstEvent.id,
               'index': _events.indexOf(firstEvent),
               'type': 'event',
             },
@@ -2925,6 +3032,7 @@ class MapScreenState extends State<MapScreen>
               'properties': {
                 'icon_id': imageId,
                 'description': event.title,
+                'event_id': event.id,
                 'index': _events.indexOf(event),
                 'type': 'event',
                 'spiderfied': true,
@@ -3042,6 +3150,10 @@ class MapScreenState extends State<MapScreen>
         );
       }
 
+      // The 6+ venue-stack branch awaits per group, so a dense viewport can
+      // spend a while in the loop above. Last check before anything is drawn.
+      if (superseded()) return;
+
       // B. Update/Create Source
       const sourceId = 'tables-cluster-source';
       final sourceExists = await style.styleSourceExists(sourceId);
@@ -3112,7 +3224,9 @@ class MapScreenState extends State<MapScreen>
     } catch (e) {
       print('❌ Error updating map clusters: $e');
     } finally {
-      if (mounted) setState(() => _isFetching = false);
+      // Only the newest run owns the spinner; a superseded one bowing out must
+      // not report "done" while its successor is still working.
+      if (mounted && !superseded()) setState(() => _isFetching = false);
     }
   }
 
@@ -4210,44 +4324,30 @@ class MapScreenState extends State<MapScreen>
             for (final stackedFeature in features) {
               final props =
                   stackedFeature?.queriedFeature.feature['properties'] as Map?;
-              final rawIdx = props?['index'];
-              final idx = rawIdx != null
-                  ? int.tryParse(rawIdx.toString())
-                  : null;
+              final idx = markerIndex(props);
               final type = props?['type'];
 
               if (type == 'stack') {
                 // Expand the stack's events into this same sheet.
                 stackedItems.addAll(stackItemsFrom(props));
-              } else if (type == 'event' &&
-                  idx != null &&
-                  idx < _events.length) {
-                final event = _events[idx];
-                stackedItems.add({
-                  'id': event.id,
-                  'title': event.title,
-                  'datetime': event.startDatetime.toIso8601String(),
-                  'current_capacity': event.ticketsSold,
-                  'max_guests': event.capacity,
-                  'location_name': event.venueName,
-                  'type': 'event',
-                  'original_object': event,
-                });
-              } else if (type == 'story' &&
-                  idx != null &&
-                  idx < _stories.length) {
-                final story = _stories[idx];
-                stackedItems.add({...story, 'type': 'story'});
-              } else if (type == 'mystery' &&
-                  idx != null &&
-                  idx < _mysteryTables.length) {
-                final table = _mysteryTables[idx];
-                stackedItems.add({...table, 'type': 'table'});
-              } else if ((type == 'table' || type == 'experience') &&
-                  idx != null &&
-                  idx < _tables.length) {
-                final table = _tables[idx];
-                stackedItems.add({...table, 'type': 'table'});
+              } else if (type == 'event') {
+                final event = _eventFromMarker(props);
+                if (event != null) stackedItems.add(_eventStackItem(event));
+              } else if (type == 'story') {
+                final story = markerItem(_stories, idx);
+                if (story != null) {
+                  stackedItems.add({...story, 'type': 'story'});
+                }
+              } else if (type == 'mystery') {
+                final table = markerItem(_mysteryTables, idx);
+                if (table != null) {
+                  stackedItems.add({...table, 'type': 'table'});
+                }
+              } else if (type == 'table' || type == 'experience') {
+                final table = markerItem(_tables, idx);
+                if (table != null) {
+                  stackedItems.add({...table, 'type': 'table'});
+                }
               }
             }
 
@@ -4267,10 +4367,7 @@ class MapScreenState extends State<MapScreen>
           }
 
           // Single Marker Tap
-          final rawIndex = properties?['index'];
-          final index = rawIndex != null
-              ? int.tryParse(rawIndex.toString())
-              : null;
+          final index = markerIndex(properties);
           final markerType = properties?['type'];
           print('🔖 Marker tapped with index: $index, type: $markerType');
 
@@ -4278,19 +4375,27 @@ class MapScreenState extends State<MapScreen>
           // would skip them and the tap would fall on the floor.
           if (_openStackSheet(properties)) return;
 
-          if (markerType == 'event' &&
-              index != null &&
-              index < _events.length) {
-            final event = _events[index];
+          // Resolve the tapped thing BEFORE branching. Each of these is null
+          // when the marker has outlived the fetch that drew it, which is the
+          // case the old `index < length` tests let through as -1.
+          final story = markerItem(_stories, index);
+          final mystery = markerItem(_mysteryTables, index);
+          final table = markerItem(_tables, index);
+
+          if (markerType == 'event') {
+            final event = _eventFromMarker(properties);
+            if (event == null) {
+              // Refetch rather than open the wrong event or throw on -1.
+              print('⚠️ Event marker is stale (index: $index) — refetching');
+              _fetchTablesInViewport(force: true);
+              return;
+            }
             print('🎟️ Opening event: ${event.title}');
 
             if (mounted) {
               EventDetailModal.show(context, event);
             }
-          } else if (markerType == 'story' &&
-              index != null &&
-              index < _stories.length) {
-            final story = _stories[index];
+          } else if (markerType == 'story' && story != null) {
             if (mounted) {
               print('📸 Opening Location Story Viewer for: ${story['id']}');
               Navigator.push(
@@ -4307,22 +4412,17 @@ class MapScreenState extends State<MapScreen>
               );
             }
             return;
-          } else if (markerType == 'mystery' &&
-              index != null &&
-              index < _mysteryTables.length) {
-            final table = _mysteryTables[index];
-            print('🔮 Opening mystery table: ${table['title']}');
+          } else if (markerType == 'mystery' && mystery != null) {
+            print('🔮 Opening mystery table: ${mystery['title']}');
             final matchData = _matchingService.calculateMatch(
               currentUser: _currentUserData!,
-              table: table,
+              table: mystery,
             );
             if (mounted) {
-              _openTableModal(context, table, matchData, screenCoordinate);
+              _openTableModal(context, mystery, matchData, screenCoordinate);
             }
           } else if ((markerType == 'table' || markerType == 'experience') &&
-              index != null &&
-              index < _tables.length) {
-            final table = _tables[index];
+              table != null) {
             print('🍽️ Opening table: ${table['title']}');
 
             final matchData = _matchingService.calculateMatch(
@@ -4332,6 +4432,10 @@ class MapScreenState extends State<MapScreen>
             if (mounted) {
               _openTableModal(context, table, matchData, screenCoordinate);
             }
+          } else {
+            print('⚠️ Marker tap resolved to nothing (type: $markerType, '
+                'index: $index) — refetching');
+            _fetchTablesInViewport(force: true);
           }
         }
       }
@@ -4502,7 +4606,7 @@ class MapScreenState extends State<MapScreen>
                   const SizedBox(height: 16),
                   // Title
                   const Text(
-                    'Unlock Hidden Activities',
+                    'Unlock Hidden Hangouts',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 10),
@@ -4572,7 +4676,7 @@ class MapScreenState extends State<MapScreen>
                         ),
                       ),
                       child: const Text(
-                        'Reveal Hidden Activities',
+                        'Reveal Hidden Hangouts',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,

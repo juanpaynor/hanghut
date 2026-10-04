@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
+import 'package:bitemates/features/activity/models/invite_rules.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
@@ -32,8 +33,28 @@ class _TableCompactModalState extends State<TableCompactModal> {
   final _memberService = TableMemberService();
   bool _isLoading = false;
   Map<String, dynamic>? _membershipStatus;
+
+  /// True when this viewer has an invite waiting on this hangout.
+  ///
+  /// Derived from `table_members.status`, never from `tables.invited_user_ids`.
+  /// It used to read the array, which meant the Accept button needed the array
+  /// AND a `pending` row to agree — two parallel records of one fact, only ever
+  /// both true for create-time invites. Every other invite route rendered the
+  /// wrong control.
+  bool get _hasOpenInvite => isOpenInvite(
+    status: _membershipStatus?['status']?.toString(),
+    namedInInvitedArray: _invitedByArray,
+  );
+
+  /// Legacy support only: hangouts created before invites moved onto
+  /// `table_members` recorded the invitee list on the row itself, and those
+  /// rows still exist with `status = 'pending'`.
+  bool get _invitedByArray {
+    final ids = widget.table['invited_user_ids'];
+    final me = SupabaseConfig.client.auth.currentUser?.id;
+    return me != null && ids is List && ids.contains(me);
+  }
   bool _isHost = false;
-  bool _isInvited = false;
   int _pendingCount = 0;
   HangoutSocialProof _proof = HangoutSocialProof.unknown;
   String? _autoGifUrl;
@@ -248,11 +269,6 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
     _isHost = widget.table['host_id'] == user.id;
 
-    final invitedIds = widget.table['invited_user_ids'];
-    if (invitedIds is List && invitedIds.contains(user.id)) {
-      _isInvited = true;
-    }
-
     if (!_isHost) {
       final status = await _memberService.getUserMembershipStatus(
         widget.table['id'],
@@ -299,7 +315,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
         widget.table['title'] ??
         widget.table['venue_name'] ??
         widget.table['location_name'] ??
-        'Unknown Activity';
+        'Untitled Hangout';
 
     final displayVenue =
         widget.table['location_name'] ?? widget.table['venue_name'];
@@ -1023,8 +1039,8 @@ class _TableCompactModalState extends State<TableCompactModal> {
             ),
           ],
         );
-      } else if (status == 'pending') {
-        if (_isInvited) {
+      } else if (status == 'pending' || status == 'invited') {
+        if (_hasOpenInvite) {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1100,7 +1116,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
             letterSpacing: 0.3,
           ),
         ),
-        child: const Text('Activity Ended'),
+        child: const Text('Hangout Ended'),
       );
     }
 
@@ -1147,7 +1163,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
   void _openPendingRequests() {
     final tableTitle =
-        widget.table['title'] ?? widget.table['location_name'] ?? 'Table';
+        widget.table['title'] ?? widget.table['location_name'] ?? 'Hangout';
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1164,7 +1180,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
 
   void _openManageMembers() {
     final tableTitle =
-        widget.table['title'] ?? widget.table['location_name'] ?? 'Table';
+        widget.table['title'] ?? widget.table['location_name'] ?? 'Hangout';
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1357,7 +1373,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Table?'),
+        title: const Text('Delete Hangout?'),
         content: const Text('This action cannot be undone.'),
         actions: [
           TextButton(
@@ -1389,7 +1405,7 @@ class _TableCompactModalState extends State<TableCompactModal> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Leave Table?'),
+        title: const Text('Leave Hangout?'),
         content: const Text('Are you sure?'),
         actions: [
           TextButton(

@@ -51,7 +51,15 @@ class _InviteMemberSheetState extends State<InviteMemberSheet> {
           .from('table_members')
           .select('user_id, status')
           .eq('table_id', widget.tableId)
-          .inFilter('status', ['joined', 'approved', 'attended', 'pending']);
+          .inFilter('status', [
+            'joined',
+            'approved',
+            'attended',
+            'pending',
+            // An outstanding invite counts: offering "Invite" again to someone
+            // who already has one just sends a duplicate notification.
+            'invited',
+          ]);
       setState(() {
         _existingMemberIds = {for (final m in members) m['user_id'] as String};
       });
@@ -349,7 +357,7 @@ class _InviteMemberSheetState extends State<InviteMemberSheet> {
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      'Added',
+                                      'Invited',
                                       style: TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w600,

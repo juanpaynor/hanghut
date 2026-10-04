@@ -37,6 +37,31 @@ class CreateHangoutFlow extends StatefulWidget {
   /// abandon events can be paired with `hangout_create_start` per entry point.
   final String source;
 
+  /// An `event_categories.key` to tag the hangout with, when the entry point
+  /// knows one — the interest nudge does, because it is the thing that
+  /// matched. Null means we genuinely do not know and `'other'` is honest.
+  final String? initialCategory;
+
+  /// Venue pre-filled from a system-proposed hangout.
+  ///
+  /// The three together or not at all: a name without coordinates would put
+  /// the flow back on the path that wrote (0, 0), so [_createTable]'s guard
+  /// treats a half-filled venue as no venue.
+  final String? initialVenueName;
+  final double? initialVenueLat;
+  final double? initialVenueLng;
+
+  /// Suggested start time from a seed. Overrides the default "in an hour",
+  /// and the host can still change it — it is a proposal, not a fixture.
+  final DateTime? initialDateTime;
+
+  /// Called with the new hangout's id, alongside [onTableCreated].
+  ///
+  /// Exists because claiming a seed has to happen against a table that
+  /// actually exists, and `onTableCreated` is a bare VoidCallback that cannot
+  /// say which one was made.
+  final void Function(String tableId)? onTableCreatedWithId;
+
   const CreateHangoutFlow({
     super.key,
     this.currentLat,
@@ -45,6 +70,12 @@ class CreateHangoutFlow extends StatefulWidget {
     this.groupId,
     this.groupName,
     this.source = 'unknown',
+    this.initialCategory,
+    this.initialVenueName,
+    this.initialVenueLat,
+    this.initialVenueLng,
+    this.initialDateTime,
+    this.onTableCreatedWithId,
   });
 
   @override
@@ -134,14 +165,39 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
     _loadInviteSuggestions();
     venueController.addListener(_onSearchChanged);
 
-    final now = DateTime.now().add(const Duration(minutes: 60));
-    selectedDateTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      now.hour,
-      now.minute >= 30 ? 30 : 0,
-    );
+    // A seed arrives with the venue and the time already chosen — that is the
+    // whole point of it, since the blank versions of these two fields are
+    // where people abandon the flow. Both stay editable.
+    //
+    // All three venue fields or none: a name without coordinates is exactly
+    // the state that used to produce a hangout at (0, 0).
+    if (widget.initialVenueName != null &&
+        widget.initialVenueLat != null &&
+        widget.initialVenueLng != null) {
+      // venueName FIRST, then the controller text. The listener added above
+      // fires on the text change, and `_onSearchChanged` only calls Places
+      // when `venueName == null` — so this ordering is what stops a pre-fill
+      // triggering a billed autocomplete request for a venue we already
+      // resolved. See feedback_no_metered_features.
+      venueName = widget.initialVenueName;
+      venueLat = widget.initialVenueLat;
+      venueLng = widget.initialVenueLng;
+      venueController.text = widget.initialVenueName!;
+    }
+
+    final seeded = widget.initialDateTime;
+    if (seeded != null && seeded.isAfter(DateTime.now())) {
+      selectedDateTime = seeded;
+    } else {
+      final now = DateTime.now().add(const Duration(minutes: 60));
+      selectedDateTime = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        now.hour,
+        now.minute >= 30 ? 30 : 0,
+      );
+    }
 
     _shakeController = AnimationController(
       vsync: this,
@@ -615,11 +671,39 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
       final title = '$hostLabel wants to $activity';
       final description = descriptionController.text.trim();
 
+      // Refuse rather than write (0, 0).
+      //
+      // `tables.latitude/longitude` are NOT NULL, so the old
+      // `?? 0` fallback silently stored null island — a point in the Gulf of
+      // Guinea, 13,349 km from Manila. Measured 2026-10-05: 5 hangouts
+      // all-time landed there, and THREE of the seven then-live ones, at real
+      // Makati venues (Greenbelt Amphitheater, Room 221 at Sabio Makati,
+      // Cubiertos). A hangout at (0,0) is invisible: outside every viewport
+      // query, outside max_join_distance_km for everyone, and unreachable by
+      // the nearby broadcast. It looks created to the host and does not exist
+      // to anyone else, which is the worst possible failure mode for the one
+      // action we are trying to get people to take.
+      final lat = venueLat ?? widget.currentLat;
+      final lng = venueLng ?? widget.currentLng;
+      if (lat == null || lng == null || (lat == 0 && lng == 0)) {
+        if (mounted) {
+          ErrorHandler.showError(
+            context,
+            error: StateError('missing hangout coordinates'),
+            fallbackMessage:
+                'We could not pin that venue on the map. Pick the spot again '
+                'so people nearby can find it.',
+          );
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
+
       final tableId = await _tableService.createTable(
-        latitude: venueLat ?? widget.currentLat ?? 0,
-        longitude: venueLng ?? widget.currentLng ?? 0,
+        latitude: lat,
+        longitude: lng,
         scheduledTime: selectedDateTime,
-        activityType: 'other',
+        activityType: widget.initialCategory ?? 'other',
         venueName: venueName ?? 'TBD',
         venueAddress: venueAddress ?? '',
         title: title,
@@ -650,6 +734,9 @@ class CreateHangoutFlowState extends State<CreateHangoutFlow>
       if (mounted) {
         Navigator.of(context).pop();
         widget.onTableCreated();
+        // Fired after onTableCreated so a seed claim can never run before the
+        // list this hangout belongs to has been told to refresh.
+        widget.onTableCreatedWithId?.call(tableId);
         // A toast was the host's LAST interaction with their hangout — no
         // share, no link, nothing asked of them at the moment they are most
         // motivated. With 7 live hangouts and a 10% notification open rate,

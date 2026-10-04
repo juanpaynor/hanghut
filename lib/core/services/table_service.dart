@@ -571,20 +571,8 @@ class TableService {
               );
             }
 
-            // 2. Push notification
-            try {
-              await SupabaseConfig.client.functions.invoke(
-                'send-push',
-                body: {
-                  'user_id': inviteeId,
-                  'title': 'You\'re Invited! 🎉',
-                  'body': '$hostName invited you to "$tableTitle"',
-                  'data': {'type': 'table_join', 'table_id': tableId},
-                },
-              );
-            } catch (e) {
-              print('⚠️ Failed to send invite push for $inviteeId: $e');
-            }
+            // 2. The push rides the row inserted above — see the note on the
+            //    follower loop below. No second invoke.
           }
           print('✅ TABLE SERVICE: Invite notifications sent');
         } catch (e) {
@@ -667,24 +655,18 @@ class TableService {
               print('⚠️ Failed to batch insert follower notifications: $e');
             }
 
-            // Send push notifications (fire-and-forget, don't block creation)
-            for (final fid in followerIds) {
-              SupabaseConfig.client.functions
-                  .invoke(
-                    'send-push',
-                    body: {
-                      'user_id': fid,
-                      'title': pushTitle,
-                      'body': pushBody,
-                      'data': {'type': 'table_join', 'table_id': tableId},
-                    },
-                  )
-                  .then((_) {})
-                  .catchError((e) {
-                    print('⚠️ Failed to send follower push for $fid: $e');
-                  });
-            }
-            print('✅ TABLE SERVICE: Follower notifications sent');
+            // No direct send-push call here on purpose. Inserting the row
+            // above already delivers the push: handle_notifications_webhook()
+            // fires on INSERT, does pgmq.send('push_notifications', ...), and
+            // process-push-queue drains it to FCM with data.type set to the
+            // row's own type — which push_notification_service.dart routes. A
+            // second invoke sent the SAME notification twice.
+            //
+            // Followers of a public hangout were getting THREE pushes: this
+            // loop, the row's queue push, and notify_followers_new_hangout()
+            // in the database. The trigger's copy is now dropped by the
+            // send-push dedupe guard; this loop was the other duplicate.
+            print('✅ TABLE SERVICE: Follower notifications queued');
           }
         } catch (e) {
           print('⚠️ TABLE SERVICE: Failed to send follower notifications: $e');
@@ -737,7 +719,7 @@ class TableService {
                       'user_id': mid,
                       'actor_id': user.id,
                       'type': 'group_activity',
-                      'title': 'New Activity in $groupName 🎯',
+                      'title': 'New Hangout in $groupName 🎯',
                       'body': '$hostName created "$tableTitle"',
                       'entity_id': tableId,
                       'metadata': {'table_id': tableId, 'group_id': groupId},
@@ -751,23 +733,12 @@ class TableService {
               print('⚠️ Failed to batch insert group notifications: $e');
             }
 
-            // Send push notifications (fire-and-forget)
-            for (final mid in memberIds) {
-              SupabaseConfig.client.functions
-                  .invoke(
-                    'send-push',
-                    body: {
-                      'user_id': mid,
-                      'title': 'New Activity in $groupName 🎯',
-                      'body': '$hostName created "$tableTitle"',
-                      'data': {'type': 'table_join', 'table_id': tableId},
-                    },
-                  )
-                  .then((_) {})
-                  .catchError((e) {
-                    print('⚠️ Failed to send group push for $mid: $e');
-                  });
-            }
+            // No direct send-push call here on purpose. Inserting the row
+            // above already delivers the push: handle_notifications_webhook()
+            // fires on INSERT, does pgmq.send('push_notifications', ...), and
+            // process-push-queue drains it to FCM with data.type set to the
+            // row's own type — which push_notification_service.dart routes. A
+            // second invoke sent the SAME notification twice.
             print('✅ TABLE SERVICE: Group member notifications sent');
           }
         } catch (e) {

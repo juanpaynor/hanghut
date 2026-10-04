@@ -5,6 +5,7 @@ import 'package:bitemates/core/services/notification_service.dart';
 import 'package:bitemates/core/services/friends_going_service.dart';
 import 'package:bitemates/features/gamification/services/badge_service.dart';
 import 'package:bitemates/features/map/models/hangout_social_proof.dart';
+import 'package:bitemates/features/activity/models/invite_rules.dart';
 
 class TableMemberService {
   // Helper: get user display name for notification copy
@@ -60,14 +61,14 @@ class TableMemberService {
                   .select('title')
                   .eq('id', tableId)
                   .maybeSingle())?['title'] ??
-              'an activity';
+              'a hangout';
           FriendsGoingService().notifyFriendsOfJoin(
             entityType: 'table',
             entityId: tableId,
             entityTitle: tableTitle,
           );
 
-          return {'success': true, 'message': 'Successfully joined the table!'};
+          return {'success': true, 'message': 'Successfully joined the hangout!'};
         }
 
         if (status == 'pending') {
@@ -77,15 +78,21 @@ class TableMemberService {
           };
         }
 
-        // 'interested' holds no spot, so tapping Join has to run the real join
-        // path — capacity, approval and distance all still have to be checked.
-        // Falling through instead of returning is deliberate: the writes below
-        // upsert on (table_id, user_id), so the interested row is upgraded in
-        // place rather than colliding with the unique constraint.
-        if (status != 'interested') {
+        // 'interested' and 'invited' both hold NO spot, so tapping Join has
+        // to run the real join path — capacity, approval and distance all
+        // still have to be checked. Falling through instead of returning is
+        // deliberate: the writes below upsert on (table_id, user_id), so the
+        // existing row is upgraded in place rather than colliding with the
+        // unique constraint.
+        //
+        // 'invited' is in `member_status_type` but was handled nowhere, so it
+        // fell into the branch below and told an invited user "You are already
+        // in this hangout" — refusing the one action the invite asked them to
+        // take. Any invite flow is dead until this falls through.
+        if (status != 'interested' && status != 'invited') {
           return {
             'success': false,
-            'message': 'You are already a member of this table',
+            'message': 'You are already in this hangout',
           };
         }
       }
@@ -102,7 +109,7 @@ class TableMemberService {
       if (table['status'] != 'open') {
         return {
           'success': false,
-          'message': 'This table is no longer accepting members',
+          'message': 'This hangout is no longer accepting members',
         };
       }
 
@@ -270,7 +277,7 @@ class TableMemberService {
       final currentCount = currentMembers.length;
 
       if (currentCount >= maxGuests) {
-        return {'success': false, 'message': 'This table is full'};
+        return {'success': false, 'message': 'This hangout is full'};
       }
 
       if (requiresApproval) {
@@ -293,7 +300,7 @@ class TableMemberService {
             'type': 'join_request',
             'entity_id': tableId,
             'title': '$userName wants to join',
-            'body': table['title'] ?? 'Your table',
+            'body': table['title'] ?? 'Your hangout',
             'metadata': {'table_id': tableId},
           });
         } catch (_) {
@@ -327,7 +334,7 @@ class TableMemberService {
       }
 
       // Notify friends who are already in this table
-      final tableTitle = table['title'] ?? 'an activity';
+      final tableTitle = table['title'] ?? 'a hangout';
       FriendsGoingService().notifyFriendsOfJoin(
         entityType: 'table',
         entityId: tableId,
@@ -339,12 +346,12 @@ class TableMemberService {
           .incrementStats(user.id, attended: 1, baseXp: XpValues.joinEvent)
           .ignore();
 
-      return {'success': true, 'message': 'Successfully joined the table!'};
+      return {'success': true, 'message': 'Successfully joined the hangout!'};
     } catch (e) {
       debugPrint('⚠️ Error joining table: $e');
       return {
         'success': false,
-        'message': 'Failed to join table. Please try again.',
+        'message': 'Failed to join hangout. Please try again.',
       };
     }
   }
@@ -370,12 +377,12 @@ class TableMemberService {
       // Cancel any scheduled reminder
       NotificationService().cancelEventReminder(tableId);
 
-      return {'success': true, 'message': 'You have left the table'};
+      return {'success': true, 'message': 'You have left the hangout'};
     } catch (e) {
       debugPrint('⚠️ Error leaving table: $e');
       return {
         'success': false,
-        'message': 'Failed to leave table. Please try again.',
+        'message': 'Failed to leave hangout. Please try again.',
       };
     }
   }
@@ -446,8 +453,19 @@ class TableMemberService {
     }
   }
 
-  // Remove a member (host only)
-  /// Host invites a user directly — skips approval, sets status to 'joined'
+  /// Invite a user to a hangout. They must accept before they are a member.
+  ///
+  /// This used to write `status: 'joined'` with no consent step and no
+  /// notification — anyone already in a hangout could add you to it and you
+  /// would simply find yourself in a group chat with strangers. For a feature
+  /// whose job is introducing people who do not know each other, that is not a
+  /// detail. It now writes `'invited'` and tells them, which is also the state
+  /// the invite surfaces read.
+  ///
+  /// An invite holds NO spot: every capacity and roster query filters on
+  /// ('approved','joined','attended'), so inviting ten people to a four-seat
+  /// hangout does not fill it. Capacity is enforced when they accept, in
+  /// [joinTable].
   Future<Map<String, dynamic>> inviteUserToTable(
     String tableId,
     String userId,
@@ -467,13 +485,17 @@ class TableMemberService {
             status == 'attended') {
           return {'success': false, 'message': 'User is already a member'};
         }
-        // Re-activate removed/left member
+        if (status == 'invited') {
+          return {'success': false, 'message': 'They have already been invited'};
+        }
+        // Re-invite someone who left, declined or was removed.
         await SupabaseConfig.client
             .from('table_members')
             .update({
-              'status': 'joined',
-              'joined_at': DateTime.now().toIso8601String(),
-              'approved_at': DateTime.now().toIso8601String(),
+              'status': 'invited',
+              'requested_at': DateTime.now().toIso8601String(),
+              'approved_at': null,
+              'joined_at': null,
               'left_at': null,
             })
             .eq('table_id', tableId)
@@ -482,17 +504,83 @@ class TableMemberService {
         await SupabaseConfig.client.from('table_members').insert({
           'table_id': tableId,
           'user_id': userId,
-          'status': 'joined',
+          'status': 'invited',
           'role': 'member',
-          'joined_at': DateTime.now().toIso8601String(),
-          'approved_at': DateTime.now().toIso8601String(),
+          'requested_at': DateTime.now().toIso8601String(),
         });
       }
-      return {'success': true, 'message': 'User added to hangout'};
+
+      await notifyOfInvite(tableId: tableId, inviteeId: userId);
+      return {'success': true, 'message': 'Invite sent'};
     } catch (e) {
       debugPrint('⚠️ Error inviting user: $e');
       return {'success': false, 'message': 'Failed to invite user'};
     }
+  }
+
+  /// Tells someone they have been invited — bell + push.
+  ///
+  /// Mirrors the create-time path in `TableService.createTable` so both routes
+  /// produce the same `hangout_invite` notification, and is public because the
+  /// cohort promotion in Phase 1 sends the same thing for several people at
+  /// once. Never throws: an invite that saved but failed to notify is still a
+  /// real invite, and the recipient will see it in the Hangouts tab.
+  Future<void> notifyOfInvite({
+    required String tableId,
+    required String inviteeId,
+  }) async {
+    // Respect the opt-out before writing anything. An absent key reads as
+    // consent (see wants_notification), so this only suppresses a deliberate
+    // "no" — and a failure to check is treated as consent too, because losing
+    // an invite is worse than one notification someone muted.
+    try {
+      final wants = await SupabaseConfig.client.rpc(
+        'wants_notification',
+        params: {'p_user_id': inviteeId, 'p_key': 'hangout_invites'},
+      );
+      if (wants == false) {
+        debugPrint('🔕 $inviteeId has muted hangout invites — not notifying');
+        return;
+      }
+    } catch (e) {
+      debugPrint('⚠️ Could not check notification preference: $e');
+    }
+
+    final actorId = SupabaseConfig.client.auth.currentUser?.id;
+    String title = 'a hangout';
+    try {
+      final table = await SupabaseConfig.client
+          .from('tables')
+          .select('title')
+          .eq('id', tableId)
+          .maybeSingle();
+      final raw = table?['title']?.toString();
+      if (raw != null && raw.trim().isNotEmpty) title = raw;
+    } catch (_) {}
+
+    final actorName =
+        actorId == null ? 'Someone' : await _getUserDisplayName(actorId);
+    const heading = "You're Invited! 🎉";
+    final body = '$actorName invited you to "$title"';
+
+    try {
+      await SupabaseConfig.client.from('notifications').insert({
+        'user_id': inviteeId,
+        'actor_id': actorId,
+        'type': 'hangout_invite',
+        'entity_id': tableId,
+        'title': heading,
+        'body': body,
+        'metadata': {'table_id': tableId},
+      });
+    } catch (e) {
+      debugPrint('⚠️ Failed to insert invite notification: $e');
+    }
+
+    // No send-push call: the row above already produces the push via
+    // handle_notifications_webhook -> pgmq -> process-push-queue, carrying
+    // data.type = 'hangout_invite' which the app routes. Invoking send-push
+    // as well is how the rest of this file ended up sending duplicates.
   }
 
   Future<Map<String, dynamic>> removeMember(
@@ -594,13 +682,22 @@ class TableMemberService {
     }
   }
 
-  /// Accept an invite (invited user accepts the pending membership)
+  /// Accept an invite.
+  ///
+  /// Matches BOTH statuses an invite can legitimately have. It used to scope on
+  /// `status = 'pending'` alone, which is what create-time invites write — so
+  /// against a `status = 'invited'` row it matched zero rows. A 0-row PostgREST
+  /// update does not error, so this returned `success: true` having saved
+  /// nothing, and the user was told "You're in!" while nothing happened.
+  ///
+  /// `.select()` is what makes that detectable: it returns the rows actually
+  /// updated, so an empty list is a failed accept rather than a silent one.
   Future<Map<String, dynamic>> acceptInvite(String tableId) async {
     try {
       final user = SupabaseConfig.client.auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      await SupabaseConfig.client
+      final updated = await SupabaseConfig.client
           .from('table_members')
           .update({
             'status': 'joined',
@@ -609,7 +706,16 @@ class TableMemberService {
           })
           .eq('table_id', tableId)
           .eq('user_id', user.id)
-          .eq('status', 'pending');
+          .inFilter('status', openInviteStatuses)
+          .select('status');
+
+      if (updated.isEmpty) {
+        // No open invite: already answered, already a member, or withdrawn.
+        return {
+          'success': false,
+          'message': 'That invite is no longer open',
+        };
+      }
 
       // Schedule event reminder
       try {
@@ -636,18 +742,31 @@ class TableMemberService {
     }
   }
 
-  /// Decline an invite
+  /// Decline an invite.
+  ///
+  /// Deliberately NOT a delete: `declined` is what stops the same hangout being
+  /// offered again, and [joinTable] still lets someone change their mind later
+  /// (it treats `declined` as re-joinable). Same two fixes as [acceptInvite] —
+  /// both invite statuses, and a 0-row update is a failure.
   Future<Map<String, dynamic>> declineInvite(String tableId) async {
     try {
       final user = SupabaseConfig.client.auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      await SupabaseConfig.client
+      final updated = await SupabaseConfig.client
           .from('table_members')
           .update({'status': 'declined'})
           .eq('table_id', tableId)
           .eq('user_id', user.id)
-          .eq('status', 'pending');
+          .inFilter('status', openInviteStatuses)
+          .select('status');
+
+      if (updated.isEmpty) {
+        return {
+          'success': false,
+          'message': 'That invite is no longer open',
+        };
+      }
 
       return {'success': true, 'message': 'Invite declined'};
     } catch (e) {
@@ -862,4 +981,73 @@ class TableMemberService {
       return [];
     }
   }
+
+  // ───────────────────────── Invites ─────────────────────────
+  //
+  // `invited` has been a legal `member_status_type` all along but nothing in
+  // the app read it, so an invite could be written and the recipient had no
+  // way to see or accept it. These three methods are that missing half.
+  //
+  // An invite holds NO spot: every capacity and roster query filters on
+  // ('approved','joined','attended'), so inviting ten people to a four-seat
+  // hangout does not fill it. Accepting runs the real [joinTable] path, which
+  // is where capacity, approval and distance are actually enforced.
+
+  /// Upcoming hangouts this user has been invited to but not yet answered.
+  Future<List<Map<String, dynamic>>> getMyInvites() async {
+    final user = SupabaseConfig.client.auth.currentUser;
+    if (user == null) return [];
+    try {
+      // Both statuses an invite can have. 'invited' is what every route now
+      // writes; 'pending' is ambiguous — it means EITHER "I asked to join and
+      // the host hasn't answered" OR "the host invited me when they created
+      // this". Those cannot be told apart from the status alone, which is
+      // exactly why `tables.invited_user_ids` exists, so a 'pending' row only
+      // counts as an invite when this user is named in that array.
+      final rows = await SupabaseConfig.client
+          .from('table_members')
+          .select('table_id, status, requested_at, tables ( * )')
+          .eq('user_id', user.id)
+          .inFilter('status', openInviteStatuses)
+          .order('requested_at', ascending: false);
+
+      final now = DateTime.now();
+
+      final out = <Map<String, dynamic>>[];
+      for (final row in rows) {
+        final table = row['tables'];
+        if (table == null) continue;
+        final t = Map<String, dynamic>.from(table as Map);
+
+        final ids = t['invited_user_ids'];
+        if (!isOpenInvite(
+          status: row['status']?.toString(),
+          namedInInvitedArray: ids is List && ids.contains(user.id),
+        )) {
+          continue;
+        }
+        if (!isLiveInvite(
+          hangoutStatus: t['status']?.toString(),
+          startsAt: DateTime.tryParse(t['datetime']?.toString() ?? ''),
+          now: now,
+        )) {
+          continue;
+        }
+        t['invited_at'] = row['requested_at'];
+        out.add(t);
+      }
+      out.sort(
+        (a, b) => DateTime.parse(
+          a['datetime'],
+        ).compareTo(DateTime.parse(b['datetime'])),
+      );
+      return out;
+    } catch (e) {
+      debugPrint('⚠️ Error getting invites: $e');
+      return [];
+    }
+  }
+
+  /// Count only — for a badge on the Hangouts tab.
+  Future<int> getMyInviteCount() async => (await getMyInvites()).length;
 }

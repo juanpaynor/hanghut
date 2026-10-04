@@ -578,6 +578,20 @@ class _CreateTableModalState extends State<CreateTableModal> {
       ).showSnackBar(const SnackBar(content: Text('Please select a venue')));
       return;
     }
+    // (0, 0) is null island, not a venue — see the same guard in
+    // create_hangout_flow.dart. This path asserts non-null rather than
+    // defaulting to 0, so it cannot produce the coordinate itself, but a
+    // geocode that resolves to zeroes would still store an invisible hangout.
+    if (_venueLat == 0 && _venueLng == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'We could not pin that venue on the map. Pick the spot again.',
+          ),
+        ),
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
 
@@ -627,11 +641,11 @@ class _CreateTableModalState extends State<CreateTableModal> {
         widget.onTableCreated();
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Table created! 🎉')));
+        ).showSnackBar(const SnackBar(content: Text('Hangout created 🎉')));
       }
     } catch (e) {
       if (mounted) {
-        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to create table. Please try again.');
+        ErrorHandler.showError(context, error: e, fallbackMessage: 'Unable to create hangout. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -685,7 +699,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                   ),
                   Expanded(
                     child: Text(
-                      'Host an Activity',
+                      'Host a Hangout',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 18,
@@ -2172,7 +2186,7 @@ class _CreateTableModalState extends State<CreateTableModal> {
                             ),
                           )
                         : const Text(
-                            'Create Activity',
+                            'Create Hangout',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,

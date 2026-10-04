@@ -38,6 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notifChatMessages = true;
   bool _notifPostLikes = true;
   bool _notifPostComments = true;
+  bool _notifHangoutInvites = true;
   bool _isLoadingPrefs = true;
 
   // Privacy
@@ -91,6 +92,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _notifChatMessages = prefs['chat_messages'] as bool? ?? true;
           _notifPostLikes = prefs['post_likes'] as bool? ?? true;
           _notifPostComments = prefs['post_comments'] as bool? ?? true;
+          // Absent means never asked, which is consent — matching
+          // wants_notification() server-side.
+          _notifHangoutInvites =
+              prefs['hangout_invites'] as bool? ?? true;
           _hideActivityFromFriends =
               response['hide_activity_from_friends'] as bool? ?? false;
           _hideDistance = response['hide_distance'] as bool? ?? false;
@@ -105,28 +110,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Sets ONE preference, server-side, without touching the others.
+  ///
+  /// This used to rebuild the whole `notification_preferences` object from the
+  /// four switches on this screen and write it back — so every toggle silently
+  /// deleted any key the UI did not know about. The column default had five
+  /// keys; 14 users had already lost `event_updates` that way. PostgREST
+  /// cannot express a jsonb merge, which is why `set_notification_preference`
+  /// exists to do it in the database.
   Future<void> _updateNotificationPreference(String key, bool value) async {
     try {
-      final userId = SupabaseConfig.client.auth.currentUser?.id;
-      if (userId == null) return;
-
-      await SupabaseConfig.client
-          .from('users')
-          .update({
-            'notification_preferences': {
-              'event_joins': key == 'event_joins' ? value : _notifEventJoins,
-              'chat_messages': key == 'chat_messages'
-                  ? value
-                  : _notifChatMessages,
-              'post_likes': key == 'post_likes' ? value : _notifPostLikes,
-              'post_comments': key == 'post_comments'
-                  ? value
-                  : _notifPostComments,
-            },
-          })
-          .eq('id', userId);
+      await SupabaseConfig.client.rpc(
+        'set_notification_preference',
+        params: {'p_key': key, 'p_value': value},
+      );
     } catch (e) {
       print('Error updating notification preference: $e');
+      if (mounted) {
+        // Put the switch back: leaving it flipped would tell the user they are
+        // muted when the server still thinks otherwise.
+        setState(() {
+          switch (key) {
+            case 'event_joins':
+              _notifEventJoins = !value;
+            case 'chat_messages':
+              _notifChatMessages = !value;
+            case 'post_likes':
+              _notifPostLikes = !value;
+            case 'post_comments':
+              _notifPostComments = !value;
+            case 'hangout_invites':
+              _notifHangoutInvites = !value;
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't save that setting.")),
+        );
+      }
     }
   }
 
@@ -238,6 +258,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (val) async {
                   setState(() => _notifPostComments = val);
                   await _updateNotificationPreference('post_comments', val);
+                },
+              ),
+              SettingsSwitchTile(
+                // Icons.person_add is present in release 11305a4 and
+                // Icons.group_add is NOT — an absent glyph renders as "?" in a
+                // Shorebird patch, which ships Dart only. Checked, not assumed.
+                icon: Icons.person_add,
+                title: 'Hangout invites',
+                subtitle: 'When someone invites you to a hangout',
+                value: _notifHangoutInvites,
+                onChanged: (val) async {
+                  setState(() => _notifHangoutInvites = val);
+                  await _updateNotificationPreference('hangout_invites', val);
                 },
               ),
             ],
