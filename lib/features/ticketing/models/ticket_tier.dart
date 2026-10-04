@@ -46,6 +46,17 @@ class TicketTier {
   /// Organizer-written reason. Always wins over the generic state label.
   final String? lockNote;
 
+  /// Per-ORDER bounds the organizer set on this tier. NULL means unset, which
+  /// is NOT the same as 1 or 10 — an unset tier must defer to the event cap
+  /// rather than impose or raise one. 56 of 151 tiers carry a max under 10,
+  /// the smallest being 1, and none of this reached the buyer before #345.
+  ///
+  /// Per ORDER, not per person: a buyer capped at 1 can simply check out
+  /// twice. Web named that limitation explicitly in #345 and neither side has
+  /// built per-person limits, so do not describe these as "one each".
+  final int? maxPerOrder;
+  final int? minPerOrder;
+
   TicketTier({
     required this.id,
     required this.eventId,
@@ -59,6 +70,8 @@ class TicketTier {
     this.salesEnd,
     this.showWhenLocked = false,
     this.lockNote,
+    this.maxPerOrder,
+    this.minPerOrder,
   });
 
   factory TicketTier.fromJson(Map<String, dynamic> json) {
@@ -80,6 +93,18 @@ class TicketTier {
       lockNote: (json['lock_note'] as String?)?.trim().isEmpty == true
           ? null
           : json['lock_note'] as String?,
+      // Floored at 1, but NOT defaulted: a nonsense 0 must not make the tier
+      // unbuyable, and an absent value must stay null so the event cap wins.
+      maxPerOrder: switch ((json['max_per_order'] as num?)?.toInt()) {
+        null => null,
+        final v when v < 1 => 1,
+        final v => v,
+      },
+      minPerOrder: switch ((json['min_per_order'] as num?)?.toInt()) {
+        null => null,
+        final v when v < 1 => 1,
+        final v => v,
+      },
     );
   }
 

@@ -7,6 +7,9 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/theme/app_theme.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/core/services/event_analytics_service.dart';
+import 'package:bitemates/core/services/event_interest_service.dart';
+import 'package:bitemates/features/ticketing/models/event_social_proof.dart';
+import 'package:bitemates/features/ticketing/widgets/event_social_proof_row.dart';
 import 'package:bitemates/features/sharing/models/share_payload.dart';
 import 'package:bitemates/features/sharing/widgets/share_to_chat_sheet.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
@@ -51,6 +54,11 @@ class _EventDetailModalState extends State<EventDetailModal> {
   List<Event> _moreEvents = [];
   Map<String, dynamic>? _subscriberDiscount;
 
+  /// Who is going. Starts as `unknown`, which renders as a plain "Be the first
+  /// to go" — so this never shows a spinner, a gap, or a wrong number while
+  /// the fetch is in flight.
+  EventSocialProof _proof = EventSocialProof.unknown;
+
   @override
   void initState() {
     super.initState();
@@ -60,7 +68,15 @@ class _EventDetailModalState extends State<EventDetailModal> {
     _fetchOrganizerInfo();
     _loadMoreEvents();
     _loadSubscriberDiscount();
+    _loadSocialProof();
     if (widget.event.hideVenueUntilRegistered) _checkUserTicket();
+  }
+
+  Future<void> _loadSocialProof() async {
+    final proof =
+        await EventInterestService.instance.getSocialProof(widget.event.id);
+    if (!mounted) return;
+    setState(() => _proof = proof);
   }
 
   Future<void> _loadSubscriberDiscount() async {
@@ -237,7 +253,28 @@ class _EventDetailModalState extends State<EventDetailModal> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-          child: _buildBuyButton(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Above the buy button, not beside it: buying is the primary
+              // action and must keep the full-width gradient CTA. Interest is
+              // the cheaper alternative for the 75 of 84 upcoming events that
+              // have sold nothing yet — and it hides itself entirely for
+              // someone who already holds a ticket.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: EventInterestedButton(
+                  eventId: widget.event.id,
+                  proof: _proof,
+                  onChanged: (p) => setState(() => _proof = p),
+                ),
+              ),
+              if (_proof.canMarkInterested ||
+                  _proof.viewerState == EventViewerState.interested)
+                const SizedBox(height: 8),
+              _buildBuyButton(),
+            ],
+          ),
         ),
       ),
       body: Stack(
@@ -576,6 +613,21 @@ class _EventDetailModalState extends State<EventDetailModal> {
 
                   // Live countdown to doors — hides itself once the event starts.
                   _CountdownRow(target: widget.event.startLocal),
+
+                  // Who is going. Sits inside the hero, over the cover image,
+                  // so it is part of the first thing a viewer reads rather than
+                  // something they scroll to find. White-on-image styling
+                  // because the hero ignores the viewer's theme.
+                  const SizedBox(height: 14),
+                  EventGoingRow(
+                    proof: _proof,
+                    background: Colors.black,
+                    labelStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
                 ],
               ),
             ),

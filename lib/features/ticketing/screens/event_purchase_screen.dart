@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
 import 'package:bitemates/features/ticketing/models/ticket_tier.dart';
+import 'package:bitemates/features/ticketing/models/order_limits.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -76,6 +77,55 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
   // Event Details (for Fees)
   Event? _fullEvent;
   bool _isLoadingEventDetails = false;
+
+  // ── Per-order quantity limits (team_comms #345) ──
+  //
+  // Checkout used to clamp only on `event.maxSeatsPerOrder`, which no event
+  // has ever set — 0 of 317 active events — so in practice there was no limit
+  // at all. The organizer's real controls live on three other columns
+  // (events.max_tickets_per_purchase / min_tickets_per_purchase and
+  // ticket_tiers.max_per_order / min_per_order), none of which checkout read,
+  // even though our own host screen writes the event pair. Web now refuses
+  // over-limit orders with QUANTITY_LIMIT 409, so an unclamped stepper lets a
+  // buyer assemble a cart that only fails at payment.
+
+  Event get _limitSource => _fullEvent ?? widget.event;
+
+  /// Most tickets of the selected type this one order may contain. The rule
+  /// itself lives in order_limits.dart so it can be tested.
+  int get _perOrderCap => effectivePerOrderCap(
+        eventCap: _limitSource.maxPerOrder,
+        tierCap: _selectedTier?.maxPerOrder,
+      );
+
+  /// Fewest tickets this order may contain — tiers sold in multiples (table
+  /// seatings) set a floor.
+  int get _perOrderFloor => effectivePerOrderFloor(
+        eventFloor: _limitSource.minPerOrder,
+        tierFloor: _selectedTier?.minPerOrder,
+        cap: _perOrderCap,
+      );
+
+  /// How many are actually left to sell, ignoring per-order rules.
+  int get _stockAvailable =>
+      _selectedTier?.quantityAvailable ?? _realTicketsAvailable;
+
+  /// What the stepper may reach: stock and the per-order cap, whichever binds.
+  int get _maxQuantity => effectiveMaxQuantity(
+        stockAvailable: _stockAvailable,
+        cap: _perOrderCap,
+      );
+
+  /// Pull [_quantity] back inside the current bounds. Must run whenever the
+  /// selected tier changes: picking a 1-per-order tier while the stepper sits
+  /// at 6 would otherwise leave an order the server is now guaranteed to
+  /// refuse.
+  void _clampQuantityToLimits() {
+    final lo = _perOrderFloor;
+    final hi = _maxQuantity;
+    final next = _quantity < lo ? lo : (_quantity > hi ? hi : _quantity);
+    if (next != _quantity) _quantity = next;
+  }
 
   // ── Terms & conditions (team_comms #332) ──
   CheckoutTerms _terms = const CheckoutTerms();
@@ -200,7 +250,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
       MaterialPageRoute(
         builder: (_) => SeatMapPickerScreen(
           eventId: widget.event.id,
-          maxSeats: (_fullEvent ?? widget.event).maxSeatsPerOrder,
+          // The same per-order ceiling the stepper uses, so a seat map cannot
+          // be the way around a limit the quantity path honours (#345).
+          maxSeats: _perOrderCap,
         ),
       ),
     );
@@ -220,6 +272,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
         final match = _tiers.where((t) => t.id == result.tierId);
         if (match.isNotEmpty) _selectedTier = match.first;
       }
+      // The picker is bounded by the event cap, but the tier it resolves to
+      // may be stricter still.
+      _clampQuantityToLimits();
       _recalculatePromo();
     });
   }
@@ -451,6 +506,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           // never be the one the pay button acts on.
           final buyable = _tiers.where((t) => t.isOnSale() && !t.isSoldOut);
           _selectedTier = buyable.isEmpty ? null : buyable.first;
+          // The auto-selected tier may set a floor (sold in multiples) or a
+          // cap below the default quantity of 1 (#345).
+          _clampQuantityToLimits();
           _isLoadingTiers = false;
         });
       }
@@ -801,6 +859,18 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
             throw Exception(
               err['error']['message']?.toString() ??
                   'Please accept the terms before paying.',
+            );
+          }
+          // Per-order limit refused server-side (#345). The clamped stepper
+          // should make this unreachable, so arriving here means our limits
+          // and theirs disagree — a stale client, or a cap the organizer
+          // tightened while this screen was open. Their message names the cap
+          // and is written for the buyer, so it is shown as-is; the fallback
+          // exists only because `message` must never be interpolated as null.
+          if (code == 'QUANTITY_LIMIT') {
+            throw Exception(
+              err['error']['message']?.toString() ??
+                  'That is more tickets than this event allows in one order.',
             );
           }
           if (code == 'TIER_LOCKED' ||
@@ -1457,6 +1527,9 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
                 if (!tier.isSoldOut && tier.isOnSale()) {
                   setState(() {
                     _selectedTier = tier;
+                    // Tiers carry their own per-order bounds, so the quantity
+                    // that was legal a moment ago may not be now (#345).
+                    _clampQuantityToLimits();
                     _recalculatePromo();
                   });
                 }
@@ -1474,11 +1547,13 @@ class _EventPurchaseScreenState extends State<EventPurchaseScreen>
           const SizedBox(height: 14),
           _QuantitySelector(
             quantity: _quantity,
-            max: (_selectedTier != null)
-                ? _selectedTier!.quantityAvailable
-                    .clamp(1, (_fullEvent ?? widget.event).maxSeatsPerOrder)
-                : _realTicketsAvailable
-                    .clamp(1, (_fullEvent ?? widget.event).maxSeatsPerOrder),
+            max: _maxQuantity,
+            min: _perOrderFloor,
+            // Passed separately so the badge can tell the truth about WHY the
+            // stepper stops. "Only 2 left" when the organizer capped orders at
+            // 2 of a 300-ticket tier is both wrong and invents scarcity.
+            stockAvailable: _stockAvailable,
+            perOrderCap: _perOrderCap,
             onChanged: (qty) => setState(() {
               _quantity = qty;
               _recalculatePromo();
@@ -2173,11 +2248,23 @@ class _InfoRow extends StatelessWidget {
 class _QuantitySelector extends StatelessWidget {
   final int quantity;
   final int max;
+
+  /// Floor, for tiers sold in multiples. Defaults to 1 — the old behaviour.
+  final int min;
+
+  /// The two reasons [max] might be what it is, kept apart so the badge can
+  /// say which one is binding (team_comms #345).
+  final int? stockAvailable;
+  final int? perOrderCap;
+
   final ValueChanged<int> onChanged;
 
   const _QuantitySelector({
     required this.quantity,
     required this.max,
+    this.min = 1,
+    this.stockAvailable,
+    this.perOrderCap,
     required this.onChanged,
   });
 
@@ -2212,7 +2299,7 @@ class _QuantitySelector extends StatelessWidget {
             children: [
               _stepButton(
                 icon: Icons.remove_rounded,
-                enabled: quantity > 1,
+                enabled: quantity > min,
                 onTap: () => onChanged(quantity - 1),
                 primary: primary,
               ),
@@ -2237,7 +2324,7 @@ class _QuantitySelector extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        if (max < 10)
+        if (_badgeLabel != null)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
@@ -2245,7 +2332,7 @@ class _QuantitySelector extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              'Only $max left',
+              _badgeLabel!,
               style: TextStyle(
                 fontSize: 12.5,
                 color: Colors.orange[800],
@@ -2255,6 +2342,23 @@ class _QuantitySelector extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// Why the stepper stops here — or nothing, when the limit is unremarkable.
+  ///
+  /// Scarcity and policy are different messages and must not be confused.
+  /// "Only 1 left" on a 300-ticket tier the organizer caps at 1 per order is
+  /// false, and it manufactures urgency that does not exist. Stock wins when
+  /// it is the binding constraint, because running out is the more useful
+  /// thing for a buyer to know.
+  String? get _badgeLabel {
+    final stock = stockAvailable;
+    final cap = perOrderCap;
+    if (stock != null && stock <= max && stock < 10) return 'Only $stock left';
+    if (cap != null && cap <= max && cap < 10) return 'Max $cap per order';
+    // Callers that pass neither keep the original behaviour.
+    if (stock == null && cap == null && max < 10) return 'Only $max left';
+    return null;
   }
 
   Widget _stepButton({

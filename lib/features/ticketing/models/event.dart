@@ -38,13 +38,40 @@ class Event {
   final double ticketPrice;
   final int capacity;
   final int ticketsSold;
+  /// Older of the two event-level per-order columns. Kept because callers
+  /// reference it, but it is effectively dead data: 0 of 317 active events
+  /// have ever set it, so it sits on its default of 10 forever.
   final int maxSeatsPerOrder;
+
+  /// The per-order column organizers actually set — and the one web's
+  /// create-purchase-intent enforces as QUANTITY_LIMIT (#345). Our own host
+  /// screen writes this one (create_event_screen.dart), while checkout read
+  /// only [maxSeatsPerOrder], so a limit set in this app was ignored by this
+  /// app. 32 active events are affected, all of them in the permissive
+  /// direction. Use [maxPerOrder], never either field alone.
+  final int maxTicketsPerPurchase;
+  final int minTicketsPerPurchase;
   final String category;
   final String organizerId;
 
   /// Whether this event has a real organizer (some legacy/test events have a
   /// blank organizer_id, which must never be used in UUID-typed queries).
   bool get hasOrganizer => organizerId.trim().isNotEmpty;
+
+  /// The event-level ceiling on one order: the LOWER of the two columns.
+  ///
+  /// Never read either column directly. Web's own picker took
+  /// `tier?.max_per_order || eventMax`, which let an untouched tier default of
+  /// 10 silently REPLACE an organizer's event limit of 1 — live on two of
+  /// their events when they reported it in #345. Taking the lower value is the
+  /// rule that cannot be gamed from either side.
+  int get maxPerOrder =>
+      maxSeatsPerOrder < maxTicketsPerPurchase
+          ? maxSeatsPerOrder
+          : maxTicketsPerPurchase;
+
+  /// The event-level floor on one order.
+  int get minPerOrder => minTicketsPerPurchase;
 
   final String? organizerName;
   final String? organizerPhotoUrl;
@@ -140,6 +167,8 @@ class Event {
     required this.capacity,
     required this.ticketsSold,
     this.maxSeatsPerOrder = 10,
+    this.maxTicketsPerPurchase = 10,
+    this.minTicketsPerPurchase = 1,
     required this.category,
     required this.organizerId,
     this.organizerName,
@@ -237,6 +266,16 @@ class Event {
         < 1 => 1,
         final v => v,
       },
+      maxTicketsPerPurchase:
+          switch ((json['max_tickets_per_purchase'] as num?)?.toInt() ?? 10) {
+        < 1 => 1,
+        final v => v,
+      },
+      minTicketsPerPurchase:
+          switch ((json['min_tickets_per_purchase'] as num?)?.toInt() ?? 1) {
+        < 1 => 1,
+        final v => v,
+      },
       category: (json['category'] ?? json['event_type'] ?? '') as String,
       organizerId: (json['organizer_id'] as String?) ?? '',
       status: json['status'] as String? ?? 'active',
@@ -280,6 +319,8 @@ class Event {
       'capacity': capacity,
       'tickets_sold': ticketsSold,
       'max_seats_per_order': maxSeatsPerOrder,
+      'max_tickets_per_purchase': maxTicketsPerPurchase,
+      'min_tickets_per_purchase': minTicketsPerPurchase,
       'category': category,
       'organizer_id': organizerId,
       'organizer_name': organizerName,

@@ -6,6 +6,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/event_service.dart';
 import 'package:bitemates/core/services/event_category_service.dart';
+import 'package:bitemates/core/services/event_interest_service.dart';
+import 'package:bitemates/features/ticketing/models/event_social_proof.dart';
+import 'package:bitemates/features/ticketing/widgets/event_social_proof_row.dart';
 import 'package:bitemates/core/services/location_service.dart';
 import 'package:bitemates/features/ticketing/widgets/event_detail_modal.dart';
 import 'package:bitemates/features/ticketing/models/event.dart';
@@ -407,11 +410,33 @@ class _DiscoverTabState extends State<DiscoverTab>
           _events = events;
           _hasMoreEvents = events.length == _eventsPageSize;
         });
+        _loadSocialProof(events);
       }
     } catch (e) {
       print('❌ DiscoverTab: error loading events: $e');
     }
   }
+
+  /// Social proof for a page of events, in ONE request.
+  ///
+  /// Same shape as feed_screen._loadHangoutProof. Per-card fetching would mean
+  /// 20 round trips to draw one screen, and this list also feeds five derived
+  /// rails (trending, weekend, free, deck…) off the same objects.
+  Future<void> _loadSocialProof(List<Event> events) async {
+    if (events.isEmpty) return;
+    final proof = await EventInterestService.instance
+        .getSocialProofFor(events.map((e) => e.id).toList());
+    if (!mounted || proof.isEmpty) return;
+    setState(() => _eventProof.addAll(proof));
+  }
+
+  /// Keyed by event id. A missing entry renders as
+  /// [EventSocialProof.unknown] — a plain "Be first", never a gap or a
+  /// spinner — which is also the state before the RPC is deployed.
+  final Map<String, EventSocialProof> _eventProof = {};
+
+  EventSocialProof _proofFor(String eventId) =>
+      _eventProof[eventId] ?? EventSocialProof.unknown;
 
   // Next page (infinite scroll). Appends to the base list the rails/grid derive
   // from. Date-range scoping is preserved via the cursor offset.
@@ -434,6 +459,8 @@ class _DiscoverTabState extends State<DiscoverTab>
           final existing = _events.map((e) => e.id).toSet();
           _events.addAll(more.where((e) => !existing.contains(e.id)));
           _hasMoreEvents = more.length == _eventsPageSize;
+          // One more request per appended page, not per card.
+          _loadSocialProof(more);
           _loadingMoreEvents = false;
         });
       }
@@ -601,6 +628,7 @@ class _DiscoverTabState extends State<DiscoverTab>
                   item: left[i],
                   tall: i.isEven,
                   onTap: () => onTap(left[i]),
+                  proof: _proofFor(left[i].id),
                 ),
             ],
           ),
@@ -616,6 +644,7 @@ class _DiscoverTabState extends State<DiscoverTab>
                   item: right[i],
                   tall: i.isOdd,
                   onTap: () => onTap(right[i]),
+                  proof: _proofFor(right[i].id),
                 ),
             ],
           ),
@@ -1420,10 +1449,14 @@ class _ActivityTile extends StatefulWidget {
   final bool tall;
   final VoidCallback onTap;
 
+  /// Null for experiences, and for events whose proof has not arrived yet.
+  final EventSocialProof? proof;
+
   const _ActivityTile({
     required this.item,
     required this.tall,
     required this.onTap,
+    this.proof,
   });
 
   @override
@@ -1609,6 +1642,24 @@ class _ActivityTileState extends State<_ActivityTile> {
                         height: 1.25,
                       ),
                     ),
+                    // Only on events that have something to report. A tile is
+                    // 150-200px tall over an image, so "Be first" on every one
+                    // of them would be noise competing with the title — unlike
+                    // the detail modal, where the invitation is the point.
+                    if (widget.proof != null && !widget.proof!.isEmpty) ...[
+                      const SizedBox(height: 4),
+                      EventGoingRow(
+                        proof: widget.proof!,
+                        compact: true,
+                        avatarSize: 18,
+                        background: Colors.black,
+                        labelStyle: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
