@@ -760,6 +760,63 @@ class TableService {
     }
   }
 
+  /// Edits a hangout the caller hosts, through `update_hangout`.
+  ///
+  /// **Pass only what changed.** Every field is optional and a null means
+  /// "leave it alone" — not because that is tidier, but because the RPC sends
+  /// a "Plans changed" notification to everyone who committed whenever the
+  /// time or the place is supplied. Sending the unchanged venue back with a
+  /// title fix would push the whole group for nothing.
+  ///
+  /// The venue is a unit: name, coordinates and address move together or not
+  /// at all, which is what keeps `venue_address` from pointing at the previous
+  /// place. The RPC refuses a half-moved venue outright.
+  ///
+  /// Returns the RPC's own message, which is written for the host to read.
+  Future<({bool ok, String message})> updateHangout({
+    required String tableId,
+    String? title,
+    String? description,
+    DateTime? datetime,
+    String? locationName,
+    double? latitude,
+    double? longitude,
+    String? venueAddress,
+    int? maxGuests,
+  }) async {
+    try {
+      final rows = await SupabaseConfig.client.rpc(
+        'update_hangout',
+        params: {
+          'p_table_id': tableId,
+          'p_title': title,
+          'p_description': description,
+          // The column is timestamptz; send UTC so a host editing from
+          // another zone does not shift the hangout.
+          'p_datetime': datetime?.toUtc().toIso8601String(),
+          'p_location_name': locationName,
+          'p_latitude': latitude,
+          'p_longitude': longitude,
+          'p_max_guests': maxGuests,
+          'p_venue_address': venueAddress,
+        },
+      );
+
+      final row = (rows is List && rows.isNotEmpty) ? rows.first : null;
+      if (row is Map) {
+        return (
+          ok: row['ok'] == true,
+          message: (row['message'] as String?) ?? 'Updated',
+        );
+      }
+      // A shape we do not recognise is not a success.
+      return (ok: false, message: 'Could not save that change');
+    } catch (e) {
+      print('⚠️ TABLE SERVICE: updateHangout failed: $e');
+      return (ok: false, message: 'Could not save that change');
+    }
+  }
+
   // Delete a table
   Future<void> deleteTable(String tableId) async {
     try {

@@ -2,15 +2,16 @@ import 'package:flutter/foundation.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/activity/models/hangout_seed.dart';
 
-/// Reads and answers system-proposed hangouts.
+/// Reads and answers system-made hangout suggestions.
 ///
-/// See [HangoutSeed] for what a seed is and why it carries no identities.
+/// See [HangoutSeed] for what a suggestion is and why it carries no
+/// identities.
 class HangoutSeedService {
-  /// Cached for the process lifetime, like the nudge.
+  /// Cached for the process lifetime.
   ///
-  /// `_fetched` is tracked separately from `_cached` so "no seed for this
-  /// user" — the common case — is remembered rather than re-queried on every
-  /// rebuild of every surface that mounts the card.
+  /// `_fetched` is separate from `_cached` so "no suggestion for this user" —
+  /// the common case — is remembered rather than re-queried on every rebuild
+  /// of every surface that mounts the card.
   static HangoutSeed? _cached;
   static bool _fetched = false;
 
@@ -19,18 +20,15 @@ class HangoutSeedService {
     _fetched = false;
   }
 
-  /// The caller's current proposal, or null.
+  /// The caller's current suggestion, or null.
   ///
-  /// Never throws: the seed is an enhancement to screens that must work
+  /// Never throws: the suggestion is an enhancement to screens that must work
   /// without it, so a failure degrades to showing nothing.
   Future<HangoutSeed?> fetch({bool force = false}) async {
     if (_fetched && !force) return _cached;
     try {
-      // get_my_hangout_offer, not get_my_hangout_seed: the event-anchored
-      // rewrite changed the return shape, and Postgres cannot change a
-      // function's return type without a DROP. The old function still exists
-      // and is unused.
-      final rows = await SupabaseConfig.client.rpc('get_my_hangout_offer');
+      final rows =
+          await SupabaseConfig.client.rpc('get_my_hangout_suggestion');
       final row = (rows is List && rows.isNotEmpty) ? rows.first : null;
       _cached = HangoutSeed.fromJson(
         row is Map ? Map<String, dynamic>.from(row) : null,
@@ -38,109 +36,85 @@ class HangoutSeedService {
       _fetched = true;
       return _cached;
     } catch (e) {
-      debugPrint('⚠️ get_my_hangout_seed failed: $e');
-      // Not setting _fetched: a transient failure should be retried, unlike
-      // a genuine empty result.
+      debugPrint('⚠️ get_my_hangout_suggestion failed: $e');
+      // Not setting _fetched: a transient failure should be retried, unlike a
+      // genuine empty result.
       return null;
     }
   }
 
-  /// Says yes or no.
+  /// Says yes. One call does everything.
   ///
-  /// On yes, [SeedResponse.isHost] says which of two different things happens
-  /// next — the caller opens the create flow pre-filled, or joins the hangout
-  /// somebody already made. The server decides, not the client: two people
-  /// tapping at once must not both believe they are hosting.
-  Future<SeedResponse> respond(String seedId, {required bool isIn}) async {
+  /// The hangout is created server-side with this user as host — no create
+  /// form, which was the drop-off the suggestion exists to remove. Everyone
+  /// else who already said yes is invited to it.
+  ///
+  /// The server decides whether this user hosts or joins: two people tapping
+  /// at the same instant must not both be told they are hosting, and only the
+  /// claim's guarded UPDATE can settle that.
+  Future<SeedAccept> accept(String seedId) async {
     try {
       final rows = await SupabaseConfig.client.rpc(
-        'respond_to_hangout_seed',
-        params: {'p_seed_id': seedId, 'p_response': isIn ? 'in' : 'out'},
+        'accept_hangout_suggestion',
+        params: {'p_seed_id': seedId},
       );
       final row = (rows is List && rows.isNotEmpty) ? rows.first : null;
       invalidate();
       if (row is! Map) {
-        return const SeedResponse(ok: false, message: 'Something went wrong');
+        return const SeedAccept(ok: false, message: 'Something went wrong');
       }
-      return SeedResponse(
+      return SeedAccept(
         ok: row['ok'] as bool? ?? false,
         isHost: row['is_host'] as bool? ?? false,
-        claimedTableId: (row['claimed_table_id'] as String?)?.trim(),
-        message: (row['message'] as String?)?.trim() ?? '',
-      );
-    } catch (e) {
-      debugPrint('⚠️ respond_to_hangout_seed failed: $e');
-      return const SeedResponse(
-        ok: false,
-        message: 'Could not save that. Try again.',
-      );
-    }
-  }
-
-  /// Binds the hangout the host just created to the seed, and invites
-  /// everyone else who said yes.
-  ///
-  /// Called AFTER creation so the seed is only ever marked claimed against a
-  /// table that exists. A failure here leaves the hangout intact and merely
-  /// un-linked, which is why it reports rather than throws.
-  Future<SeedClaim> claim({
-    required String seedId,
-    required String tableId,
-  }) async {
-    try {
-      final rows = await SupabaseConfig.client.rpc(
-        'claim_hangout_seed',
-        params: {'p_seed_id': seedId, 'p_table_id': tableId},
-      );
-      final row = (rows is List && rows.isNotEmpty) ? rows.first : null;
-      invalidate();
-      if (row is! Map) {
-        return const SeedClaim(ok: false, invited: 0, message: '');
-      }
-      return SeedClaim(
-        ok: row['ok'] as bool? ?? false,
+        tableId: (row['table_id'] as String?)?.trim(),
         invited: (row['invited'] as num?)?.toInt() ?? 0,
         message: (row['message'] as String?)?.trim() ?? '',
       );
     } catch (e) {
-      debugPrint('⚠️ claim_hangout_seed failed: $e');
-      return const SeedClaim(ok: false, invited: 0, message: '');
+      debugPrint('⚠️ accept_hangout_suggestion failed: $e');
+      return const SeedAccept(
+        ok: false,
+        message: 'Could not set that up. Try again.',
+      );
+    }
+  }
+
+  /// Says no. Best-effort — the card is dismissed either way, because making
+  /// someone tap "no thanks" twice is worse than losing the record of it.
+  Future<void> decline(String seedId) async {
+    try {
+      await SupabaseConfig.client.rpc(
+        'decline_hangout_suggestion',
+        params: {'p_seed_id': seedId},
+      );
+    } catch (e) {
+      debugPrint('⚠️ decline_hangout_suggestion failed: $e');
+    } finally {
+      invalidate();
     }
   }
 }
 
-/// The outcome of saying yes or no to a proposal.
-class SeedResponse {
+/// The outcome of saying yes.
+class SeedAccept {
   final bool ok;
 
-  /// True when this user won the race and should open the create flow.
+  /// True when this user won the race and is hosting the new hangout.
   final bool isHost;
 
-  /// Set when somebody else already claimed it — there is a hangout to join.
-  final String? claimedTableId;
+  /// The hangout — newly created if hosting, the existing one if joining.
+  final String? tableId;
 
-  final String message;
-
-  const SeedResponse({
-    required this.ok,
-    this.isHost = false,
-    this.claimedTableId,
-    this.message = '',
-  });
-}
-
-/// The outcome of binding a created hangout to its seed.
-class SeedClaim {
-  final bool ok;
-
-  /// How many other people were invited to the new hangout.
+  /// How many others were invited, when hosting.
   final int invited;
 
   final String message;
 
-  const SeedClaim({
+  const SeedAccept({
     required this.ok,
-    required this.invited,
-    required this.message,
+    this.isHost = false,
+    this.tableId,
+    this.invited = 0,
+    this.message = '',
   });
 }

@@ -234,6 +234,22 @@ class PushNotificationService {
           (route) => false,
         );
       }
+    } else if (data['kind'] == 'hangout_suggestion') {
+      // A suggestion is NOT a hangout yet — its `entity_id` is a
+      // `hangout_seeds` row, not a `tables` row. Routing it to
+      // showTableDetails looked the seed id up in `tables`, found nothing and
+      // silently did nothing, which is how a push that reads "you in?" leads
+      // to a blank map. Must be tested BEFORE the table-notification branch:
+      // these share `type = 'hangout_invite'`.
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(
+            initialIndex: 0,
+            openHangoutSuggestion: true,
+          ),
+        ),
+        (route) => false,
+      );
     } else if (data['type'] == 'table_join' ||
         data['type'] == 'join_request' ||
         data['type'] == 'approved' ||

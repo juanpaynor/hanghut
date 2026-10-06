@@ -37,11 +37,8 @@ import 'package:bitemates/core/services/story_service.dart';
 import 'package:bitemates/core/services/ably_service.dart';
 import 'package:ably_flutter/ably_flutter.dart' as ably;
 import 'package:bitemates/core/services/event_category_service.dart';
-import 'package:bitemates/core/services/hangout_nudge_service.dart';
 import 'package:bitemates/core/services/hangout_seed_service.dart';
-import 'package:bitemates/features/activity/models/hangout_nudge.dart';
 import 'package:bitemates/features/activity/models/hangout_seed.dart';
-import 'package:bitemates/features/activity/widgets/hangout_nudge_banner.dart';
 import 'package:bitemates/features/activity/widgets/hangout_seed_card.dart';
 
 // Filter enum for toggling marker visibility
@@ -59,19 +56,11 @@ class MapScreen extends StatefulWidget {
   /// coordinate instead of writing (0, 0).
   final void Function(String source, String? category)? onStartHangout;
 
-  /// Opens the create flow pre-filled from a system-proposed hangout, and
-  /// binds the result back to the seed once it exists.
-  ///
-  /// Separate from [onStartHangout] because the follow-up differs: creating
-  /// from a seed must also claim it, which invites everyone else who said yes.
-  final void Function(HangoutSeed seed)? onStartHangoutFromSeed;
-
   const MapScreen({
     super.key,
     this.initialFlyToLat,
     this.initialFlyToLng,
     this.onStartHangout,
-    this.onStartHangoutFromSeed,
   });
 
   @override
@@ -159,22 +148,18 @@ class MapScreenState extends State<MapScreen>
   bool _showIsochrone = false;
   bool _isTableModalOpen = false;
 
-  /// "22 people near you are into Nightlife" — the standing prompt on the
-  /// landing screen. Null for anyone the RPC has nothing to say about,
-  /// including anyone who already has an upcoming hangout.
-  HangoutNudge? _nudge;
-
   /// Dismissed for this session only, not persisted.
   ///
-  /// The modal is the rationed interruption (3 times, ever); this banner is
-  /// the standing offer, so a dismissal here means "not right now" rather
-  /// than "never show me this again". It comes back next launch.
-  bool _nudgeDismissed = false;
+  /// A dismissal here means "not right now" rather than "never again" — the
+  /// suggestion comes back next launch.
+  bool _suggestionDismissed = false;
 
-  /// A system-proposed hangout for this user, if there is one.
+  /// The system-made suggestion for this user, if there is one.
   ///
-  /// Outranks [_nudge] when both exist: a concrete plan with a venue and a
-  /// time is a better ask than "people near you like this".
+  /// This replaced an interest nudge ("22 people near you are into
+  /// Nightlife"). That version still asked the user to invent a plan; this
+  /// one names the activity, the place and the time, so the only thing left
+  /// to do is say yes.
   HangoutSeed? _seed;
 
   /// True while a yes/no is in flight, so the buttons cannot produce two
@@ -209,75 +194,58 @@ class MapScreenState extends State<MapScreen>
     _startHeartbeat();
     _subscribeToFeed();
     _loadEventCategories();
-    _loadNudge();
+    _loadSeed();
     // React live to the Settings weather-effects toggle (no app restart).
     WeatherEffectsPreference.changes.addListener(_onWeatherEffectsToggled);
   }
 
-  /// Loads the standing "start something" prompt.
-  ///
-  /// Shares the service's process-lifetime cache with the Hangouts tab and
-  /// the modal, so mounting it on a third surface costs no extra round trip.
-  /// Only assigns when non-null — a failure or an empty result leaves the map
-  /// exactly as it is today.
-  Future<void> _loadNudge() async {
-    final nudge = await HangoutNudgeService().fetch();
-    if (mounted && nudge != null) setState(() => _nudge = nudge);
-    await _loadSeed();
-  }
-
-  /// Loads the system-proposed hangout, if this user has one.
+  /// Loads the system-made suggestion, if this user has one.
   Future<void> _loadSeed() async {
     final seed = await HangoutSeedService().fetch();
     if (mounted && seed != null) setState(() => _seed = seed);
   }
 
-  /// "I'm in" on a proposal.
+  /// "I'm in".
   ///
-  /// The server decides whether this user hosts or joins — two people tapping
-  /// at the same moment must not both be told they are hosting, and only the
-  /// claim's atomic UPDATE can settle that.
+  /// One call: the hangout is created server-side with this user as host and
+  /// the others invited. No create form — that was the drop-off the
+  /// suggestion exists to remove.
   Future<void> _acceptSeed(HangoutSeed seed) async {
     setState(() => _seedBusy = true);
-    final service = HangoutSeedService();
-    final result = await service.respond(seed.seedId, isIn: true);
-    if (!mounted) {
-      return;
-    }
-    setState(() => _seedBusy = false);
+    final result = await HangoutSeedService().accept(seed.seedId);
+    if (!mounted) return;
+    setState(() {
+      _seedBusy = false;
+      // Answered either way — the card has done its job.
+      _seed = null;
+    });
 
-    if (!result.ok) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(result.message)));
-      setState(() => _seed = null);
-      return;
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.ok && result.isHost && result.invited > 0
+              ? '${result.message}. We told ${result.invited} '
+                  '${result.invited == 1 ? "person" : "people"}.'
+              : result.message,
+        ),
+      ),
+    );
 
-    if (result.isHost) {
-      // They won the race: open the flow with the venue, time and category
-      // already filled in, then bind the created hangout back to the seed so
-      // everyone else who said yes gets invited to it.
-      widget.onStartHangoutFromSeed?.call(seed);
-    } else {
-      // Somebody is already hosting. Nothing to create — they are in.
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(result.message)));
-      setState(() => _seed = null);
+    if (result.ok) {
+      // It exists now, so the map should show it.
       refreshTables();
+      final id = result.tableId;
+      if (id != null) showTableDetails(id);
     }
   }
 
   Future<void> _declineSeed(HangoutSeed seed) async {
-    setState(() => _seedBusy = true);
-    await HangoutSeedService().respond(seed.seedId, isIn: false);
-    if (mounted) {
-      setState(() {
-        _seedBusy = false;
-        _seed = null;
-      });
-    }
+    setState(() {
+      _seedBusy = true;
+      _seed = null;
+    });
+    await HangoutSeedService().decline(seed.seedId);
+    if (mounted) setState(() => _seedBusy = false);
   }
 
   /// Loads the server-driven event category list for the Events sub-filter.
@@ -983,10 +951,7 @@ class MapScreenState extends State<MapScreen>
           // Hidden while a table modal is open, like every other overlay
           // here: the sheet covers this area and the banner would show
           // through the gap above it.
-          // A concrete proposal outranks the nudge. Showing both would be two
-          // asks about the same thing, and the weaker one ("people near you
-          // like Live Music") says nothing the stronger one does not.
-          if (!_isTableModalOpen && !_nudgeDismissed)
+          if (!_isTableModalOpen && !_suggestionDismissed)
             if (_seed case final seed? when seed.needsAnswer)
               Positioned(
                 left: 14,
@@ -998,20 +963,6 @@ class MapScreenState extends State<MapScreen>
                   compact: true,
                   onYes: () => _acceptSeed(seed),
                   onNo: () => _declineSeed(seed),
-                ),
-              )
-            else if (_nudge case final nudge?)
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: MediaQuery.of(context).padding.bottom + 186,
-                child: HangoutNudgeBanner(
-                  nudge: nudge,
-                  onStart: () => widget.onStartHangout?.call(
-                    'nudge_banner_map',
-                    nudge.interestKey,
-                  ),
-                  onDismiss: () => setState(() => _nudgeDismissed = true),
                 ),
               ),
 

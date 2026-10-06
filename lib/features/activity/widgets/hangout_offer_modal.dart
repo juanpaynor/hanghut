@@ -3,21 +3,21 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/core/services/klipy_service.dart';
 import 'package:bitemates/features/activity/models/hangout_seed.dart';
 
-/// The full-size version of an offer, with a GIF.
+/// The full-size version of a suggestion, with a GIF.
 ///
-/// The map card is a strip that has to share space with the map; this is the
-/// moment the offer gets to be fun. The GIF is the reaction layer — the
-/// event's own poster sits underneath it as the credible, factual part.
+/// The map card is a strip that shares space with the map; this is where the
+/// suggestion gets to be fun. The GIF sets the mood for the activity — the
+/// plain facts (what, where, when) sit underneath it.
 ///
-/// The GIF is chosen **deterministically from the seed id**, so everyone
-/// offered the same event sees the same one and it does not reshuffle on
-/// every rebuild. That matters for a shared social object: two people
-/// comparing the same offer should be looking at the same thing.
+/// The GIF is picked **deterministically from the seed id**, so everyone
+/// offered the same plan sees the same one and it does not reshuffle on every
+/// rebuild. For a shared social object that matters: two people comparing the
+/// same suggestion should be looking at the same thing.
 ///
 /// Klipy is a metered third-party API, so this fetches **once per modal**,
-/// never in a list, and fails soft to the poster alone. See
+/// never in a list, and fails soft to a plain tinted hero. See
 /// feedback_no_metered_features — no cost is quoted here, and the call volume
-/// is one per offer shown.
+/// is one request per suggestion actually shown.
 class HangoutOfferModal extends StatefulWidget {
   final HangoutSeed seed;
 
@@ -69,16 +69,14 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
 
   /// One search, one pick, no retries.
   ///
-  /// The query is the category label rather than the event title: event
-  /// titles are proper nouns ("SANSARI", "GB LABRADOR AND THE INGLISHEROS")
-  /// and return nothing useful, while "stand-up comedy" reliably returns
-  /// something that reads as the right mood.
+  /// The query comes from the activity catalogue, not the venue name: "coffee
+  /// with friends" reliably returns the right mood, while "Yardstick Coffee"
+  /// returns nothing.
   Future<void> _loadGif() async {
     try {
-      final results = await KlipyService().searchGifs(
-        _queryFor(widget.seed),
-        limit: 12,
-      );
+      final q = widget.seed.gifQuery;
+      if (q.isEmpty) return;
+      final results = await KlipyService().searchGifs(q, limit: 12);
       if (!mounted || results.isEmpty) return;
       // Deterministic per offer: the same seed always yields the same GIF.
       final index = widget.seed.seedId.hashCode.abs() % results.length;
@@ -87,18 +85,6 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
     } catch (_) {
       // Fails soft: the poster alone is a complete card.
     }
-  }
-
-  static String _queryFor(HangoutSeed seed) {
-    final label = seed.interestLabel.toLowerCase();
-    // A couple of the category labels make poor search terms on their own.
-    return switch (seed.category) {
-      'games_social' => 'board game night',
-      'markets_popups' => 'shopping market',
-      'community' => 'friends hanging out',
-      'workshops_classes' => 'craft workshop',
-      _ => label,
-    };
   }
 
   @override
@@ -126,7 +112,7 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
                 Text(
                   seed.status == HangoutSeedStatus.claimed
                       ? 'SOMEONE IS GOING'
-                      : 'GO TOGETHER?',
+                      : 'AN IDEA FOR YOU',
                   style: TextStyle(
                     fontSize: 10.5,
                     fontWeight: FontWeight.w800,
@@ -146,7 +132,7 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
                 ),
                 const SizedBox(height: 7),
                 Text(
-                  seed.whereAndWhen,
+                  seed.whenLabel,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
@@ -249,19 +235,12 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // The credible layer: the event's own poster, blurred behind.
-          if (seed.coverImageUrl case final cover?)
-            CachedNetworkImage(
-              imageUrl: cover,
-              fit: BoxFit.cover,
-              errorWidget: (_, __, ___) => Container(color: fallbackTint),
-              placeholder: (_, __) => Container(color: fallbackTint),
-            )
-          else
-            Container(color: fallbackTint),
+          // No poster: a casual venue has none. The tint is the resting
+          // state and stays visible if Klipy fails or is slow.
+          Container(color: fallbackTint),
 
-          // The fun layer. Absent until it loads, and absent for good if
-          // Klipy fails — the poster alone is a complete hero.
+          // The fun layer. Absent until it loads, and absent for good if the
+          // search fails — the hero is complete without it.
           if (_gifUrl case final gif?)
             CachedNetworkImage(
               imageUrl: gif,
@@ -286,7 +265,7 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
             ),
           ),
 
-          if (seed.interestEmoji.isNotEmpty)
+          if (seed.emoji.isNotEmpty)
             Positioned(
               top: 12,
               left: 14,
@@ -300,7 +279,7 @@ class _HangoutOfferModalState extends State<HangoutOfferModal> {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  '${seed.interestEmoji} ${seed.interestLabel}',
+                  '${seed.emoji} ${seed.activityTitle}',
                   style: const TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,

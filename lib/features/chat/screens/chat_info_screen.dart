@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
+import 'package:bitemates/features/map/widgets/edit_hangout_sheet.dart';
 import 'package:bitemates/core/utils/image_url.dart';
 
 class ChatInfoScreen extends StatefulWidget {
@@ -31,6 +32,19 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
   String? _address;
   String? _description;
 
+  /// The whole hangout row, kept so the host can edit from here without a
+  /// second round trip. Null for DM and trip chats, which have no hangout.
+  Map<String, dynamic>? _table;
+
+  /// Editing is the host's, and only while the hangout is still open — a
+  /// completed or cancelled one is a record, not a plan.
+  bool get _canEdit {
+    final t = _table;
+    if (t == null) return false;
+    final me = SupabaseConfig.client.auth.currentUser?.id;
+    return me != null && t['host_id'] == me && t['status'] == 'open';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -45,16 +59,29 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     try {
       final row = await SupabaseConfig.client
           .from('tables')
-          .select('datetime, venue_address, description')
+          .select(
+            'id, host_id, status, title, description, datetime, '
+            'location_name, venue_address, latitude, longitude, max_guests',
+          )
           .eq('id', widget.tableId!)
           .maybeSingle();
 
       if (!mounted) return;
       setState(() {
+        _table = row;
         _datetime = DateTime.tryParse(row?['datetime']?.toString() ?? '');
         final addr = (row?['venue_address'] as String?)?.trim();
         final desc = (row?['description'] as String?)?.trim();
-        _address = (addr != null && addr.isNotEmpty) ? addr : null;
+        // Fall back to the venue name. Hangouts created from a suggestion
+        // carry no street address, so reading only `venue_address` showed
+        // those chats no place at all — the one fact people open this screen
+        // for.
+        final name = (row?['location_name'] as String?)?.trim();
+        _address = (addr != null && addr.isNotEmpty)
+            ? addr
+            : (name != null && name.isNotEmpty)
+            ? name
+            : null;
         _description = (desc != null && desc.isNotEmpty) ? desc : null;
         _loadingDetails = false;
       });
@@ -64,13 +91,42 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
     }
   }
 
+  /// Opens the host editor on the row already in hand, then reloads so this
+  /// screen shows what was saved rather than what it opened with.
+  Future<void> _openEditor() async {
+    final table = _table;
+    if (table == null) return;
+    final saved = await EditHangoutSheet.show(context, table: table);
+    if (saved && mounted) await _loadDetails();
+  }
+
   bool get _hasDetails =>
       _datetime != null || _address != null || _description != null;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Chat Info'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Chat Info'),
+        centerTitle: true,
+        actions: [
+          // The host's way in from the chat side. Guests see nothing here, so
+          // the screen does not advertise a control that would only refuse
+          // them.
+          if (_canEdit)
+            TextButton.icon(
+              onPressed: _openEditor,
+              icon: const Icon(Icons.edit_outlined, size: 17),
+              label: const Text('Edit'),
+              style: TextButton.styleFrom(
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
       body: CustomScrollView(
         slivers: [
           // Header with big chat title
@@ -246,6 +302,31 @@ class _ChatInfoScreenState extends State<ChatInfoScreen> {
               label: 'About',
               value: _description!,
             ),
+
+          // Sat directly under the facts it changes: a host notices the wrong
+          // time while reading the time, not while looking at the app bar.
+          if (_canEdit) ...[
+            _rowDivider(isDark),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  onPressed: _openEditor,
+                  icon: const Icon(Icons.edit_outlined, size: 17),
+                  label: const Text('Change the place, time or size'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    foregroundColor: Theme.of(context).primaryColor,
+                    textStyle: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

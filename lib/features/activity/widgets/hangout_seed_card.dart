@@ -1,31 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:bitemates/features/activity/models/hangout_seed.dart';
 
-/// A system-made offer, asked as a yes/no.
+/// A system-made suggestion, asked as a yes/no.
 ///
-/// Shows the event's own poster rather than anything generated: it is the
-/// actual thing, which is more persuasive than any illustration we could pick
-/// — and it is what the user will recognise if they have seen the event
-/// anywhere else in the app.
+/// "☕ Grab coffee at Yardstick Coffee · Sat 10 Oct, 10:00am" — one tap and
+/// the hangout exists. There is no poster here because a casual venue has
+/// none; the activity emoji carries the identity instead, which keeps the
+/// strip short enough to sit over the map.
 ///
-/// Icons used — `Icons.place_outlined`, `Icons.people_outline` — are both
-/// checked present in base release 11305a4. `Icons.arrow_forward` is NOT, so
-/// nothing here uses a trailing chevron.
+/// Icons used — `Icons.people_outline` — is checked present in base release
+/// 11305a4. `Icons.arrow_forward` is NOT, so nothing here uses a chevron.
 class HangoutSeedCard extends StatelessWidget {
   final HangoutSeed seed;
 
-  /// "I'm in". The caller decides what happens next, because only the server
-  /// knows whether this user hosts or joins.
+  /// "I'm in". The hangout is created server-side; the caller just reports.
   final VoidCallback onYes;
 
   final VoidCallback onNo;
 
-  /// True while a response is in flight, so the buttons cannot produce two
+  /// True while the answer is in flight, so the buttons cannot produce two
   /// conflicting answers.
   final bool busy;
 
-  /// Compact strip for the map, where the card competes with the map itself.
+  /// Compact strip for the map, where this competes with the map itself.
   final bool compact;
 
   const HangoutSeedCard({
@@ -64,51 +61,37 @@ class HangoutSeedCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                if (seed.interestEmoji.isNotEmpty) ...[
-                  Text(seed.interestEmoji,
-                      style: const TextStyle(fontSize: 15)),
-                  const SizedBox(width: 6),
-                ],
-                Expanded(
-                  child: Text(
-                    // Labelled as ours, so an offer is never mistaken for a
-                    // hangout somebody is already hosting.
-                    seed.status == HangoutSeedStatus.claimed
-                        ? 'SOMEONE IS GOING'
-                        : 'GO TOGETHER?',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.7,
-                      color: isDark ? const Color(0xFF8E88FF) : _accent,
-                    ),
-                  ),
-                ),
-              ],
+            Text(
+              // Labelled as ours, so a suggestion is never mistaken for a
+              // hangout somebody is already hosting.
+              seed.status == HangoutSeedStatus.claimed
+                  ? 'SOMEONE IS GOING'
+                  : 'AN IDEA FOR YOU',
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.7,
+                color: isDark ? const Color(0xFF8E88FF) : _accent,
+              ),
             ),
             const SizedBox(height: 9),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // The event's real poster. Absent on plenty of events, so the
-                // layout has to look deliberate without it rather than
-                // leaving a grey hole.
-                if (seed.coverImageUrl case final url?) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: CachedNetworkImage(
-                      imageUrl: url,
-                      width: 52,
-                      height: 52,
-                      fit: BoxFit.cover,
-                      errorWidget: (_, __, ___) => _emojiTile(isDark),
-                      placeholder: (_, __) => _emojiTile(isDark),
-                    ),
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: isDark ? 0.24 : 0.12),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  const SizedBox(width: 11),
-                ],
+                  alignment: Alignment.center,
+                  child: Text(
+                    seed.emoji.isNotEmpty ? seed.emoji : '📍',
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                ),
+                const SizedBox(width: 11),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,7 +110,7 @@ class HangoutSeedCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        seed.whereAndWhen,
+                        seed.whenLabel,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -215,7 +198,7 @@ class HangoutSeedCard extends StatelessWidget {
                     ),
                   ),
                   child: Text(
-                    'No thanks',
+                    'Not today',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -230,17 +213,4 @@ class HangoutSeedCard extends StatelessWidget {
       ),
     );
   }
-
-  /// Stand-in for a missing or failed poster — the category emoji on a tinted
-  /// tile, so the row keeps its shape instead of collapsing.
-  Widget _emojiTile(bool isDark) => Container(
-        width: 52,
-        height: 52,
-        color: _accent.withValues(alpha: isDark ? 0.22 : 0.12),
-        alignment: Alignment.center,
-        child: Text(
-          seed.interestEmoji.isNotEmpty ? seed.interestEmoji : '📍',
-          style: const TextStyle(fontSize: 22),
-        ),
-      );
 }

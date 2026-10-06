@@ -3,9 +3,7 @@ import 'package:bitemates/core/config/supabase_config.dart';
 import 'package:bitemates/core/services/table_service.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
 import 'package:bitemates/features/activity/widgets/hangout_invites_section.dart';
-import 'package:bitemates/features/activity/widgets/hangout_nudge_card.dart';
-import 'package:bitemates/features/activity/models/hangout_nudge.dart';
-import 'package:bitemates/core/services/hangout_nudge_service.dart';
+import 'package:bitemates/core/services/hangout_seed_service.dart';
 import 'package:bitemates/core/services/analytics_service.dart';
 import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:intl/intl.dart';
@@ -30,23 +28,10 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
   final _tableService = TableService();
   final _memberService = TableMemberService();
 
-  /// Null for users the nudge RPC has nothing to say about, including anyone
-  /// who already has an upcoming hangout — who by definition is not looking
-  /// at this empty state anyway.
-  HangoutNudge? _nudge;
-
   @override
   void initState() {
     super.initState();
     _loadMyTables();
-    _loadNudge();
-  }
-
-  /// Cheap here: the service caches for the process lifetime, so mounting the
-  /// card on a second surface costs no extra round trip.
-  Future<void> _loadNudge() async {
-    final nudge = await HangoutNudgeService().fetch();
-    if (mounted && nudge != null) setState(() => _nudge = nudge);
   }
 
   Future<void> _loadMyTables() async {
@@ -95,14 +80,7 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
     await Future.wait([
       _loadMyTables(),
       _invitesKey.currentState?.reload() ?? Future.value(),
-      _reloadNudge(),
     ]);
-  }
-
-  /// A deliberate pull asks for current numbers, so it bypasses the cache.
-  Future<void> _reloadNudge() async {
-    final nudge = await HangoutNudgeService().fetch(force: true);
-    if (mounted) setState(() => _nudge = nudge);
   }
 
   Future<void> _leaveTable(String tableId) async {
@@ -245,21 +223,6 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
   Widget _buildEmptyState() {
     final upcoming = _filter == 'upcoming';
     final primary = Theme.of(context).primaryColor;
-    final nudge = _nudge;
-
-    // When we can name a real pool of nearby people, that beats a generic
-    // ask. "22 people near you are into Nightlife" gives the user a reason;
-    // "Start one and see who's around" only gives them a button.
-    if (upcoming && nudge != null) {
-      return Center(
-        child: HangoutNudgeCard(
-          nudge: nudge,
-          onStart: _startHangout,
-          compact: true,
-        ),
-      );
-    }
-
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -311,17 +274,14 @@ class _MyHangoutsListState extends State<MyHangoutsList> {
     // Same source-tagged entry as the Hangouts tab, so the funnel can tell
     // which empty state actually produces hangouts — and whether the nudge
     // variant beats the plain one.
-    final nudge = _nudge;
-    final source =
-        nudge != null ? 'nudge_my_hangouts' : 'empty_state_my_hangouts';
+    const source = 'empty_state_my_hangouts';
     AnalyticsService().logHangoutCreateStart(source);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CreateHangoutFlow(
           source: source,
-          initialCategory: nudge?.interestKey,
           onTableCreated: () {
-            HangoutNudgeService.invalidate();
+            HangoutSeedService.invalidate();
             if (mounted) _refreshAll();
           },
         ),

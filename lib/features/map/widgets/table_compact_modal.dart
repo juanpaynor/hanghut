@@ -13,6 +13,7 @@ import 'package:bitemates/features/profile/screens/user_profile_screen.dart';
 import 'package:bitemates/features/shared/widgets/report_modal.dart';
 import 'package:bitemates/features/map/widgets/pending_requests_sheet.dart';
 import 'package:bitemates/features/map/widgets/manage_members_sheet.dart';
+import 'package:bitemates/features/map/widgets/edit_hangout_sheet.dart';
 import 'package:bitemates/features/shared/widgets/friends_going_row.dart';
 import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 import 'package:bitemates/features/map/widgets/hangout_social_proof_row.dart';
@@ -487,6 +488,21 @@ class _TableCompactModalState extends State<TableCompactModal> {
                                   ),
                                 ],
                               ),
+                            ),
+                          ),
+
+                        // Edit Button (Top Left) — the host's slot, which the
+                        // report button occupies for everyone else. The action
+                        // row below is already four controls wide; a fifth
+                        // would squeeze "Open Chat" down to an icon.
+                        if (_isHost)
+                          Positioned(
+                            top: 8,
+                            left: 12,
+                            child: _buildOverlayButton(
+                              icon: Icons.edit_outlined,
+                              isDark: isDark,
+                              onTap: _openEditSheet,
                             ),
                           ),
 
@@ -1176,6 +1192,53 @@ class _TableCompactModalState extends State<TableCompactModal> {
       _fetchPendingCount();
       _fetchSocialProof();
     });
+  }
+
+  /// Host-only: change the place, time, title, capacity or notes.
+  ///
+  /// The hangouts the suggestion engine creates pick their own venue and time,
+  /// so without this the host is stuck with whatever the system guessed. It is
+  /// also the only way to move the hangouts sitting at (0, 0) back onto the
+  /// map.
+  Future<void> _openEditSheet() async {
+    final saved = await EditHangoutSheet.show(context, table: widget.table);
+    if (saved && mounted) await _reloadTable();
+  }
+
+  /// Pulls the edited row back in so the modal shows what was just saved.
+  ///
+  /// The fields are written into `widget.table` rather than held in local
+  /// state because every getter in this build method reads from that map —
+  /// and the map screen holds the same instance, so its list reflects the edit
+  /// too instead of showing the old time until the next fetch.
+  Future<void> _reloadTable() async {
+    try {
+      final row = await SupabaseConfig.client
+          .from('tables')
+          .select(
+            'title, description, datetime, location_name, venue_address, '
+            'latitude, longitude, max_guests, status',
+          )
+          .eq('id', widget.table['id'])
+          .maybeSingle();
+      if (row == null || !mounted) return;
+      setState(() {
+        widget.table.addAll(row);
+        // A marker tap hands this modal a `map_ready_tables` row, which spells
+        // the same facts differently. Writing only the base-table names would
+        // leave the view's names holding the pre-edit values, and every reader
+        // that prefers them — `showTableDetails` pans to `location_lat` first
+        // — would keep using the old place and time.
+        widget.table['venue_name'] = row['location_name'];
+        widget.table['location_lat'] = row['latitude'];
+        widget.table['location_lng'] = row['longitude'];
+        widget.table['scheduled_time'] = row['datetime'];
+        widget.table['max_capacity'] = row['max_guests'];
+        _liveTableStatus = row['status'] as String?;
+      });
+    } catch (e) {
+      debugPrint('⚠️ Error reloading table after edit: $e');
+    }
   }
 
   void _openManageMembers() {

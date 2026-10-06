@@ -5,9 +5,7 @@ import 'package:bitemates/features/home/widgets/open_hangout_card.dart';
 import 'package:bitemates/features/map/widgets/table_compact_modal.dart';
 import 'package:bitemates/features/map/widgets/create_hangout/create_hangout_flow.dart';
 import 'package:bitemates/core/services/table_member_service.dart';
-import 'package:bitemates/core/services/hangout_nudge_service.dart';
-import 'package:bitemates/features/activity/models/hangout_nudge.dart';
-import 'package:bitemates/features/activity/widgets/hangout_nudge_card.dart';
+import 'package:bitemates/core/services/hangout_seed_service.dart';
 import 'package:bitemates/features/map/models/hangout_social_proof.dart';
 
 /// Dedicated "Hangouts" browse tab in Explore — a paginated grid of open
@@ -43,11 +41,6 @@ class _HangoutsTabState extends State<HangoutsTab> {
   Map<String, HangoutSocialProof> _proof = {};
   final Set<String> _vibeFilters = {};
 
-  /// "22 people near you are into Nightlife" — the reason to start one.
-  /// Null until loaded, and null forever for users the RPC has nothing to say
-  /// about, which is why the card renders nothing rather than a placeholder.
-  HangoutNudge? _nudge;
-
   bool _loading = true; // first load / refresh
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -59,18 +52,6 @@ class _HangoutsTabState extends State<HangoutsTab> {
     super.initState();
     _scroll.addListener(_onScroll);
     _loadFirst();
-    _loadNudge();
-  }
-
-  /// Loaded independently of the hangout list.
-  ///
-  /// Not awaited inside [_loadFirst] on purpose: the nudge matters MOST when
-  /// the list is empty, and chaining it behind the list would mean a failed or
-  /// slow list fetch also costs us the one thing on screen telling the user
-  /// what they could do about it.
-  Future<void> _loadNudge() async {
-    final nudge = await HangoutNudgeService().fetch();
-    if (mounted && nudge != null) setState(() => _nudge = nudge);
   }
 
   @override
@@ -137,17 +118,7 @@ class _HangoutsTabState extends State<HangoutsTab> {
     }
   }
 
-  /// Pull-to-refresh. Refetches the nudge too, forcing past the service's
-  /// process-lifetime cache — a deliberate pull is the user asking for current
-  /// numbers, which is the one case where the cache should not win.
-  Future<void> _refresh() async {
-    await Future.wait([_loadFirst(), _loadNudgeForced()]);
-  }
-
-  Future<void> _loadNudgeForced() async {
-    final nudge = await HangoutNudgeService().fetch(force: true);
-    if (mounted) setState(() => _nudge = nudge);
-  }
+  Future<void> _refresh() => _loadFirst();
 
   Future<void> _loadMore() async {
     if (_loadingMore || !_hasMore || _loading) return;
@@ -228,44 +199,6 @@ class _HangoutsTabState extends State<HangoutsTab> {
     final items = _filtered;
     if (items.isEmpty) {
       final noFilters = _activeVibeFilters.isEmpty;
-      final nudge = _nudge;
-
-      // The nudge replaces the empty state outright when we have one.
-      //
-      // "No open hangouts right now" was true and useless — it told nearly
-      // every user that the feature was dead, with no indication they could
-      // change that. When the RPC can name a real pool of nearby people, that
-      // sentence is the wrong headline: the opportunity is, and the absence of
-      // hangouts becomes the supporting detail underneath it.
-      //
-      // Still gated on `noFilters`: with a vibe filter active the list is
-      // empty because of the filter, and the fix is to clear it, not to start
-      // a hangout.
-      if (noFilters && nudge != null) {
-        return LayoutBuilder(
-          builder: (context, constraints) => SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  HangoutNudgeCard(
-                    nudge: nudge,
-                    onStart: _startHangout,
-                    compact: true,
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Nothing open near you yet',
-                    style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      }
 
       return _messageState(
         icon: Icons.groups_outlined,
@@ -280,18 +213,10 @@ class _HangoutsTabState extends State<HangoutsTab> {
       );
     }
 
-    final nudge = _nudge;
     return CustomScrollView(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
-        // Above the grid, not instead of it: someone browsing real hangouts
-        // should still see that starting one is an option, but the hangouts
-        // come first.
-        if (nudge != null)
-          SliverToBoxAdapter(
-            child: HangoutNudgeCard(nudge: nudge, onStart: _startHangout),
-          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           sliver: SliverGrid(
@@ -428,24 +353,18 @@ class _HangoutsTabState extends State<HangoutsTab> {
   }
 
   void _startHangout() {
-    // Distinct source per entry point so the funnel can tell whether the
-    // nudge actually converts better than the bare empty state — which is
-    // the whole question this card exists to answer.
-    final nudge = _nudge;
-    final source = nudge != null ? 'nudge_hangouts_tab' : 'empty_state_discover';
+    // Source-tagged so the funnel can separate hangouts started from this
+    // empty state from those started via a system suggestion.
+    const source = 'empty_state_discover';
     AnalyticsService().logHangoutCreateStart(source);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CreateHangoutFlow(
           source: source,
-          // Tag the hangout with the category that matched. This is the first
-          // caller to pass a real one — both create flows hardcoded 'other',
-          // which is why every vibe chip matched zero hangouts.
-          initialCategory: nudge?.interestKey,
           onTableCreated: () {
-            // The user now has an upcoming hangout, so the RPC will suppress
-            // their nudge — but only if we stop serving the cached one.
-            HangoutNudgeService.invalidate();
+            // They now have an upcoming hangout, so any pending suggestion is
+            // stale — stop serving the cached one.
+            HangoutSeedService.invalidate();
             if (mounted) _refresh();
           },
         ),
